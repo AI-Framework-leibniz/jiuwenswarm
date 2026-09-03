@@ -171,6 +171,8 @@ interface ChatPanelProps {
   onContinueQueuedSessionMessages?: (sessionId: string) => void | Promise<void>;
   /** 专家团「通过聊天创建」入口的 4.9 高保真欢迎态。 */
   welcomeVariant?: 'group-create' | null;
+  /** 任务页选「设计」后发送：跳转设计栏并 bootstrap */
+  onLaunchDesign?: (prompt: string) => void;
 }
 
 // 邀请指令只对 human_agent 成员存在（见 upsertHumanShareCommandFromEvent 的
@@ -1054,6 +1056,7 @@ export const ChatPanel = React.memo(function ChatPanel({
   onDrainTaskQueueIfIdle,
   onContinueQueuedSessionMessages,
   welcomeVariant = null,
+  onLaunchDesign,
 }: ChatPanelProps) {
   const { t } = useTranslation();
   const activeSessionId = useChatStore((s) => s.activeSessionId);
@@ -1973,6 +1976,7 @@ export const ChatPanel = React.memo(function ChatPanel({
                   onResumeGoal={onResumeGoal}
                   onRefreshGoal={onRefreshGoal}
                   onClearGoal={onClearGoal}
+                  onLaunchDesign={onLaunchDesign}
                 />
               </div>
               {isGroupCreateWelcome && (
@@ -2049,6 +2053,7 @@ export const ChatPanel = React.memo(function ChatPanel({
             onRefreshGoal={onRefreshGoal}
             onClearGoal={onClearGoal}
             onDrainTaskQueueIfIdle={onDrainTaskQueueIfIdle}
+            onLaunchDesign={onLaunchDesign}
           />
         </div>
       )}

@@ -39,6 +39,7 @@ import {
 import { ConnectorMarketPanel } from './components/ConnectorMarket';
 import { LoginDialog } from './components/LoginDialog';
 import { DesignerPage } from './features/designer/components/DesignerPage';
+import { launchDesignerFromTask } from './features/designer/designerEntry';
 import type { CodeReviewTarget } from './features/code-mode/types';
 
 import { FEATURE_APP_UPDATER_UI, FEATURE_PERSONAL_CONTEXT_UI } from './featureFlags';
@@ -3454,6 +3455,24 @@ function AppContent({
     [handleNavigate],
   );
 
+  const handleLaunchDesign = useCallback(
+    (prompt: string) => {
+      const workspace = useWorkspaceStore.getState();
+      const workContext = getWorkContextForSession(sessionId);
+      void launchDesignerFromTask({
+        prompt,
+        projectId: workContext.project_id || sessionProject?.project_id,
+        projectDir: workContext.project_dir || sessionProject?.project_dir,
+        workMode: workspace.workMode === 'code' ? 'code' : 'work',
+        onNavigateToDesign: () => handleNavigate('design'),
+        thinkingText: t('designer.chat.thinking'),
+        doneText: t('designer.chat.bootstrapDone'),
+        errorText: t('designer.chat.bootstrapError'),
+      });
+    },
+    [handleNavigate, sessionId, sessionProject?.project_dir, sessionProject?.project_id, t],
+  );
+
   const skipModelSetupGuide = useCallback(() => {
     setModelSetupGuideStep(null);
 
@@ -3683,7 +3702,7 @@ const showWorkspaceDivider = effectiveTeamAreaExpanded && !showConversationNotFo
                   style={effectiveTeamAreaExpanded ? { width: `${chatPanelWidthPct}%` } : undefined}
                   data-testid="app-chat-surface"
                 >
-<SingleAgentSurface
+                  <SingleAgentSurface
                     activeView={chatSurfaceView}
                     chat={(
                       <ChatPanel
@@ -3733,6 +3752,7 @@ const showWorkspaceDivider = effectiveTeamAreaExpanded && !showConversationNotFo
                         onClearGoal={handleClearGoal}
                         onDrainTaskQueueIfIdle={drainTaskQueueIfIdle}
                         onContinueQueuedSessionMessages={handleContinueQueuedSessionMessages}
+                        onLaunchDesign={handleLaunchDesign}
                       />
                     )}
                     chatLabel={t('nav.chat')}
@@ -3844,7 +3864,12 @@ const showWorkspaceDivider = effectiveTeamAreaExpanded && !showConversationNotFo
           </div>
         )}
         {activeNav === 'design' && (
-          <DesignerPage projectId={sessionProject?.project_id} />
+          <DesignerPage
+            projectId={
+              sessionProject?.project_id
+              || getWorkContextForSession(sessionId).project_id
+            }
+          />
         )}
         {activeNav === 'sessions' && (
           <div className="app-section">
