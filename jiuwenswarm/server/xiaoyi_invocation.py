@@ -21,6 +21,12 @@ from jiuwenswarm.common.invocation_context.model_trace import register_trace_hea
 
 XIAOYI_INVOCATION_EXTENSION_KEY = "jiuwenswarm.xiaoyi_invocation"
 
+# trace 头导出器注册名：xiaoyi 渠道在 build_xiaoyi_invocation_extension 的返回里写入
+# 元数据；desktop 由 server.invocation_context_builder 在 trace 存在且导出器名缺位时
+# 补写（团队边界 _apply_trace_context 依该名导出成员模型头，缺位即整轮团队漏计）。
+XIAOYI_TRACE_HEADER_EXPORTER_NAME = "xiaoyi"
+DESKTOP_TRACE_HEADER_EXPORTER_NAME = "desktop"
+
 # x-hag-trace-id 头值上限：celia sse-api 模型网关拒绝 >64 字符（回 data: {"error":{}}
 # 空错误帧，对话空返回）。trace 核心段 = `${sessionId}&${interactionId 短码}`，
 # 构造统一收口在 common.invocation_context.billing_trace.build_billing_core
@@ -127,7 +133,7 @@ def build_xiaoyi_invocation_extension(request: AgentRequest) -> dict[str, Any]:
             "app_id": extension.app_id,
             "binding_id": extension.binding_id,
         },
-        TRACE_HEADER_EXPORTER_METADATA_KEY: "xiaoyi",
+        TRACE_HEADER_EXPORTER_METADATA_KEY: XIAOYI_TRACE_HEADER_EXPORTER_NAME,
     }
 
 
@@ -272,8 +278,8 @@ class DesktopTraceHeaderExporter:
 
 _XIAOYI_TRACE_HEADER_EXPORTER = XiaoyiTraceHeaderExporter()
 _DESKTOP_TRACE_HEADER_EXPORTER = DesktopTraceHeaderExporter()
-register_trace_header_exporter("xiaoyi", _XIAOYI_TRACE_HEADER_EXPORTER)
-register_trace_header_exporter("desktop", _DESKTOP_TRACE_HEADER_EXPORTER)
+register_trace_header_exporter(XIAOYI_TRACE_HEADER_EXPORTER_NAME, _XIAOYI_TRACE_HEADER_EXPORTER)
+register_trace_header_exporter(DESKTOP_TRACE_HEADER_EXPORTER_NAME, _DESKTOP_TRACE_HEADER_EXPORTER)
 
 
 def get_xiaoyi_trace_header_exporters() -> tuple[XiaoyiTraceHeaderExporter | DesktopTraceHeaderExporter, ...]:
@@ -297,7 +303,9 @@ def export_current_xiaoyi_trace_headers() -> dict[str, str]:
 
 
 __all__ = [
+    "DESKTOP_TRACE_HEADER_EXPORTER_NAME",
     "XIAOYI_INVOCATION_EXTENSION_KEY",
+    "XIAOYI_TRACE_HEADER_EXPORTER_NAME",
     "DesktopTraceHeaderExporter",
     "XiaoyiInvocationExtension",
     "XiaoyiTraceHeaderExporter",

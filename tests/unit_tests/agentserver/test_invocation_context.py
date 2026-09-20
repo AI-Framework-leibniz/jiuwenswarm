@@ -18,6 +18,7 @@ from jiuwenswarm.agents.harness.common.rails.invocation_context_rail import (
 from jiuwenswarm.common.invocation_context import (
     INVOCATION_CONTEXT_EXTRA_KEY,
     INVOCATION_CONTEXT_VERSION,
+    TRACE_HEADER_EXPORTER_METADATA_KEY,
     InvocationContext,
     TraceContext,
     attach_invocation_context,
@@ -148,6 +149,55 @@ def test_builder_prefers_cron_identity_for_trace() -> None:
         conversation_id="job-1",
         interaction_id="run%2F1",
     )
+
+
+def test_builder_names_desktop_exporter_for_desktop_trace() -> None:
+    """桌面渠道带 metadata.interaction_id：trace 建立且导出器名补登记为 desktop。
+
+    回归守卫（2026-09-20 实测事故）：导出器名缺位时 Team 边界
+    team_manager._apply_trace_context 查不到注册表项提前返回空，团队各成员
+    模型调用丢 x-hag-trace-id，服务端按 trace 归集计费时整轮仅首调归账
+    （16 次调用 15 次漏计，FINISH consumedPoints=0.01）。
+    """
+    invocation = build_invocation_context(
+        AgentRequest(
+            request_id="request-1",
+            channel_id="desktop",
+            session_id="session-1",
+            metadata={"interaction_id": "8b9f57fc-1cdb-4625-97bf-9c0bf85e531c"},
+        )
+    )
+    assert invocation.trace == TraceContext(
+        version=1,
+        trace_id="session-1&8b9f57fc",
+        conversation_id="session-1",
+        interaction_id="8b9f57fc-1cdb-4625-97bf-9c0bf85e531c",
+    )
+    assert invocation.metadata[TRACE_HEADER_EXPORTER_METADATA_KEY] == "desktop"
+
+
+def test_builder_keeps_xiaoyi_exporter_name_for_xiaoyi_channel() -> None:
+    invocation = build_invocation_context(
+        AgentRequest(
+            request_id="request-1",
+            channel_id="xiaoyi",
+            metadata={"xiaoyi_task_id": "root&19&abc&0"},
+        )
+    )
+    assert invocation.metadata[TRACE_HEADER_EXPORTER_METADATA_KEY] == "xiaoyi"
+
+
+def test_builder_skips_exporter_name_when_trace_absent() -> None:
+    """无 trace 的桌面请求（客户端未下发 interaction_id）不补导出器名。"""
+    invocation = build_invocation_context(
+        AgentRequest(
+            request_id="request-1",
+            channel_id="desktop",
+            session_id="session-1",
+        )
+    )
+    assert invocation.trace is None
+    assert TRACE_HEADER_EXPORTER_METADATA_KEY not in invocation.metadata
 
 
 @pytest.mark.parametrize(

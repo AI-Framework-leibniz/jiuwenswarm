@@ -16,6 +16,10 @@ import pytest
 from jiuwenswarm.common.invocation_context import (
     TRACE_CONTEXT_METADATA_KEY,
     TRACE_HEADER_EXPORTER_METADATA_KEY,
+    trace_context_from_dict,
+)
+from jiuwenswarm.common.invocation_context.model_trace import (
+    export_trace_headers_for_name,
 )
 from jiuwenswarm.common.schema.agent import AgentRequest
 from openjiuwen.agent_teams.schema.team import TeamRole
@@ -72,6 +76,43 @@ def test_build_team_request_metadata_preserves_request_fields_and_trace() -> Non
             "conversation_id": "root",
             "interaction_id": "21",
         },
+    }
+
+
+def test_build_team_request_metadata_names_desktop_exporter_for_desktop_trace() -> None:
+    """桌面团队会话：元数据须带 trace + desktop 导出器名，团队边界才能注入 trace 头。
+
+    回归守卫（2026-09-20 实测事故）：导出器名缺位时
+    team_manager._apply_trace_context 的 export_trace_headers_for_name 查空名
+    注册表项返回 {}，成员模型配置零注入，16 次团队模型调用 15 次丢
+    x-hag-trace-id，FINISH consumedPoints 仅 0.01。
+    """
+    request = AgentRequest(
+        session_id="sess-team-desktop",
+        request_id="req-team-desktop",
+        channel_id="desktop",
+        metadata={"interaction_id": "8b9f57fc-1cdb-4625-97bf-9c0bf85e531c"},
+        params={"mode": "team"},
+    )
+
+    metadata = build_team_request_metadata(request)
+
+    assert metadata[TRACE_HEADER_EXPORTER_METADATA_KEY] == "desktop"
+    assert metadata[TRACE_CONTEXT_METADATA_KEY] == {
+        "version": 1,
+        "trace_id": "sess-team-desktop&8b9f57fc",
+        "conversation_id": "sess-team-desktop",
+        "interaction_id": "8b9f57fc-1cdb-4625-97bf-9c0bf85e531c",
+    }
+    # 链路终点校验：团队边界按该导出器名能导出完整三件套头（与计费上报同 trace）
+    headers = export_trace_headers_for_name(
+        trace_context_from_dict(metadata[TRACE_CONTEXT_METADATA_KEY]),
+        metadata[TRACE_HEADER_EXPORTER_METADATA_KEY],
+    )
+    assert headers == {
+        "x-hag-trace-id": "sess-team-desktop&8b9f57fc",
+        "x-session-id": "sess-team-desktop",
+        "x-interaction-id": "8b9f57fc-1cdb-4625-97bf-9c0bf85e531c",
     }
 
 
