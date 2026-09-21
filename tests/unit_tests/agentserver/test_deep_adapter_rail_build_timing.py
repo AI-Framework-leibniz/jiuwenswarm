@@ -97,9 +97,10 @@ def test_built_rails_are_assigned_and_returned(loggers) -> None:
 
     assert adapter._alpha_rail is first
     assert adapter._beta_rail is second
-    # The two standing rails may or may not import in this environment, so only
-    # the declared ones are asserted on by identity.
-    assert rails[:2] == [first, second]
+    # The standing rails (invocation-context rail first, then user-hook /
+    # observability / mcp-project-id) may or may not import in this environment,
+    # so only the declared ones are asserted on by identity.
+    assert rails[1:3] == [first, second]
 
 
 def test_builder_params_are_forwarded(loggers) -> None:

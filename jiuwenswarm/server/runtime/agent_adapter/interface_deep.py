@@ -5077,13 +5077,17 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
         rail_infos: list["_RailBuildInfo"],
         config_base: dict[str, Any],
     ) -> list[Any]:
-        """Build each declared rail in order, then attach the two standing ones.
+        """Build each declared rail in order, then attach the standing ones.
 
         Shared by the agent and code rail sets, which differ only in what they
         declare. Rail construction is the bulk of ``create_instance``, so each
         one is timed separately and the breakdown is logged slowest-first once
         the total crosses :data:`_SLOW_RAIL_BUILD_MS` — an aggregate over a
         dozen-plus rails says nothing about which to look at.
+
+        The always-on InvocationContextRail is assembled here (first position)
+        rather than in the per-mode ``rail_infos`` declarations, so no adapter
+        can ship without it.
 
         Args:
             rail_infos: Rails to build, in the order they should be attached.
@@ -5096,6 +5100,21 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
         log_prefix = f"[{type(self).__name__}]"
         stage_timer = StageTimer()
         rails_list = []
+
+        # InvocationContextRail 是全模式常驻 rail：负责把每轮的 InvocationContext
+        # （计费 trace）绑定进 DeepAgent 常驻执行任务的 contextvar。桌面普通对话走
+        # attach_output + send_input 的会话级常驻运行时，模型调用执行在会话首轮创建
+        # 的 supervisor/round 任务树里（asyncio.create_task 只拷贝创建时刻的上下文），
+        # 没有本 rail 的 before_invoke/before_task_iteration 逐轮改绑，次轮起模型调用的
+        # x-hag-trace-id 会冻结在首轮——服务端按 trace 归集计费，后续轮 consumedPoints
+        # 恒为 0（2026-09-20 实测：code 模式 _build_agent_rails 漏挂本 rail 导致）。
+        # 因此装配收口在本共享函数（agent/code 两套 rail 声明都经过这里），并固定在
+        # 首位：先于其他可能自发模型调用的 rail 完成绑定。
+        invocation_rail = self._build_invocation_context_rail()
+        stage_timer.mark("invocation_context_rail")
+        self._invocation_context_rail = invocation_rail
+        rails_list.append(invocation_rail)
+
         for info in rail_infos:
             rail_instance = info.build_func(**info.params)
             stage_timer.mark(info.attr_name.lstrip("_"))
@@ -5203,10 +5222,8 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
     ) -> list[Any]:
         """Build DeepAgent rails consistently for cold start and hot reload."""
         rail_infos = [
-            _RailBuildInfo(
-                "_invocation_context_rail",
-                self._build_invocation_context_rail,
-            ),
+            # InvocationContextRail 不在此声明：它是全模式常驻 rail，由
+            # _instantiate_rails 统一装配在首位（agent/code 共用），见该函数注释。
             _RailBuildInfo("_runtime_prompt_rail", self._build_runtime_prompt_rail),
             _RailBuildInfo("_identity_rail", self._build_identity_rail),
             _RailBuildInfo("_response_prompt_rail", self._build_response_prompt_rail),
