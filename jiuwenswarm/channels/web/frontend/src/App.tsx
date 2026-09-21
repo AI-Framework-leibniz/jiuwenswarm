@@ -113,12 +113,19 @@ import {
   normalizeTrajectoryUiEnabled,
   setTrajectoryUiEnabled,
   useTrajectoryUiEnabled,
+  normalizeDiagnosisEnabled,
+  setDiagnosisEnabled,
+  useDiagnosisEnabled,
 } from './features/trajectory/featureConfig';
 import './App.css';
 
 const LazyTrajectoryPanel = lazy(async () => {
   const module = await import('./features/trajectory/TrajectoryPanel');
   return { default: module.TrajectoryPanel };
+});
+const LazyDiagnosisHistoryPanel = lazy(async () => {
+  const module = await import('./features/trajectory/DiagnosisHistoryPanel');
+  return { default: module.DiagnosisHistoryPanel };
 });
 
 const TEAM_SESSION_MODES = new Set(['team', 'team.plan', 'code.team']);
@@ -360,6 +367,7 @@ function AppContent() {
   });
   const [serverConfig, setServerConfig] = useState<Record<string, unknown> | null>(null);
   const trajectoryUiEnabled = useTrajectoryUiEnabled();
+  const diagnosisEnabled = useDiagnosisEnabled();
   const [configError, setConfigError] = useState<string | null>(null);
   const [initialDataLoaded, setInitialDataLoaded] = useState(false);
   const [restartModalOpen, setRestartModalOpen] = useState(false);
@@ -378,6 +386,8 @@ function AppContent() {
   const [hasVisitedSkills, setHasVisitedSkills] = useState(activeNav === 'skills');
   const [hasVisitedChannels, setHasVisitedChannels] = useState(activeNav === 'channels');
   const [hasVisitedPersonalContext, setHasVisitedPersonalContext] = useState(activeNav === 'personalContext');
+  // 诊断面板保活：切走再切回不丢流式输出（卸载会销毁流式状态并断 SSE）
+  const [hasVisitedDiagnosis, setHasVisitedDiagnosis] = useState(activeNav === 'diagnosis');
   const [sidebarMorePanelOpen, setSidebarMorePanelOpen] = useState(false);
   const [modelSetupGuideStep, setModelSetupGuideStep] = useState<ModelSetupGuideStep | null>(null);
   const [modelSetupGuideManual, setModelSetupGuideManual] = useState(false);
@@ -432,6 +442,14 @@ function AppContent() {
     }
   }, [activeNav]);
 
+  // 功能开关关闭后残留的 sessionStorage 导航态不应继续渲染诊断面板
+  // （面板 API 会 403）。照搬 updatepanel 的 redirect 模式。
+  useEffect(() => {
+    if (!diagnosisEnabled && activeNav === 'diagnosis') {
+      setActiveNav('chat');
+    }
+  }, [activeNav, diagnosisEnabled]);
+
   useEffect(() => {
     const handler = (e: Event) => {
       const nav = (e as CustomEvent<MainNavKey>).detail;
@@ -440,6 +458,7 @@ function AppContent() {
       if (nav === 'skills') setHasVisitedSkills(true);
       if (nav === 'channels') setHasVisitedChannels(true);
       if (nav === 'personalContext') setHasVisitedPersonalContext(true);
+      if (nav === 'diagnosis') setHasVisitedDiagnosis(true);
     };
     window.addEventListener('jiuwen:nav', handler);
     return () => window.removeEventListener('jiuwen:nav', handler);
@@ -1021,6 +1040,7 @@ function AppContent() {
       const config = await request<Record<string, unknown>>('config.get');
       setA2UIFeatureEnabled(normalizeA2UIEnabled(config.a2ui_enabled));
       setTrajectoryUiEnabled(normalizeTrajectoryUiEnabled(config.trajectory_ui_enabled));
+      setDiagnosisEnabled(normalizeDiagnosisEnabled(config.diagnosis_enabled));
       setServerConfig(config);
       setConfigError(null);
       if (!modelSetupGuideEvaluatedRef.current) {
@@ -1179,6 +1199,11 @@ function AppContent() {
       }
       setTrajectoryUiEnabled(normalizeTrajectoryUiEnabled(updates.trajectory_ui_enabled));
     }
+    if ('diagnosis_enabled' in updates) {
+      if (payload?.updated?.includes('diagnosis_enabled')) {
+        setDiagnosisEnabled(normalizeDiagnosisEnabled(updates.diagnosis_enabled));
+      }
+    }
     setServerConfig((prev) => {
       if (!prev) return updates;
       const next: Record<string, unknown> = { ...prev, ...updates };
@@ -1315,6 +1340,11 @@ function AppContent() {
         throw new Error(t('config.errors.trajectoryUiUnsupported'));
       }
       setTrajectoryUiEnabled(normalizeTrajectoryUiEnabled(payload.config.trajectory_ui_enabled));
+    }
+    if (payload.config && 'diagnosis_enabled' in payload.config) {
+      if (result?.updated?.includes('diagnosis_enabled')) {
+        setDiagnosisEnabled(normalizeDiagnosisEnabled(payload.config.diagnosis_enabled));
+      }
     }
     setServerConfig((prev) => {
       const next: Record<string, unknown> = { ...(prev ?? {}) };
@@ -2384,6 +2414,7 @@ function AppContent() {
     if (nav === 'skills') setHasVisitedSkills(true);
     if (nav === 'channels') setHasVisitedChannels(true);
     if (nav === 'personalContext') setHasVisitedPersonalContext(true);
+    if (nav === 'diagnosis') setHasVisitedDiagnosis(true);
   }, [enterpriseBlockedNav, modelSetupGuideStep]);
 
   const skipModelSetupGuide = useCallback(() => {
@@ -2509,7 +2540,12 @@ function AppContent() {
         isConnected={isConnected}
         onNewSession={handleNewSession}
         showNewSession={false}
-        hiddenNavItems={enterpriseMode ? ['sessions', 'history', ...ENTERPRISE_HIDDEN_NAV_ITEMS] : ['sessions', 'history', 'approvals']}
+        hiddenNavItems={(() => {
+          const base: MainNavKey[] = enterpriseMode
+            ? ['sessions', 'history', ...ENTERPRISE_HIDDEN_NAV_ITEMS]
+            : ['sessions', 'history', 'approvals'];
+          return diagnosisEnabled ? base : [...base, 'diagnosis'];
+        })()}
         onMorePanelOpenChange={setSidebarMorePanelOpen}
       />
 
@@ -2744,6 +2780,13 @@ function AppContent() {
         {FEATURE_APP_UPDATER_UI && activeNav === 'updatepanel' && (
           <div className="app-section">
             <UpdatePanel isConnected={isConnected} request={request} />
+          </div>
+        )}
+        {hasVisitedDiagnosis && (
+          <div className={`app-section min-h-0 ${activeNav === 'diagnosis' ? '' : 'is-hidden'}`}>
+            <Suspense fallback={null}>
+              <LazyDiagnosisHistoryPanel request={request} currentSessionId={sessionId} />
+            </Suspense>
           </div>
         )}
 

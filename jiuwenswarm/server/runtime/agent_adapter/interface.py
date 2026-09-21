@@ -1041,7 +1041,7 @@ def build_user_prompt(content: str | dict, files: dict, channel: str, language: 
         "content": content,
         "type": "user input",
     }
-    if channel in ["cron", "heartbeat"]:
+    if channel in ["cron", "heartbeat", "diagnosis"]:
         msg_data["source"] = "system"
         msg_data["type"] = channel
     if metadata:
@@ -1051,7 +1051,7 @@ def build_user_prompt(content: str | dict, files: dict, channel: str, language: 
         sender_name = str(metadata.get("sender_name") or "").strip()
         if sender_name:
             msg_data["sender"] = sender_name
-    if channel not in ["cron", "heartbeat"]:
+    if channel not in ["cron", "heartbeat", "diagnosis"]:
         msg_data["files_updated_by_user"] = json.dumps(files, ensure_ascii=False)
         if is_enterprise() and files:
             msg_data["file_handling_hint"] = _enterprise_file_download_hint(language)
@@ -1076,7 +1076,7 @@ def build_user_prompt(content: str | dict, files: dict, channel: str, language: 
         "files_updated_by_user": json.dumps(files, ensure_ascii=False),
         "type": "user input",
     }
-    if is_enterprise() and files and channel not in ["cron", "heartbeat"]:
+    if is_enterprise() and files and channel not in ["cron", "heartbeat", "diagnosis"]:
         user_message_context["file_handling_hint"] = _enterprise_file_download_hint(language)
     if skills_to_use:
         user_message_context["skills_to_use"] = skills_to_use

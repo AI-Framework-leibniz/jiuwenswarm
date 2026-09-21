@@ -37,6 +37,9 @@ from jiuwenswarm.gateway.channel_manager.web.web_http_server import (
 from jiuwenswarm.gateway.channel_manager.web.trajectory_http import (
     attach_trajectory_routes,
 )
+from jiuwenswarm.gateway.channel_manager.web.diagnose_http import (
+    attach_diagnose_routes,
+)
 
 _HEADER_TO_PARAM = {
     "x-user-id": "user_id",
@@ -613,7 +616,8 @@ def create_web_http_app(channel: Any) -> FastAPI:
 
     _register_mapped_routes(app, channel, mapped_routes)
     register_special_http_routes(app, channel)
-    attach_trajectory_routes(app, channel)
+    trajectory_service = attach_trajectory_routes(app, channel)
+    attach_diagnose_routes(app, channel, trajectory_service=trajectory_service)
     return app
 
 
