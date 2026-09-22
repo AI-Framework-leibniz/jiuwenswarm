@@ -23,14 +23,27 @@ from .external_memory_config import (
 
 logger = logging.getLogger(__name__)
 
-_BUILTIN_PROVIDERS = {"openjiuwen", "mem0", "openviking"}
+_BUILTIN_PROVIDERS = {"openjiuwen", "mem0", "openviking", "officeace_cloud"}
 
 
 def build_external_memory_rail(
     config: Optional[Dict[str, Any]] = None,
     workspace_dir: str = ".",
+    session_id: Optional[str] = None,
+    runtime_config: Optional[Dict[str, str]] = None,
 ) -> Optional[Any]:
-    """Build an ExternalMemoryRail from config, or None if disabled/failed."""
+    """Build an ExternalMemoryRail from config, or None if disabled/failed.
+
+    Args:
+        config: Full config dict (memory.external.* selects the provider).
+        workspace_dir: Agent workspace directory.
+        session_id: Per-session id (thread↔session). Passed to the rail so
+            provider.initialize uses the relay-claw session_id; officeace_cloud
+            also uses it for the cloud memory session. Other providers ignore it.
+        runtime_config: Per-session credentials (api_key/space_id/base_url) for
+            officeace_cloud, supplied by relay-claw via chat.send params. Only
+            the officeace_cloud builder reads these; other providers are unaffected.
+    """
     try:
         from openjiuwen.harness.rails import ExternalMemoryRail
     except Exception as exc:
@@ -52,6 +65,8 @@ def build_external_memory_rail(
             provider = _build_openviking_provider(ext_cfg)
         elif provider_name == "lakebase":
             provider = _build_lakebase_provider(ext_cfg)
+        elif provider_name == "officeace_cloud":
+            provider = _build_officeace_cloud_provider(ext_cfg, runtime_config=runtime_config)
         else:
             provider = _load_plugin_provider(provider_name, ext_cfg.get("allowed_plugins") or None)
     except Exception as exc:
@@ -64,15 +79,27 @@ def build_external_memory_rail(
     if provider is None:
         return None
 
+    # Only officeace_cloud consumes the per-session session_id (for its cloud
+    # memory session). Other providers (openjiuwen/mem0/openviking/lakebase)
+    # must keep their original "__default__" session_id — passing a real
+    # session id would change how they tag/scope stored messages, breaking
+    # the "do not affect other providers" requirement.
+    if provider_name == "officeace_cloud" and session_id:
+        rail_session_id = session_id
+    else:
+        rail_session_id = "__default__"
+
     try:
         rail = ExternalMemoryRail(
             provider,
             user_id=ext_cfg.get("user_id", "__default__"),
             scope_id=ext_cfg.get("scope_id", "__default__"),
+            session_id=rail_session_id,
         )
         logger.info(
-            "[ExternalMemoryBuilder] ExternalMemoryRail built (provider=%s)",
+            "[ExternalMemoryBuilder] ExternalMemoryRail built (provider=%s, session_id=%s)",
             provider_name,
+            (rail_session_id or "default"),
         )
         return rail
     except Exception as exc:
@@ -182,6 +209,100 @@ def _build_lakebase_provider(ext_cfg: Dict[str, Any]):
     logger.info(
         "[ExternalMemoryBuilder] LakeBase provider built: base_url=%s, base_id=%s",
         base_url, base_id,
+    )
+    return provider
+
+
+def _is_cloud_deployment() -> bool:
+    """True if running in cloud deployment form.
+
+    云端（``OFFICE_ACE_DEPLOYMENT=cloud``）与 PC 端（``pc`` 或缺省）的区分：
+    * 云端：记忆搜索走 AgentArts SDK，sync_turn 不上报（由 relay-claw 直报）。
+    * PC 端：记忆搜索走 chat-service appapi，sync_turn 走 pc-threads 上报。
+    """
+    return os.environ.get("OFFICE_ACE_DEPLOYMENT", "pc").strip().lower() == "cloud"
+
+
+def _build_officeace_cloud_provider(
+    ext_cfg: Dict[str, Any],
+    runtime_config: Optional[Dict[str, str]] = None,
+):
+    """Build OfficeAce memory provider (cloud or PC form).
+
+    OfficeAce memory is a long-term memory service shared by cloud and PC
+    deployments. Per-session credentials (api_key, space_id) are supplied by
+    relay-claw via chat.send params and threaded here as ``runtime_config``.
+    Since each session owns its own provider instance (session-scoped adapter →
+    own rail → own provider), credentials are bound at construction — matching
+    the provider's read-only config principle. Static config/env values are a
+    fallback for dev/standalone debugging when relay-claw does not supply
+    per-session credentials.
+
+    Deployment dispatch:
+        cloud → :class:`OfficeAceMemoryCloudProvider` (AgentArts SDK search,
+            sync_turn no-op; relay-claw reports conversations directly).
+        pc    → :class:`OfficeAceMemoryPcProvider` (chat-service appapi search
+            + pc-threads messages sync_turn).
+
+    Args:
+        ext_cfg: ``memory.external`` config slice (contains the
+            ``officeace_cloud`` sub-section).
+        runtime_config: Per-session credentials from relay-claw chat.send params.
+            ``api_key`` / ``space_id`` / ``base_url`` override the static
+            fallback values.
+
+    Config shape (memory.external.officeace_cloud):
+        base_url: str    # OfficeAce memory endpoint
+        api_key: str     # static fallback credential (prod = per-session via runtime_config)
+        space_id: str    # static fallback space/library id (prod = per-session via runtime_config)
+    """
+    oa_cfg = ext_cfg.get("officeace_cloud") or {}
+    # Per-session credentials + endpoint (from relay-claw chat.send params)
+    # take priority over static config/env fallback values.
+    rc = runtime_config or {}
+    base_url = rc.get("base_url") or oa_cfg.get("base_url") or os.environ.get(
+        "AGENTARTS_MEMORY_BASE_URL", ""
+    )
+    api_key = rc.get("api_key") or oa_cfg.get("api_key") or os.environ.get(
+        "AGENTARTS_MEMORY_API_KEY", ""
+    )
+    space_id = rc.get("space_id") or oa_cfg.get("space_id") or os.environ.get(
+        "AGENTARTS_MEMORY_SPACE_ID", ""
+    )
+    actor_id = rc.get("actor_id") or rc.get("user_id") or ""
+    source = "per-session" if rc else "static-fallback"
+
+    if _is_cloud_deployment():
+        from openjiuwen.core.memory.external.office_ace_memory_cloud_provider import (
+            OfficeAceMemoryCloudProvider,
+        )
+
+        provider = OfficeAceMemoryCloudProvider(
+            base_url=base_url or None,
+            api_key=api_key,
+            space_id=space_id,
+            actor_id=actor_id,
+        )
+        logger.info(
+            "[ExternalMemoryBuilder] OfficeAce cloud provider built: "
+            "base_url=%s, api_key=%s, space_id=%s (source=%s)",
+            base_url, bool(api_key), bool(space_id), source,
+        )
+        return provider
+
+    from openjiuwen.core.memory.external.office_ace_memory_pc_provider import (
+        OfficeAceMemoryPcProvider,
+    )
+
+    provider = OfficeAceMemoryPcProvider(
+        base_url=base_url or None,
+        api_key=api_key,
+        actor_id=actor_id,
+    )
+    logger.info(
+        "[ExternalMemoryBuilder] OfficeAce pc provider built: "
+        "base_url=%s, api_key=%s, actor_id=%s (source=%s)",
+        base_url, bool(api_key), bool(actor_id), source,
     )
     return provider
 

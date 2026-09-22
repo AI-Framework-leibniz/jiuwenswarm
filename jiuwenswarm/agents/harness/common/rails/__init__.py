@@ -11,6 +11,9 @@ from jiuwenswarm.agents.harness.common.rails.disabled_tools_rail import (
     DisabledToolsRail,
 )
 from jiuwenswarm.agents.harness.common.rails.project_memory_rail import ProjectMemoryRail
+from jiuwenswarm.agents.harness.common.rails.office_ace_user_profile import (
+    OfficeAceUserProfileRail,
+)
 from jiuwenswarm.agents.harness.common.rails.response_prompt_rail import ResponsePromptRail
 from jiuwenswarm.agents.harness.common.rails.runtime_prompt_rail import RuntimePromptRail
 from jiuwenswarm.agents.harness.common.rails.symphony import (
@@ -36,6 +39,7 @@ __all__ = [
     "PermissionInterruptRail",
     "AvatarPromptRail",
     "ProjectMemoryRail",
+    "OfficeAceUserProfileRail",
     "ResponsePromptRail",
     "RuntimePromptRail",
     "SymphonyOrchestrationRail",

@@ -93,6 +93,22 @@ SPAWN_ENV_KEYS: frozenset[str] = frozenset(
         "EXTENSION_DIRS",
         # Comma-separated source basenames loaded from EXTENSION_DIRS/model_clients at startup.
         "AGENT_EXTRA_MODEL_CLIENTS",
+        # OfficeAceUserProfileRail（user-level 画像拉取，非 session 级）。
+        # relay-claw 经 spawn env 透传到 sidecar os.environ；config.yaml 的
+        # ${OFFICE_ACE_USER_PROFILE_*:-} 占位符必须从 os.environ 解析（而非
+        # get_local_config/Gateway DB），否则 rail 判定未配置不挂载。
+        # user_id 复用上层 memory.external.user_id（MEMORY_USER_ID），不在此段配置。
+        "OFFICE_ACE_USER_PROFILE_ENABLED",
+        "OFFICE_ACE_USER_PROFILE_ENDPOINT",
+        "OFFICE_ACE_USER_PROFILE_API_KEY",
+        "OFFICE_ACE_USER_PROFILE_FETCH_INTERVAL",
+        "OFFICE_ACE_USER_PROFILE_MAX_CHARS",
+        "OFFICE_ACE_USER_PROFILE_TIMEOUT",
+        # 部署形态：cloud=OfficeAce 云服务, pc=本地桌面端。
+        # 控制用户画像凭证回落 + sync_turn 行为（cloud 不在 provider 上报）。
+        # relay-claw 经 spawn env 透传到 sidecar os.environ，供 config.yaml
+        # 占位符解析与记忆 provider 分流判定。
+        "OFFICE_ACE_DEPLOYMENT",
     }
 )
 

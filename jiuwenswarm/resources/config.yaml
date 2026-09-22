@@ -246,6 +246,36 @@ memory:
       base_id: ${LAKEBASE_MEM_BASE_ID:-}
       database_id: ${LAKEBASE_DATABASE_ID:-}
 
+    # -- AgentArts Memory（云端记忆，per-session 凭据由 relay-claw 下发）--
+    # 生效条件：provider='officeace_cloud'
+    # api_key/space_id 留空：由 relay-claw chat.send params（memory_api_key /
+    #   memory_space_id）动态下发（per-session，生产路径）
+    # 填值则作为静态兜底（开发/单机调试，或 relay-claw 未下发时）
+    officeace_cloud:
+      base_url: ${AGENTARTS_MEMORY_BASE_URL:-https://memory.cn-southwest-2.huaweicloud-agentarts.com}
+      api_key: ${AGENTARTS_MEMORY_API_KEY:-}
+      space_id: ${AGENTARTS_MEMORY_SPACE_ID:-}
+
+  # ------------------------------------------------------------
+  # 用户画像（用户级记忆概览，OfficeAceUserProfileRail 自动注入 prompt）
+  # ------------------------------------------------------------
+  # 独立于 engine/external：不要求 memory.engine=external 即可生效。
+  # endpoint/api_key 任一为空 → rail 不挂载（零残留，对话照常）。
+  # user_id 复用上层 memory.external.user_id（${MEMORY_USER_ID:-__default__}），
+  # 不在此段单独配置。
+  #
+  # 部署形态由 OFFICE_ACE_DEPLOYMENT 区分（cloud=OfficeAce 云服务, pc=本地桌面端）：
+  #   cloud：endpoint/api_key 回落到 AgentArts Memory 凭证（AGENTARTS_MEMORY_*），
+  #          由 get_office_ace_user_profile_config() 在 Python 层填充。
+  #   pc  ：用下方 OFFICE_ACE_USER_PROFILE_* 专用凭证。
+  office_ace_user_profile:
+    enabled: ${OFFICE_ACE_USER_PROFILE_ENABLED:-false}
+    endpoint: ${OFFICE_ACE_USER_PROFILE_ENDPOINT:-}
+    api_key: ${OFFICE_ACE_USER_PROFILE_API_KEY:-}
+    fetch_interval_minutes: ${OFFICE_ACE_USER_PROFILE_FETCH_INTERVAL:-10}   # 后台周期拉取间隔（分钟）
+    max_chars: ${OFFICE_ACE_USER_PROFILE_MAX_CHARS:-8000}                    # 注入 prompt 的最大字符数
+    timeout_seconds: ${OFFICE_ACE_USER_PROFILE_TIMEOUT:-15}                 # 单次拉取超时（秒）
+
 
 proactive_recommendation:
   enabled: false                # 总开关
@@ -1126,11 +1156,9 @@ channels:
 #
 # 三种动作: allow / ask / deny
 permissions:
-  enabled: false
+  enabled: true
   schema: tiered_policy
   permission_mode: normal
-  # 技能级动态授权（Skill overlay）：默认关闭；开启后根 SKILL.md 加载经
-  # SkillAuthorizationRail 门禁审批，ACTIVE Grant 参与权限合成。
   skill_authorization:
     enabled: false
   defaults:
@@ -1183,7 +1211,6 @@ permissions:
     cron_flash: allow
     acp_chat: ask
     skill_acceleration_exec: ask
-
   rules:
     - id: shell_allow_dir
       tools:

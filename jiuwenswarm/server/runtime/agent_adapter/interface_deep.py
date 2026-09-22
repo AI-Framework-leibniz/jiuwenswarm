@@ -2431,6 +2431,14 @@ class JiuWenSwarmDeepAdapter:
         self._memory_rail: MemoryRail | None = None
         self._external_memory_rail: Any = None
         self._external_memory_rail_registered: bool = False
+        # OfficeAceUserProfileRail：独立于 engine 的用户画像 rail，有后台周期任务，
+        # 走 config 驱动注册（不随热重载销毁，保留后台任务状态）。
+        self._office_ace_user_profile_rail: Any = None
+        self._office_ace_user_profile_rail_registered: bool = False
+        # AgentArts Memory per-session credentials (api_key/space_id) extracted
+        # from the bootstrap request in create_instance, fed to the provider at
+        # construction time so each session gets its own credential-bound provider.
+        self._external_memory_runtime_config: dict[str, str | bool] | None = None
         # 记忆 embedding 配置指纹：用于检测 embed 段变化并据此重建 MemoryRail。
         # 重建 rail 才能让 _embedding_config 刷新；否则换 endpoint 时 rail 复用旧配置。
         self._memory_embedding_fingerprint: str = ""
@@ -10336,6 +10344,29 @@ class JiuWenSwarmDeepAdapter:
             bootstrap_request = self._instance_overrides.pop("request", None)
             if bootstrap_request is not None and is_enterprise():
                 await self._load_enterprise_config(bootstrap_request)
+            # OfficeAce memory: relay-claw 经 chat.send params (memory_api_key /
+            # memory_space_id / memory_base_url) 下发 per-session 凭据+endpoint。
+            # session-scoped adapter 在此提取并缓存，供 _build_external_memory_rail
+            # 在构造 provider 时注入（每个 session 一个 provider 实例）。云端/PC
+            # 部署形态由 builder 读 OFFICE_ACE_DEPLOYMENT 环境变量决定，无需端侧下发。
+            if bootstrap_request is not None:
+                _bp = getattr(bootstrap_request, "params", None)
+                if isinstance(_bp, dict):
+                    _aa_key = _bp.get("memory_api_key")
+                    _aa_space = _bp.get("memory_space_id")
+                    _aa_base = _bp.get("memory_base_url")
+                    if (isinstance(_aa_key, str) and _aa_key) or (
+                        isinstance(_aa_space, str) and _aa_space
+                    ) or (isinstance(_aa_base, str) and _aa_base):
+                        self._external_memory_runtime_config = {
+                            k: v
+                            for k, v in (
+                                ("api_key", _aa_key),
+                                ("space_id", _aa_space),
+                                ("base_url", _aa_base),
+                            )
+                            if isinstance(v, str) and v
+                        }
             config_base = merge_memory_config_into_config(config_base)
             config_base = self._merge_enterprise_models_into_config(config_base)
             # 与模型槽位一致：Agent 级 permissions 模板在构建 rail 前绑定到 Task
@@ -11025,6 +11056,7 @@ class JiuWenSwarmDeepAdapter:
                 mode = self._last_mode or "agent"
                 await self._handle_memory_rail_by_config(mode)
                 await self._handle_external_memory_rail_by_config()
+                await self._handle_office_ace_user_profile_rail_by_config()
             except Exception as e:
                 logger.warning(
                     "[JiuWenSwarmDeepAdapter] memory rail refresh on reload failed: %s", e
@@ -11367,6 +11399,8 @@ class JiuWenSwarmDeepAdapter:
         await self._handle_memory_rail_by_config("agent")
         # 外接记忆 rail（mode-independent，注册一次，跨 reload 持久）
         await self._handle_external_memory_rail_by_config()
+        # 用户画像 rail（用户级记忆概览，mode-independent，有后台周期任务）
+        await self._handle_office_ace_user_profile_rail_by_config()
         # 上下文 rail
         context_enabled = self._config_cache.get("context_engine_config", {}).get("enabled", False)
 
@@ -21060,6 +21094,8 @@ class JiuWenSwarmDeepAdapter:
         return build_external_memory_rail(
             config=get_config(),
             workspace_dir=self._workspace_dir,
+            session_id=self._parent_session_id,
+            runtime_config=self._external_memory_runtime_config,
         )
 
     async def _handle_external_memory_rail_by_config(self):
@@ -21109,6 +21145,99 @@ class JiuWenSwarmDeepAdapter:
                 )
             self._external_memory_rail = None
             self._external_memory_rail_registered = False
+
+    def _build_office_ace_user_profile_rail(self):
+        """Build OfficeAceUserProfileRail from config, or None if disabled/failed.
+
+        独立于 memory.engine —— 仅由 ``memory.office_ace_user_profile`` 段控制。
+        endpoint/api_key/user_id 任一为空 → 返回 None（rail 不挂载，零残留）。
+        """
+        from jiuwenswarm.agents.harness.common.memory.external_memory_config import (
+            get_office_ace_user_profile_config,
+        )
+        from jiuwenswarm.agents.harness.common.rails.office_ace_user_profile import (
+            OfficeAceUserProfileRail,
+            UserProfileConfig,
+        )
+
+        cfg = get_office_ace_user_profile_config(get_config())
+        if not cfg["enabled"]:
+            logger.info(
+                "[JiuWenSwarmDeepAdapter] OfficeAceUserProfileRail disabled by config",
+            )
+            return None
+        if not cfg["endpoint"] or not cfg["api_key"] or not cfg["user_id"]:
+            logger.info(
+                "[JiuWenSwarmDeepAdapter] OfficeAceUserProfileRail disabled "
+                "(endpoint/api_key/user_id incomplete)",
+            )
+            return None
+        try:
+            rail = OfficeAceUserProfileRail(UserProfileConfig(**cfg))
+            logger.info(
+                "[JiuWenSwarmDeepAdapter] OfficeAceUserProfileRail create success "
+                "(user=%s, endpoint=%s)",
+                cfg["user_id"],
+                cfg["endpoint"],
+            )
+            return rail
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] OfficeAceUserProfileRail create failed: %s",
+                exc,
+            )
+            return None
+
+    async def _handle_office_ace_user_profile_rail_by_config(self):
+        """Register / unregister OfficeAceUserProfileRail based on config.
+
+        Mode-independent（同 ExternalMemoryRail），不随 config 热重载销毁，
+        保留后台周期拉取任务状态（避免每轮重建 fetcher 丢缓存）。
+        """
+        from jiuwenswarm.agents.harness.common.memory.external_memory_config import (
+            is_office_ace_user_profile_enabled,
+        )
+
+        config = get_config()
+        if is_office_ace_user_profile_enabled(config):
+            if self._office_ace_user_profile_rail_registered:
+                return
+            if self._office_ace_user_profile_rail is None:
+                self._office_ace_user_profile_rail = (
+                    self._build_office_ace_user_profile_rail()
+                )
+            if self._office_ace_user_profile_rail is None:
+                return
+            try:
+                await self._instance.register_rail(self._office_ace_user_profile_rail)
+                self._office_ace_user_profile_rail_registered = True
+                logger.info(
+                    "[JiuWenSwarmDeepAdapter] OfficeAceUserProfileRail registered",
+                )
+            except Exception as exc:
+                logger.error(
+                    "[JiuWenSwarmDeepAdapter] OfficeAceUserProfileRail register failed: %s",
+                    exc,
+                )
+                self._office_ace_user_profile_rail = None
+        elif (
+            self._office_ace_user_profile_rail is not None
+            and self._office_ace_user_profile_rail_registered
+        ):
+            try:
+                await self._instance.unregister_rail(
+                    self._office_ace_user_profile_rail,
+                )
+                self._office_ace_user_profile_rail_registered = False
+                logger.info(
+                    "[JiuWenSwarmDeepAdapter] OfficeAceUserProfileRail unregistered",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[JiuWenSwarmDeepAdapter] OfficeAceUserProfileRail unregister failed: %s",
+                    exc,
+                )
+            self._office_ace_user_profile_rail = None
 
     async def compress_context(
             self,

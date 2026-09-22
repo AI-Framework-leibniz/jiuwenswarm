@@ -83,6 +83,7 @@ def get_external_memory_config(
         "mem0": ext.get("mem0") or {},
         "openviking": ext.get("openviking") or {},
         "lakebase": ext.get("lakebase") or {},
+        "officeace_cloud": ext.get("officeace_cloud") or {},
     }
 
 
@@ -91,6 +92,82 @@ def is_external_memory_enabled(config: Optional[Dict[str, Any]] = None) -> bool:
     if not is_external_memory_allowed(config):
         return False
     return bool(get_external_memory_config(config).get("provider"))
+
+
+def _is_cloud_deployment() -> bool:
+    """True iff ``OFFICE_ACE_DEPLOYMENT=cloud``（OfficeAce 云服务）。
+
+    未设置或其他值视为 PC 端（向后兼容）。
+    """
+    return os.environ.get("OFFICE_ACE_DEPLOYMENT", "").strip().lower() == "cloud"
+
+
+def get_office_ace_user_profile_config(
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Return the ``memory.office_ace_user_profile`` section with defaults filled.
+
+    独立于 memory.engine —— 不要求 engine=external 即可生效。
+    空配置（endpoint/api_key 任一为空）→ rail 不挂载（零残留）。
+    user_id 复用上层 ``memory.external.user_id``（不在此段单独配置）。
+
+    部署形态分流（OFFICE_ACE_DEPLOYMENT）：
+      * cloud：endpoint/api_key 回落到 AgentArts Memory 凭证
+        （AGENTARTS_MEMORY_BASE_URL / AGENTARTS_MEMORY_API_KEY）。
+        user_id 始终取上层 MEMORY_USER_ID。
+      * pc/未设：用 OFFICE_ACE_USER_PROFILE_* 专用凭证。
+    """
+    from .config import get_memory_section
+
+    mem = get_memory_section(config)
+    up = mem.get("office_ace_user_profile", {}) if isinstance(mem, dict) else {}
+    if not isinstance(up, dict):
+        up = {}
+    ext = mem.get("external", {}) if isinstance(mem, dict) else {}
+    if not isinstance(ext, dict):
+        ext = {}
+
+    endpoint = str(up.get("endpoint") or "").strip()
+    api_key = str(up.get("api_key") or "").strip()
+    # user_id 复用上层 memory.external.user_id，office_ace_user_profile 段不单独配置
+    user_id = str(ext.get("user_id") or "").strip() or _DEFAULT_USER
+
+    # 云端：凭证回落到 AgentArts Memory（与对话上报同源）
+    if _is_cloud_deployment():
+        if not endpoint:
+            endpoint = os.environ.get("AGENTARTS_MEMORY_BASE_URL", "").strip()
+        if not api_key:
+            api_key = os.environ.get("AGENTARTS_MEMORY_API_KEY", "").strip()
+
+    # space_id：cloud 端 internal 接口 path 需要（/v1/core/internal/spaces/{space_id}/...），
+    # pc 端 appapi 接口不需要。优先取 office_ace_user_profile 段，cloud 回落 AGENTARTS_MEMORY_SPACE_ID。
+    space_id = str(up.get("space_id") or "").strip()
+    if _is_cloud_deployment() and not space_id:
+        space_id = os.environ.get("AGENTARTS_MEMORY_SPACE_ID", "").strip()
+
+    return {
+        "enabled": bool(up.get("enabled", False)),
+        "endpoint": endpoint,
+        "api_key": api_key,
+        "user_id": user_id,
+        "fetch_interval_minutes": int(up.get("fetch_interval_minutes", 10)),
+        "max_chars": int(up.get("max_chars", 8000)),
+        "timeout_seconds": float(up.get("timeout_seconds", 15.0)),
+        "space_id": space_id,
+    }
+
+
+def is_office_ace_user_profile_enabled(
+    config: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Return True iff user profile rail is enabled AND configured (endpoint+key+user)."""
+    cfg = get_office_ace_user_profile_config(config)
+    return bool(
+        cfg["enabled"]
+        and cfg["endpoint"]
+        and cfg["api_key"]
+        and cfg["user_id"]
+    )
 
 
 def _nonempty_str(value: Any) -> str | None:

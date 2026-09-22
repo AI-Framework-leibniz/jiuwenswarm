@@ -64,10 +64,17 @@ from jiuwenswarm.agents.harness.code.rails import (
     PlanApprovalInterruptRail,
 )
 from jiuwenswarm.agents.harness.common.rails import (
+    OfficeAceUserProfileRail,
     ProjectMemoryRail,
     StructuredAskUserRail,
 )
 from jiuwenswarm.agents.harness.common.memory.config import get_memory_mode, is_memory_enabled
+from jiuwenswarm.agents.harness.common.memory.external_memory_config import (
+    get_office_ace_user_profile_config,
+)
+from jiuwenswarm.agents.harness.common.rails.office_ace_user_profile import (
+    UserProfileConfig,
+)
 from jiuwenswarm.agents.harness.common.tools import (
     SkillToolkit,
 )
@@ -225,6 +232,7 @@ _RAIL_BUILD_NAMES: dict[str, str] = {
     "ContextProcessorRail": "_build_context_processor_rail",
     "SkillEvolutionRail": "_build_skill_evolution_rail_via_config",
     "ProjectMemoryRail": "_build_project_memory_rail",
+    "OfficeAceUserProfileRail": "_build_office_ace_user_profile_rail",
     "CodingMemoryRail": "_build_coding_memory_rail",
     "WorktreeRail": "_build_worktree_rail_via_config",
     "CodeAgentRail": "_build_code_agent_rail",
@@ -381,7 +389,8 @@ class JiuwenSwarmCodeAdapter(JiuWenSwarmDeepAdapter):
         "RequestSummaryRail",
         "RuntimePromptRail", "ResponsePromptRail",
         "JiuSwarmStreamEventRail", "SecurityRail",
-        "LspRail", "ProjectMemoryRail", "PermissionInterruptRail",
+        "LspRail", "ProjectMemoryRail", "OfficeAceUserProfileRail",
+        "PermissionInterruptRail",
         "ContextProcessorRail",
         "ContextOverflowRecoveryRail",
         "SysOperationRail", "CodingMemoryRail",
@@ -645,6 +654,10 @@ class JiuwenSwarmCodeAdapter(JiuWenSwarmDeepAdapter):
             _RailBuildInfo("_security_rail", self._build_security_rail),
             _RailBuildInfo("_lsp_rail", self._build_lsp_rail_via_config),
             _RailBuildInfo("_project_memory_rail", self._build_project_memory_rail),
+            _RailBuildInfo(
+                "_office_ace_user_profile_rail",
+                self._build_office_ace_user_profile_rail,
+            ),
             _RailBuildInfo(
                 "_permission_rail",
                 build_permission_rail,
@@ -939,6 +952,41 @@ class JiuwenSwarmCodeAdapter(JiuWenSwarmDeepAdapter):
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "[JiuwenSwarmCodeAdapter] ProjectMemoryRail create failed: %s", exc,
+            )
+            return None
+
+    def _build_office_ace_user_profile_rail(self) -> OfficeAceUserProfileRail | None:
+        """Build OfficeAceUserProfileRail to inject cloud-side user profile.
+
+        独立于 memory.engine —— 不要求 code 模式 memory 开关，仅由
+        ``memory.office_ace_user_profile.enabled`` + endpoint/api_key/user_id 控制。
+        任一为空 → rail 不挂载（零残留）。
+        """
+        try:
+            cfg = get_office_ace_user_profile_config(get_config())
+            if not cfg["enabled"]:
+                logger.info(
+                    "[JiuwenSwarmCodeAdapter] OfficeAceUserProfileRail disabled by config",
+                )
+                return None
+            if not cfg["endpoint"] or not cfg["api_key"] or not cfg["user_id"]:
+                logger.info(
+                    "[JiuwenSwarmCodeAdapter] OfficeAceUserProfileRail disabled "
+                    "(endpoint/api_key/user_id incomplete)",
+                )
+                return None
+            rail = OfficeAceUserProfileRail(UserProfileConfig(**cfg))
+            logger.info(
+                "[JiuwenSwarmCodeAdapter] OfficeAceUserProfileRail create success "
+                "(user=%s, endpoint=%s)",
+                cfg["user_id"],
+                cfg["endpoint"],
+            )
+            return rail
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[JiuwenSwarmCodeAdapter] OfficeAceUserProfileRail create failed: %s",
+                exc,
             )
             return None
 
