@@ -14,6 +14,7 @@ relay-claw 经 env 覆盖占位符下发（配置替换，同 agentarts memory �
 """
 from __future__ import annotations
 
+from .background import user_profile_background_manager
 from .fetcher import UserProfileConfig, UserProfileFetcher
 from .office_ace_user_profile_rail import OfficeAceUserProfileRail
 from .section import SECTION_NAME, build_office_ace_user_profile_section
@@ -24,4 +25,5 @@ __all__ = [
     "UserProfileConfig",
     "UserProfileFetcher",
     "build_office_ace_user_profile_section",
+    "user_profile_background_manager",
 ]

@@ -107,8 +107,12 @@ def get_office_ace_user_profile_config(
 ) -> Dict[str, Any]:
     """Return the ``memory.office_ace_user_profile`` section with defaults filled.
 
-    独立于 memory.engine —— 不要求 engine=external 即可生效。
-    空配置（endpoint/api_key 任一为空）→ rail 不挂载（零残留）。
+    启用条件（由 external memory 开关 + provider 隐含控制，无独立 enabled 段）：
+      external memory 已开启（engine ∈ {external, both} 且 provider 非空）
+      AND provider == "officeace_cloud"
+      AND endpoint/api_key/user_id 齐全
+    任一不满足 → ``enabled`` 为 False（rail/后台拉取不挂载，零残留）。
+
     user_id 复用上层 ``memory.external.user_id``（不在此段单独配置）。
 
     部署形态分流（OFFICE_ACE_DEPLOYMENT）：
@@ -145,8 +149,19 @@ def get_office_ace_user_profile_config(
     if _is_cloud_deployment() and not space_id:
         space_id = os.environ.get("AGENTARTS_MEMORY_SPACE_ID", "").strip()
 
+    # 启用条件：external memory 开启 + provider=officeace_cloud + 凭证齐全。
+    # 无独立 enabled 段——officeace_cloud provider 在位即隐含 user profile 启用。
+    provider = (ext.get("provider") or "").strip()
+    enabled = bool(
+        is_external_memory_allowed(config)
+        and provider == "officeace_cloud"
+        and endpoint
+        and api_key
+        and user_id
+    )
+
     return {
-        "enabled": bool(up.get("enabled", False)),
+        "enabled": enabled,
         "endpoint": endpoint,
         "api_key": api_key,
         "user_id": user_id,
@@ -160,14 +175,8 @@ def get_office_ace_user_profile_config(
 def is_office_ace_user_profile_enabled(
     config: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Return True iff user profile rail is enabled AND configured (endpoint+key+user)."""
-    cfg = get_office_ace_user_profile_config(config)
-    return bool(
-        cfg["enabled"]
-        and cfg["endpoint"]
-        and cfg["api_key"]
-        and cfg["user_id"]
-    )
+    """True iff external memory on + officeace_cloud provider + credentials complete."""
+    return bool(get_office_ace_user_profile_config(config)["enabled"])
 
 
 def _nonempty_str(value: Any) -> str | None:

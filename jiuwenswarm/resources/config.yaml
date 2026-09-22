@@ -246,11 +246,12 @@ memory:
       base_id: ${LAKEBASE_MEM_BASE_ID:-}
       database_id: ${LAKEBASE_DATABASE_ID:-}
 
-    # -- AgentArts Memory（云端记忆，per-session 凭据由 relay-claw 下发）--
+    # -- AgentArts Memory（OfficeAce 记忆，凭据直接读 config/env）--
     # 生效条件：provider='officeace_cloud'
-    # api_key/space_id 留空：由 relay-claw chat.send params（memory_api_key /
-    #   memory_space_id）动态下发（per-session，生产路径）
-    # 填值则作为静态兜底（开发/单机调试，或 relay-claw 未下发时）
+    # 无 pre-session 级别：凭据一次性绑定静态配置（config 段或
+    #   AGENTARTS_MEMORY_API_KEY/SPACE_ID/BASE_URL 环境变量）。
+    # 业务对话 thread_id 由 relay-claw chat.send 顶层下发 → ExternalMemoryRail
+    #   透传给 provider.sync_turn 上报 pc-threads/{thread_id}/messages（PC 端）。
     officeace_cloud:
       base_url: ${AGENTARTS_MEMORY_BASE_URL:-https://memory.cn-southwest-2.huaweicloud-agentarts.com}
       api_key: ${AGENTARTS_MEMORY_API_KEY:-}
@@ -269,7 +270,8 @@ memory:
   #          由 get_office_ace_user_profile_config() 在 Python 层填充。
   #   pc  ：用下方 OFFICE_ACE_USER_PROFILE_* 专用凭证。
   office_ace_user_profile:
-    enabled: ${OFFICE_ACE_USER_PROFILE_ENABLED:-false}
+    # 启用条件由 external memory 开关 + provider=officeace_cloud 隐含控制，无独立 enabled 段。
+    # endpoint/api_key/user_id 任一为空 → rail/后台拉取不挂载（零残留）。
     endpoint: ${OFFICE_ACE_USER_PROFILE_ENDPOINT:-}
     api_key: ${OFFICE_ACE_USER_PROFILE_API_KEY:-}
     fetch_interval_minutes: ${OFFICE_ACE_USER_PROFILE_FETCH_INTERVAL:-10}   # 后台周期拉取间隔（分钟）

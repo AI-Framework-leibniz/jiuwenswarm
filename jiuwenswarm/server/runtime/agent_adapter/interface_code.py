@@ -958,21 +958,16 @@ class JiuwenSwarmCodeAdapter(JiuWenSwarmDeepAdapter):
     def _build_office_ace_user_profile_rail(self) -> OfficeAceUserProfileRail | None:
         """Build OfficeAceUserProfileRail to inject cloud-side user profile.
 
-        独立于 memory.engine —— 不要求 code 模式 memory 开关，仅由
-        ``memory.office_ace_user_profile.enabled`` + endpoint/api_key/user_id 控制。
-        任一为空 → rail 不挂载（零残留）。
+        启用条件由 external memory 开关 + provider=officeace_cloud + 凭证齐全隐含控制
+        （``get_office_ace_user_profile_config`` 综合判定，``cfg["enabled"]`` 为结果）。
+        不满足 → rail 不挂载（零残留）。
         """
         try:
             cfg = get_office_ace_user_profile_config(get_config())
             if not cfg["enabled"]:
                 logger.info(
-                    "[JiuwenSwarmCodeAdapter] OfficeAceUserProfileRail disabled by config",
-                )
-                return None
-            if not cfg["endpoint"] or not cfg["api_key"] or not cfg["user_id"]:
-                logger.info(
                     "[JiuwenSwarmCodeAdapter] OfficeAceUserProfileRail disabled "
-                    "(endpoint/api_key/user_id incomplete)",
+                    "(external memory off / provider not officeace_cloud / credentials incomplete)",
                 )
                 return None
             rail = OfficeAceUserProfileRail(UserProfileConfig(**cfg))

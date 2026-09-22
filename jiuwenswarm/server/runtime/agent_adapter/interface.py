@@ -1860,6 +1860,7 @@ class JiuWenSwarm:
                     request_id=request.request_id,
                     channel_id=request.channel_id,
                     session_id=request.session_id,
+                    thread_id=request.thread_id,
                     chat_id=request.chat_id,
                     req_method=request.req_method,
                     params={**request.params, "query": query},

@@ -24,12 +24,13 @@ class _FakeRail:
     last_args = None
 
     def __init__(self, provider, *, user_id="__default__", scope_id="__default__",
-                 session_id="__default__"):
+                 session_id="__default__", thread_id=None):
         _FakeRail.last_args = {
             "provider": provider,
             "user_id": user_id,
             "scope_id": scope_id,
             "session_id": session_id,
+            "thread_id": thread_id,
         }
         self.provider = provider
 
@@ -612,40 +613,38 @@ def _officeace_cfg(provider_section: dict) -> dict:
     }}}
 
 
-def test_officeace_per_session_creds_override_static(monkeypatch):
-    """relay-claw per-session runtime_config takes priority over static config.
+def test_officeace_thread_id_threaded_into_rail(monkeypatch):
+    """thread_id (业务对话 ID) is threaded from builder → rail constructor.
 
-    Uses the cloud branch so space_id is passed through (pc branch omits it);
-    credential-resolution priority is identical in both branches.
+    PC 端 OfficeAce 记忆 sync_turn 上报 pc-threads/{thread_id}/messages 用它。
     """
-    monkeypatch.setenv("OFFICE_ACE_DEPLOYMENT", "cloud")
-    for var in ("AGENTARTS_MEMORY_BASE_URL", "AGENTARTS_MEMORY_API_KEY", "AGENTARTS_MEMORY_SPACE_ID"):
-        monkeypatch.delenv(var, raising=False)
-    cfg = _officeace_cfg({
-        "base_url": "https://memory.example.com",
-        "api_key": "static-key",
-        "space_id": "static-space",
-    })
-    runtime_creds = {
-        "api_key": "per-session-key",
-        "space_id": "per-session-space",
-        "base_url": "https://per-session.example.com",
-        "actor_id": "user-1",
-    }
+    monkeypatch.setenv("OFFICE_ACE_DEPLOYMENT", "pc")
+    cfg = _officeace_cfg({"api_key": "k", "space_id": "s"})
     session_id = "relayclaw-sess-12345678"
+    thread_id = "thread_abc123"
     assert emb.build_external_memory_rail(
-        cfg, runtime_config=runtime_creds, session_id=session_id
+        cfg, session_id=session_id, thread_id=thread_id
     ) is not None
-    kwargs = _FakeAgentArtsProvider.last_init_kwargs
-    assert kwargs["base_url"] == "https://per-session.example.com"
-    assert kwargs["api_key"] == "per-session-key"
-    assert kwargs["space_id"] == "per-session-space"
-    # session_id threaded into the rail constructor
+    # session_id + thread_id both threaded into the rail constructor
     assert _FakeRail.last_args["session_id"] == session_id
+    assert _FakeRail.last_args["thread_id"] == thread_id
 
 
-def test_officeace_static_fallback_without_runtime_creds(monkeypatch):
-    """Static config values are used when relay-claw supplies no creds."""
+def test_officeace_thread_id_none_for_non_officeace_provider(monkeypatch):
+    """Non-officeace providers get thread_id=None (they don't consume it)."""
+    monkeypatch.setenv("OFFICE_ACE_DEPLOYMENT", "pc")
+    cfg = {"memory": {"external": {"provider": "mem0", "mem0": {"api_key": "k"}}}}
+    assert emb.build_external_memory_rail(
+        cfg, session_id="sess", thread_id="thread_x"
+    ) is not None
+    # thread_id only flows to officeace_cloud; mem0 rail gets None
+    assert _FakeRail.last_args["thread_id"] is None
+    # session_id stays __default__ for non-officeace providers
+    assert _FakeRail.last_args["session_id"] == "__default__"
+
+
+def test_officeace_static_config_values_used(monkeypatch):
+    """Static config values are read directly (no per-session runtime_config)."""
     monkeypatch.setenv("OFFICE_ACE_DEPLOYMENT", "cloud")
     for var in ("AGENTARTS_MEMORY_BASE_URL", "AGENTARTS_MEMORY_API_KEY", "AGENTARTS_MEMORY_SPACE_ID"):
         monkeypatch.delenv(var, raising=False)
@@ -661,6 +660,8 @@ def test_officeace_static_fallback_without_runtime_creds(monkeypatch):
     assert kwargs["space_id"] == "static-space"
     # No session_id -> rail falls back to "__default__"
     assert _FakeRail.last_args["session_id"] == "__default__"
+    # No thread_id -> rail gets None
+    assert _FakeRail.last_args["thread_id"] is None
 
 
 def test_officeace_env_fallback_when_yaml_empty(monkeypatch):

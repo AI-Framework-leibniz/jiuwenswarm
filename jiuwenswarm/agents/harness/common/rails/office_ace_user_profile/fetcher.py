@@ -74,8 +74,6 @@ class UserProfileFetcher:
     ) -> None:
         self._config = config
         self._cache_dir = cache_dir or _default_cache_dir()
-        self._closed = False
-        self._bg_task: Optional[asyncio.Task[Any]] = None
 
     # ------------------------------------------------------------------
     # Paths
@@ -201,34 +199,6 @@ class UserProfileFetcher:
                 exc,
             )
             return False
-
-    async def start_background(self) -> None:
-        """后台周期拉取循环。由 rail ``init`` 启动、``uninit`` 取消。
-
-        首次启动先检查本地缓存新鲜度：距上次拉取 < interval 则跳过首次拉取，
-        直接等下个周期（避免新会话重复拉取已有新鲜缓存）。过期/无缓存才立即拉一次。
-        """
-        while not self._closed:
-            try:
-                if self._is_cache_fresh():
-                    logger.info(
-                        "[UserProfileFetcher] cache fresh, skip fetch (user=%s)",
-                        self._config.user_id,
-                    )
-                else:
-                    await self.fetch_once()
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("[UserProfileFetcher] background tick error: %s", exc)
-            if self._closed:
-                break
-            try:
-                await asyncio.sleep(self._config.fetch_interval_minutes * 60)
-            except asyncio.CancelledError:
-                break
-
-    def stop_background(self) -> None:
-        """标记关闭，后台循环将在下次 sleep 点退出。"""
-        self._closed = True
 
     # ------------------------------------------------------------------
     # Internal

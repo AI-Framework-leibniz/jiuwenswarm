@@ -126,6 +126,7 @@ def _payload_to_request(data: dict[str, Any]) -> AgentRequest:
         request_id=data["request_id"],
         channel_id=data.get("channel_id", "web"),
         session_id=data.get("session_id"),
+        thread_id=data.get("thread_id"),
         chat_id=data.get("chat_id"),
         service_id=data.get("service_id"),
         agent_id=data.get("agent_id"),

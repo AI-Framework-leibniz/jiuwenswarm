@@ -56,49 +56,22 @@ class OfficeAceUserProfileRail(DeepAgentRail):
         super().__init__()
         self._fetcher = UserProfileFetcher(config, cache_dir=cache_dir)
         self._system_prompt_builder: Optional[object] = None
-        self._bg_task: Optional[asyncio.Task] = None  # type: ignore[type-arg]
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def init(self, agent: "DeepAgent") -> None:
+        """绑定 system_prompt_builder。后台周期拉取由进程级 manager 负责,不在此启动。"""
         self._system_prompt_builder = getattr(agent, "system_prompt_builder", None)
         if self._system_prompt_builder is None:
             logger.warning(
                 "[OfficeAceUserProfileRail] agent has no system_prompt_builder; "
                 "prompt injection disabled",
             )
-        # 启动后台周期拉取
-        coro = self._fetcher.start_background()
-        try:
-            self._bg_task = asyncio.create_task(coro)
-            logger.info(
-                "[OfficeAceUserProfileRail] background fetcher started "
-                "(user=%s, interval=%dmin)",
-                self._fetcher._config.user_id,  # noqa: SLF001
-                self._fetcher._config.fetch_interval_minutes,  # noqa: SLF001
-            )
-        except RuntimeError:
-            # 无事件循环（非 async 上下文启动）——跳过后台任务，
-            # before_model_call 仍可同步拉取。close 掉未 await 的 coroutine，
-            # 避免 "coroutine was never awaited" RuntimeWarning。
-            coro.close()
-            logger.warning(
-                "[OfficeAceUserProfileRail] no event loop; background fetcher skipped",
-            )
 
     def uninit(self, agent: "DeepAgent") -> None:
-        """取消后台任务并清段，避免 rail 卸载后残留。"""
-        self._fetcher.stop_background()
-        if self._bg_task is not None and not self._bg_task.done():
-            self._bg_task.cancel()
-            try:
-                # 不 await（uninit 可能非 async 上下文）；cancel 即可
-                asyncio.ensure_future(self._bg_task)
-            except RuntimeError:
-                pass
-        self._bg_task = None
+        """清段。后台周期拉取由进程级 manager 负责,不在此取消。"""
         if self._system_prompt_builder is not None:
             try:
                 self._system_prompt_builder.remove_section(SECTION_NAME)
