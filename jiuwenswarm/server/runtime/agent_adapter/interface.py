@@ -1672,6 +1672,8 @@ class JiuWenSwarm:
         inputs: dict[str, Any] = {
             "conversation_id": request.session_id,
             "query": final_query,
+            # 原始用户文本（未经 build_user_prompt 包装的干净 content）
+            "raw_query": query if isinstance(query, str) else "",
             "channel": channel,
             "language": language,
             # Only an explicit false disables interactive tools. Existing
