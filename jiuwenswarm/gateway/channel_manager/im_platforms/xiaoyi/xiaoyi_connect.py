@@ -744,9 +744,11 @@ class XiaoyiChannel(BaseChannel):
         platform_session_id = (meta.get("xiaoyi_session_id") or "").strip()
         platform_task_id = (meta.get("xiaoyi_task_id") or "").strip()
         if platform_session_id or platform_task_id:
+            # 有 session、没有 task 时用本轮 msg.id。用 session id 当 taskId
+            # 会把产物挂到一条没有气泡的任务上。
             return (
                 platform_session_id or (msg.session_id or ""),
-                platform_task_id or platform_session_id,
+                platform_task_id or (msg.id or ""),
             )
         task_id = msg.id or ""
         session_id = self._session_task_map.get(task_id, task_id)
@@ -1038,14 +1040,15 @@ class XiaoyiChannel(BaseChannel):
         # mode 门控跳过——send_file_to_user 的 chat.file 被静默丢弃（且工具侧
         # 已标记已发送，重试被去重，用户永远收不到文件）。
         if msg.event_type == EventType.CHAT_FILE:
-            stream_task_id = team_task_key[1]
-            task_id = self._artifact_delivery_task_id(session_id, task_id, msg)
+            sticky_task_id = team_task_key[1]
+            task_id = self._artifact_delivery_task_id(session_id, sticky_task_id, msg)
             files = msg.payload.get("files", {}) if isinstance(msg.payload, dict) else {}
             if files:
                 # 产物会插进同一条流：先把扣住的最后一片正文收尾，避免文件卡片
                 # 插在半句话中间（手机按到达顺序拼接，尾巴会粘到最终答复前面）。
-                await self._flush_text_stream_segment(
-                    session_id, stream_task_id, team_task_key, reason="before_artifact"
+                # pending 可能在过期 sticky 上，也可能在本轮 msg.id 上。
+                await self._flush_pending_before_artifact(
+                    session_id, sticky_task_id, task_id, msg
                 )
                 for file_info in files:
                     # Convert file path to file info dict if it's a string
@@ -1073,13 +1076,13 @@ class XiaoyiChannel(BaseChannel):
 
         # Handle chat.reference（手机参考来源卡片；须在 non_user_visible SKIPPED 之前）
         if msg.event_type == EventType.CHAT_REFERENCE:
-            stream_task_id = team_task_key[1]
-            task_id = self._artifact_delivery_task_id(session_id, task_id, msg)
+            sticky_task_id = team_task_key[1]
+            task_id = self._artifact_delivery_task_id(session_id, sticky_task_id, msg)
             payload = msg.payload if isinstance(msg.payload, dict) else {}
             refs = coerce_references(payload.get("references"))
             if refs:
-                await self._flush_text_stream_segment(
-                    session_id, stream_task_id, team_task_key, reason="before_artifact"
+                await self._flush_pending_before_artifact(
+                    session_id, sticky_task_id, task_id, msg
                 )
                 message_id = str(msg.id or task_id or "")
                 a2a_items = build_a2a_reference_items(refs)
@@ -1102,8 +1105,8 @@ class XiaoyiChannel(BaseChannel):
 
         # Handle chat.html_card event（与 chat.file 同理：两种 mode 都要处理）
         if msg.event_type == EventType.CHAT_HTML_CARD:
-            stream_task_id = team_task_key[1]
-            task_id = self._artifact_delivery_task_id(session_id, task_id, msg)
+            sticky_task_id = team_task_key[1]
+            task_id = self._artifact_delivery_task_id(session_id, sticky_task_id, msg)
             payload = msg.payload if isinstance(msg.payload, dict) else {}
             cards_info = payload.get("cardsInfo")
             if not isinstance(cards_info, list) or not cards_info:
@@ -1117,8 +1120,8 @@ class XiaoyiChannel(BaseChannel):
                         }
                     ]
             if cards_info:
-                await self._flush_text_stream_segment(
-                    session_id, stream_task_id, team_task_key, reason="before_artifact"
+                await self._flush_pending_before_artifact(
+                    session_id, sticky_task_id, task_id, msg
                 )
                 message_id = str(msg.id or task_id or "")
                 for url_key, ws in self._ws_connections.items():
@@ -3594,6 +3597,35 @@ class XiaoyiChannel(BaseChannel):
             self._clear_session_timeout(session_id)
         # Cancelling one platform task must not stop a long-running Team
         # runtime. A later user turn will replace the latest task mapping.
+
+    async def _flush_pending_before_artifact(
+        self,
+        session_id: str,
+        sticky_task_id: str,
+        delivery_task_id: str,
+        msg: Message,
+    ) -> None:
+        """产物前把扣住的正文发到本轮 delivery task。
+
+        pending 的键可能是过期 sticky，也可能是本轮 ``msg.id``。两处都取，
+        发出的 taskId 用 ``delivery_task_id``。``last_chunk`` 仍跟 ``is_final``，
+        这里是 ``before_artifact``，保持 ``False``。
+        """
+        turn_id = str(getattr(msg, "id", None) or "").strip()
+        keys: list[tuple[str, str]] = []
+        for candidate in (sticky_task_id, turn_id):
+            if not candidate:
+                continue
+            key = (session_id, candidate)
+            if key not in keys:
+                keys.append(key)
+        for key in keys:
+            await self._flush_text_stream_segment(
+                session_id,
+                delivery_task_id,
+                key,
+                reason="before_artifact",
+            )
 
     async def _flush_text_stream_segment(
         self,

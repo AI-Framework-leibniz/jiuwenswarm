@@ -1299,6 +1299,7 @@ class JiuwenSwarmCodeAdapter(JiuWenSwarmDeepAdapter):
             runtime_config.session_id,
             runtime_config.request_id,
             channel_id=runtime_config.channel_id,
+            request_metadata=runtime_config.request_metadata,
         )
         self._refresh_acp_runtime_tools(
             runtime_config.session_id,

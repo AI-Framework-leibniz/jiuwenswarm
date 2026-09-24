@@ -466,9 +466,22 @@ async def test_file_flushes_held_text_before_artifact() -> None:
     assert _text_frames(sent) == [("xiaoyi-task-1", "用户。\n")]
 
 
+def test_extract_uses_message_id_when_task_missing() -> None:
+    channel, _ = _build_channel()
+    msg = _artifact_message(
+        EventType.CHAT_FILE,
+        {"event_type": "chat.file", "files": []},
+        message_id="pc-turn-uuid",
+    )
+    msg.metadata = {"xiaoyi_session_id": "xiaoyi-session-1"}
+    session_id, task_id = channel._extract_platform_receive_info(msg)
+    assert session_id == "xiaoyi-session-1"
+    assert task_id == "pc-turn-uuid"
+
+
 @pytest.mark.asyncio
 async def test_file_flush_keeps_sticky_task_id_when_completed() -> None:
-    """sticky 已收尾时产物会改挂 msg.id；扣住的正文仍走原 taskId。"""
+    """sticky 已收尾时，扣住的正文与文件走同一个 delivery id。"""
     channel, sent = _build_channel()
     captured: list[str] = []
 
@@ -488,7 +501,37 @@ async def test_file_flush_keeps_sticky_task_id_when_completed() -> None:
         )
     )
     assert captured == ["pc-turn-uuid"]
-    assert _text_frames(sent) == [("xiaoyi-task-1", "用户。\n")]
+    assert _text_frames(sent) == [("pc-turn-uuid", "用户。\n")]
+    assert _result(sent[0])["lastChunk"] is False
+
+
+@pytest.mark.asyncio
+async def test_file_flush_pending_on_message_id_before_file() -> None:
+    """sticky 已结束、pending 在 msg.id 上时，尾巴早于文件且 taskId 相同。"""
+    channel, sent = _build_channel()
+    order: list[str] = []
+    _track_text_then_artifact(channel, order)
+
+    async def fake_send_file(session_id, task_id, file_info, url_key):
+        order.append("file")
+
+    channel._send_file_response = fake_send_file
+    channel._mark_session_active("xiaoyi-session-1", "xiaoyi-task-1")
+    channel._mark_session_completed("xiaoyi-session-1", "xiaoyi-task-1")
+    channel._text_stream_pending[("xiaoyi-session-1", "pc-turn-uuid")] = ("给你。", "text")
+    await channel.send(
+        _artifact_message(
+            EventType.CHAT_FILE,
+            {
+                "event_type": "chat.file",
+                "files": [{"path": "/tmp/a.jpg", "name": "a.jpg"}],
+            },
+            message_id="pc-turn-uuid",
+        )
+    )
+    assert order == ["text", "file"]
+    assert _text_frames(sent) == [("pc-turn-uuid", "给你。\n")]
+    assert _result(sent[0])["lastChunk"] is False
 
 
 @pytest.mark.asyncio
