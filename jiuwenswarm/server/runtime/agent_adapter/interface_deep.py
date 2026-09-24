@@ -4058,6 +4058,22 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
             return None
 
     @staticmethod
+    def _sandbox_base_url_of(gateway_config: Any) -> str | None:
+        launcher_config = getattr(gateway_config, "launcher_config", None)
+        base_url = getattr(launcher_config, "base_url", None)
+        return str(base_url).rstrip("/") if base_url else None
+
+    @staticmethod
+    def _has_stale_sandbox_endpoint(
+        registered: SysOperation, sysop_card: SysOperationCard
+    ) -> bool:
+        # isolation key 不含 base_url: jiuwenbox 启动时换端口后, 旧 sysop 仍会命中复用。
+        wanted = JiuWenSwarmDeepAdapter._sandbox_base_url_of(sysop_card.gateway_config)
+        run_config = getattr(registered, "_run_config", None)
+        current = JiuWenSwarmDeepAdapter._sandbox_base_url_of(getattr(run_config, "config", None))
+        return bool(wanted and current and wanted != current)
+
+    @staticmethod
     def _get_registered_sys_operation_by_isolation_key(
         isolation_key_template: str | None,
     ) -> SysOperation | None:
@@ -4224,6 +4240,17 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
                     isolation_key_template
                 )
             )
+            if registered_sys_operation is not None and JiuWenSwarmDeepAdapter._has_stale_sandbox_endpoint(
+                registered_sys_operation, sysop_card
+            ):
+                logger.warning(
+                    "[JiuWenSwarmDeepAdapter] replace sys_operation with stale sandbox endpoint: "
+                    "id=%s wanted_base_url=%s",
+                    registered_sys_operation.id,
+                    JiuWenSwarmDeepAdapter._sandbox_base_url_of(sysop_card.gateway_config),
+                )
+                Runner.resource_mgr.remove_sys_operation(registered_sys_operation.id)
+                registered_sys_operation = None
             if registered_sys_operation is not None:
                 logger.info(
                     "[JiuWenSwarmDeepAdapter] reuse registered sys_operation: %s",
@@ -5794,7 +5821,13 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
             ]
             try:
                 for xt in _xiaoyi_tools:
-                    self._register_shared_tool(xt)
+                    if xt.card.name in {"save_media_to_gallery", "save_file_to_file_manager"}:
+                        from jiuwenswarm.agents.harness.common.tools.xiaoyi_phone_tools.save_tools import bind_save_tool
+
+                        xt = bind_save_tool(xt, lambda: self._sys_operation)
+                        self._register_agent_owned_tool(xt, agent_id)
+                    else:
+                        self._register_shared_tool(xt)
                     tool_cards.append(xt.card)
                 self._xiaoyi_phone_tools_registered = True
                 logger.info(
@@ -6857,6 +6890,7 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
                     session_id=session_id,
                     channel_id=channel_for_tool,
                     metadata=metadata_for_tool,
+                    operation_provider=lambda: self._sys_operation,
                 )
                 for sf_tool in self._send_file_toolkit.get_tools():
                     self._register_agent_owned_tool(sf_tool, self._tool_owner_id())

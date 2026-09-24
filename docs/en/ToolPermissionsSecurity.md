@@ -4,6 +4,8 @@ This document explains how JiuwenSwarm **tool call permissions** (`allow` / `ask
 
 The main configuration file is typically `~/.jiuwenswarm/config/config.yaml`; you can override this via the `JIUWENSWARM_CONFIG_DIR` environment variable (consistent with [Configuration](Configuration.md)).
 
+`mcp_exec_command` is an AgentServer command tool routed through its bound `SysOperation.shell()`. Register it with `get_mcp_tools(sys_operation=operation, agent_id=agent_id)`; multi-session sub-agents resolve that instance from their `sys_operation_id`. An unbound tool returns an error instead of launching a host process. Sandbox mode reuses the existing connector CLI, `excluded_commands`, and `fallback_on_failure` routing and passes the explicit `bash / sh / powershell / cmd` selection. Background requests use the same operation; unsupported providers return an error without tool-local host execution. Callers must still install permission rails; binding the execution route does not automatically enable FileGuard.
+
 ---
 
 ## 1. Overview
@@ -245,3 +247,10 @@ If not using `tiered_policy`, typically **only** `external_directory` is updated
 - [Configuration](Configuration.md): `JIUWENSWARM_CONFIG_DIR`, configuration file location.
 - [CLI Commands](CLI.md): CLI/TUI entry points (including slash commands).
 - [Channels](Channels.md): `owner_scopes`, digital persona, and `ask` downgrade.
+## 10. Local source protection for outbound file tools
+
+`send_file_to_user` checks FileGuard read access for every source in `abs_file_path_list`, including native arrays, JSON or legacy Python array strings, and single paths. `save_media_to_gallery` and `save_file_to_file_manager` check read access when `url` is a local path. HTTP/HTTPS sources and device-side writes are outside this local-file scope. All three honor `permissions.file_guard` allow/ask/deny policies without requiring source write permission.
+
+Sources are read through the owning agent's `SysOperation.fs().read_file(mode="bytes")`. With jiuwenbox enabled this uses the sandbox filesystem API; LOCAL mode uses the local backend. Missing bindings and read failures stop delivery without a host-read fallback.
+
+The save tools upload the approved bytes. `send_file_to_user` preserves missing-file skipping, session deduplication by source path and downloads. Bytes read through SysOperation are saved in the session directory; channel delivery and download tokens both use this copy. Permission denials and backend read failures stop delivery. Relative source paths resolve against the agent's current working directory, without home or environment expansion. Host files at the same path are not used to determine source existence or delivery content. FileGuard approval does not modify jiuwenbox policy: both layers must permit the read.
