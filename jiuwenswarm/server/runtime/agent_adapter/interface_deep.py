@@ -304,6 +304,12 @@ from jiuwenswarm.agents.harness.common.rails.skill_credential_injection_rail imp
     coalesce_config_skill_envs,
     coalesce_skill_envs,
 )
+from jiuwenswarm.agents.harness.common.rails.skill_sleep_rail import SkillSleepRail
+from jiuwenswarm.agents.harness.common.skill_sleep import (
+    SkillCallCounter,
+    SkillSleepRunner,
+    SleepModelSpec,
+)
 from jiuwenswarm.agents.harness.common.rails.concurrent_safe_rails import (
     ConcurrentSafeSysOperationRail,
     ConcurrentSafeTaskPlanningRail,
@@ -509,6 +515,8 @@ from jiuwenswarm.common.config import (
     get_sandbox_runtime,
     get_sandbox_startup_mode,
     get_skill_create_enabled,
+    get_skill_sleep_call_threshold,
+    get_skill_sleep_config,
     coerce_config_bool,
     _get_ttse_config,
     get_ttse_embedding_config,
@@ -2549,6 +2557,7 @@ class JiuWenSwarmDeepAdapter:
         self._agent_permissions_body: dict[str, Any] | None = None
         self._permissions_persist_agent_id: str | None = None
         self._skill_active_state_rail: SkillActiveStateRail | None = None
+        self._skill_sleep_rail: SkillSleepRail | None = None
         self._skill_credential_injection_rail: SkillCredentialInjectionRail | None = None
         self._avatar_rail: Any = None
         self._tool_cards = None
@@ -2901,13 +2910,14 @@ class JiuWenSwarmDeepAdapter:
         remove_lock: bool = True,
         remove_runtime_state: bool = True,
     ) -> None:
-        self._session_adapters.pop(session_id, None)
+        adapter = self._session_adapters.pop(session_id, None)
         if remove_lock:
             self._session_adapter_locks.pop(session_id, None)
         self._session_adapter_last_used.pop(session_id, None)
         self._session_adapter_versions.pop(session_id, None)
         self._session_adapter_reload_failures.pop(session_id, None)
         clear_session_skill_state(session_id)
+        self._forget_skill_sleep_session(session_id, adapter)
         if not remove_runtime_state:
             return
         try:
@@ -7188,6 +7198,7 @@ class JiuWenSwarmDeepAdapter:
             "_progressive_tool_rail",
             "_skill_authorization_rail",
             "_skill_active_state_rail",
+            "_skill_sleep_rail",
             "_skill_credential_injection_rail",
             "_llm_retry_rail",
             "_skill_create_rail",
@@ -7928,6 +7939,160 @@ class JiuWenSwarmDeepAdapter:
                 exc,
             )
             return None
+
+    @staticmethod
+    def _resolve_skill_sleep_traces_dir() -> Path:
+        """Resolve OTel file-exporter traces dir for skill sleep harvest."""
+        try:
+            full = get_config()
+        except Exception:
+            full = {}
+        if not isinstance(full, dict):
+            full = {}
+        for key in ("agent_observability", "team_observability"):
+            block = full.get(key)
+            if isinstance(block, dict):
+                raw = str(block.get("traces_dir") or "").strip()
+                if raw:
+                    return Path(raw).expanduser()
+        return get_user_workspace_dir() / ".trace"
+
+    def _resolve_skill_sleep_skills_dirs(self) -> list[Path]:
+        """All registered skills dirs, so sleep finds each skill where it lives."""
+        dirs = [Path(d) for d in self._resolve_skill_dirs() if str(d or "").strip()]
+        return dirs or [get_agent_skills_dir()]
+
+    def _resolve_skill_sleep_state_dir(self, sleep_cfg: dict[str, Any]) -> Path:
+        raw = str(sleep_cfg.get("state_dir") or "").strip()
+        if raw:
+            return Path(raw).expanduser()
+        root = Path(self._workspace_dir) if self._workspace_dir else get_agent_workspace_dir()
+        return root / ".skill_sleep"
+
+    def _build_skill_sleep_rail(self, config: dict[str, Any]) -> SkillSleepRail | None:
+        """Build SkillSleepRail; per-skill selfEvolution gating happens in the runner."""
+        try:
+            sleep_cfg = get_skill_sleep_config(config)
+            state_dir = self._resolve_skill_sleep_state_dir(sleep_cfg)
+            counter = SkillCallCounter(state_dir / "call_counts.json")
+            skills_dirs = self._resolve_skill_sleep_skills_dirs()
+            runner = SkillSleepRunner(
+                counter=counter,
+                trajectory_dir=self._resolve_skill_sleep_traces_dir(),
+                skills_base_dir=skills_dirs,
+                state_dir=state_dir,
+                backend=str(sleep_cfg.get("backend") or "model"),
+                gate_mode=str(sleep_cfg.get("gate_mode") or "on"),
+                rubric_synthesis=str(sleep_cfg.get("rubric_synthesis") or "off"),
+                on_task_created=self._track_skill_sleep_task,
+                model_provider=self._skill_sleep_model_spec,
+                skills_dirs_provider=self._resolve_skill_sleep_skills_dirs,
+            )
+            rail = SkillSleepRail(
+                counter=counter,
+                runner=runner,
+                call_threshold=get_skill_sleep_call_threshold(config),
+                last_skills_path=state_dir / "last_skills.json",
+            )
+            logger.info(
+                "[JiuWenSwarmDeepAdapter] SkillSleepRail create success "
+                "threshold=%s trajectory=%s skills=%s state=%s",
+                rail.call_threshold,
+                self._resolve_skill_sleep_traces_dir(),
+                ";".join(str(d) for d in skills_dirs),
+                state_dir,
+            )
+            traces_dir = self._resolve_skill_sleep_traces_dir()
+            if not traces_dir.exists():
+                logger.warning(
+                    "[JiuWenSwarmDeepAdapter] SkillSleepRail trajectory dir %s does not "
+                    "exist yet; sleep cycles are skipped until traces are exported "
+                    "(check agent_observability file exporter)",
+                    traces_dir,
+                )
+            return rail
+        except Exception as exc:
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] SkillSleepRail create failed: %s",
+                exc,
+            )
+            return None
+
+    def _skill_sleep_model_spec(self) -> SleepModelSpec | None:
+        """Resolve the sleep-training model from the main conversation config.
+
+        ``evolution.skill_sleep.model_name`` / ``model_tier`` override the
+        adapter default. Returns None (env fallback) when no model is set.
+        """
+        if self._model is None:
+            return None
+        sleep_cfg = get_skill_sleep_config(self._config_cache)
+        model, _ = self._resolve_model(
+            model_name=str(sleep_cfg.get("model_name") or ""),
+            model_tier=str(sleep_cfg.get("model_tier") or ""),
+        )
+        request_config = model.model_config
+        model_name = str(
+            getattr(request_config, "model_name", "")
+            or getattr(request_config, "model", "")
+            or self._default_model_name
+            or ""
+        )
+        return SleepModelSpec(
+            client_config=model.model_client_config,
+            request_config=request_config,
+            model_name=model_name,
+        )
+
+    def _forget_skill_sleep_session(
+        self, session_id: str, adapter: "JiuWenSwarmDeepAdapter | None" = None
+    ) -> None:
+        """Drop SkillSleepRail per-session state held by this and *adapter*."""
+        if not session_id:
+            return
+        rails: dict[int, Any] = {}
+        for rail in (
+            getattr(self, "_skill_sleep_rail", None),
+            getattr(adapter, "_skill_sleep_rail", None),
+        ):
+            if rail is not None:
+                rails[id(rail)] = rail
+        for rail in rails.values():
+            try:
+                rail.forget_session(session_id)
+            except Exception:
+                logger.warning(
+                    "[JiuWenSwarmDeepAdapter] SkillSleepRail forget_session failed: "
+                    "session_id=%s",
+                    session_id,
+                    exc_info=True,
+                )
+
+    def _track_skill_sleep_task(self, task: asyncio.Task) -> None:
+        """Track background sleep tasks with evolution watcher set."""
+        task.add_done_callback(self._on_evolution_watcher_done)
+        self._evolution_watcher_tasks.add(task)
+
+    async def _reconcile_skill_sleep_rail(self) -> None:
+        """Register SkillSleepRail when it is not mounted yet."""
+        if self._instance is None or self._skill_sleep_rail is not None:
+            return
+        rail = self._build_skill_sleep_rail(self._config_cache)
+        if rail is None:
+            logger.info(
+                "[JiuWenSwarmDeepAdapter] SkillSleepRail build returned None; skip register"
+            )
+            return
+        try:
+            await self._instance.register_rail(rail)
+        except Exception as exc:
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] SkillSleepRail register failed: %s",
+                exc,
+            )
+            return
+        self._skill_sleep_rail = rail
+        logger.info("[JiuWenSwarmDeepAdapter] SkillSleepRail registered")
 
     def _build_skill_credential_injection_rail(
         self,
@@ -9432,6 +9597,16 @@ class JiuWenSwarmDeepAdapter:
             _RailBuildInfo(
                 "_skill_active_state_rail",
                 self._build_skill_active_state_rail,
+                {"config": config},
+            ),
+        )
+        # SkillSleepRail is always mounted; per-skill selfEvolution decides
+        # whether a sleep cycle actually runs.
+        rail_infos.insert(
+            2,
+            _RailBuildInfo(
+                "_skill_sleep_rail",
+                self._build_skill_sleep_rail,
                 {"config": config},
             ),
         )
@@ -11477,6 +11652,8 @@ class JiuWenSwarmDeepAdapter:
                 self._sync_ttse_rail_config(self._config_cache)
         elif self._ttse_rail is not None:
             await self._unconfigure_ttse_rail()
+
+        await self._reconcile_skill_sleep_rail()
 
     @staticmethod
     def _user_interaction_rail_attribute() -> str:
@@ -13861,6 +14038,7 @@ class JiuWenSwarmDeepAdapter:
                     exc,
                 )
             clear_session_skill_state(str(self._parent_session_id or "").strip())
+            self._forget_skill_sleep_session(str(self._parent_session_id or "").strip())
         try:
             await self._sync_personal_context_rail("cleanup")
         except BaseException as exc:  # noqa: BLE001
