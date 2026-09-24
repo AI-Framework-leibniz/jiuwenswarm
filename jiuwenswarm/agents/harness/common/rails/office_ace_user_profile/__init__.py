@@ -11,10 +11,12 @@
 
 凭据/endpoint/user_id 由 config.yaml ``memory.office_ace_user_profile`` 段提供，
 relay-claw 经 env 覆盖占位符下发（配置替换，同 agentarts memory 模式）。
+
+画像按需拉取：rail 的 ``before_model_call`` 在本地缓存失效时才 fetch，
+无进程级后台周期任务。
 """
 from __future__ import annotations
 
-from .background import user_profile_background_manager
 from .fetcher import UserProfileConfig, UserProfileFetcher
 from .office_ace_user_profile_rail import OfficeAceUserProfileRail
 from .section import SECTION_NAME, build_office_ace_user_profile_section
@@ -25,5 +27,4 @@ __all__ = [
     "UserProfileConfig",
     "UserProfileFetcher",
     "build_office_ace_user_profile_section",
-    "user_profile_background_manager",
 ]

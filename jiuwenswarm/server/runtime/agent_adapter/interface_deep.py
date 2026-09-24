@@ -21187,10 +21187,8 @@ class JiuWenSwarmDeepAdapter:
         """Register / unregister OfficeAceUserProfileRail based on config.
 
         Mode-independent（同 ExternalMemoryRail），不随 config 热重载销毁。
-        后台周期拉取由进程级 ``user_profile_background_manager`` 管理
-        （挂在 AgentWebSocketServer 生命周期），与此处 rail 注册/卸载解耦——
-        rail 卸载只影响 prompt 注入,后台拉取不中断;config 每 tick 重读,
-        endpoint/interval/enabled 热修改即时生效。
+        画像按需拉取：rail 的 before_model_call 在本地缓存失效时才 fetch
+        （per-agent user_id）。
         """
         from jiuwenswarm.agents.harness.common.memory.external_memory_config import (
             is_office_ace_user_profile_enabled,

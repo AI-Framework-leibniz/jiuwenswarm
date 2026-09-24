@@ -18,13 +18,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import httpx
 
@@ -48,19 +48,31 @@ class UserProfileConfig:
     space_id: str = ""
 
 
-def _default_cache_dir() -> Path:
-    """``~/.jiuwenswarm/memory``（受 ``JIUWENSWARM_DATA_DIR`` 覆盖）。"""
-    from jiuwenswarm.common.utils import get_user_workspace_dir
+def _default_cache_dir(user_id: str) -> Path:
+    """``~/.office-claw/users/<userId>/``（与 relay-claw resolveUserConfigDir 对齐）。
 
-    return get_user_workspace_dir() / "memory"
+    global root 取 ``OFFICE_CLAW_GLOBAL_CONFIG_ROOT``，否则 ``Path.home()``。
+    userId 段经 ``urllib.parse.quote`` 编码（对齐 relay-claw encodeUserIdPathSegment）。
+    无 userId 时回落到 ``~/.office-claw/`` 全局目录。
+    """
+    from urllib.parse import quote
+
+    global_root = (os.getenv("OFFICE_CLAW_GLOBAL_CONFIG_ROOT") or "").strip()
+    base = Path(global_root) if global_root else Path.home()
+    office_claw_dir = base / ".office-claw"
+    normalized_uid = (user_id or "").strip()
+    if not normalized_uid:
+        return office_claw_dir
+    return office_claw_dir / "users" / quote(normalized_uid, safe="")
 
 
 class UserProfileFetcher:
     """周期拉取云端用户画像概览，原子写本地缓存。
 
-    缓存文件：
-      * ``{cache_dir}/user_profile_{user_id}.md`` — 概览正文
-      * ``{cache_dir}/user_profile_{user_id}.meta.json`` — version/updatedAt/lastSyncAt
+    缓存文件（默认）：
+      * ``~/.office-claw/users/<userId>/user-profile.md`` — 概览正文
+
+    新鲜度判定读缓存文件 mtime（距上次写 < fetch_interval 即新鲜），无需 meta 边车文件。
 
     线程安全：``read_cache`` 同步读，``fetch_once`` 异步写。后台周期任务
     与 ``before_model_call`` 的同步拉取可能并发写同一文件；原子写（tmp→rename）
@@ -73,7 +85,7 @@ class UserProfileFetcher:
         cache_dir: Optional[Path] = None,
     ) -> None:
         self._config = config
-        self._cache_dir = cache_dir or _default_cache_dir()
+        self._cache_dir = cache_dir or _default_cache_dir(config.user_id)
 
     # ------------------------------------------------------------------
     # Paths
@@ -85,11 +97,7 @@ class UserProfileFetcher:
 
     @property
     def cache_path(self) -> Path:
-        return self._cache_dir / f"user_profile_{self._config.user_id}.md"
-
-    @property
-    def meta_path(self) -> Path:
-        return self._cache_dir / f"user_profile_{self._config.user_id}.meta.json"
+        return self._cache_dir / "user-profile.md"
 
     # ------------------------------------------------------------------
     # Public API
@@ -172,33 +180,22 @@ class UserProfileFetcher:
             return None
 
     def _is_cache_fresh(self) -> bool:
-        """本地缓存是否新鲜（距上次拉取 < fetch_interval）。
+        """本地缓存是否新鲜（距上次写入 < fetch_interval）。
 
-        meta.json 的 ``lastSyncAt``（ISO 8601）+ ``fetch_interval_minutes`` 判断。
-        缓存文件不存在、meta 缺失/解析失败/时间已过 → False。
+        读缓存文件 mtime（``cache_path.stat().st_mtime``）+ ``fetch_interval_minutes`` 判断。
+        缓存文件不存在或 mtime 已过 fetch_interval → False。无需 meta 边车文件。
         """
-        if not self.cache_path.exists():
-            return False
-        meta = self._read_meta()
-        last_sync = meta.get("lastSyncAt")
-        if not last_sync:
-            return False
         try:
-            from datetime import datetime, timezone
-
-            # 兼容带/不带时区的 ISO 串（如 "...Z" 或 "...+00:00"）
-            dt = datetime.fromisoformat(last_sync.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            elapsed = (datetime.now(timezone.utc) - dt).total_seconds()
-            return elapsed < self._config.fetch_interval_minutes * 60
-        except (ValueError, TypeError) as exc:
+            mtime = self.cache_path.stat().st_mtime
+        except OSError as exc:
             logger.debug(
-                "[UserProfileFetcher] parse lastSyncAt failed (user=%s): %s",
+                "[UserProfileFetcher] stat cache failed (user=%s): %s",
                 self._config.user_id,
                 exc,
             )
             return False
+        elapsed = time.time() - mtime
+        return elapsed < self._config.fetch_interval_minutes * 60
 
     # ------------------------------------------------------------------
     # Internal
@@ -222,7 +219,7 @@ class UserProfileFetcher:
     @staticmethod
     def _is_cloud() -> bool:
         """True iff OFFICE_ACE_DEPLOYMENT=cloud。"""
-        return os.environ.get("OFFICE_ACE_DEPLOYMENT", "").strip().lower() == "cloud"
+        return os.environ.get("OFFICE_ACE_DEPLOYMENT", "pc").strip().lower() == "cloud"
 
     def _build_url(self) -> str:
         base = self._config.endpoint.rstrip("/")
@@ -236,14 +233,6 @@ class UserProfileFetcher:
             )
         # chat-service-app-api-memory.yaml：GET /v1/appapi/memory/user-profile
         return f"{base}/v1/appapi/memory/user-profile"
-
-    def _read_meta(self) -> dict[str, Any]:
-        try:
-            if not self.meta_path.exists():
-                return {}
-            return json.loads(self.meta_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return {}
 
     def _handle_response(
         self,
@@ -287,7 +276,7 @@ class UserProfileFetcher:
             )
             return None
 
-        self._write_cache_atomic(body, resp)
+        self._write_cache_atomic(body)
         logger.info(
             "[UserProfileFetcher] fetched ok (user=%s, %d chars)",
             self._config.user_id,
@@ -321,27 +310,10 @@ class UserProfileFetcher:
             return None
         return content
 
-    def _write_cache_atomic(
-        self,
-        body: str,
-        resp: httpx.Response,
-    ) -> None:
-        """tmp→rename 原子写 md + meta.json。"""
+    def _write_cache_atomic(self, body: str) -> None:
+        """tmp→rename 原子写 md。新鲜度由文件 mtime 判定，无需 meta 边车文件。"""
         try:
             self._cache_dir.mkdir(parents=True, exist_ok=True)
-            # 先写 meta.json（失败不影响 md）
-            meta: dict[str, Any] = {}
-            try:
-                data = resp.json()
-                if isinstance(data, dict):
-                    # 新契约字段：revision（版本号）、updated_at（更新时间）
-                    meta["version"] = data.get("revision")
-                    meta["updatedAt"] = data.get("updated_at")
-            except ValueError:
-                pass
-            meta["lastSyncAt"] = self._now_iso()
-
-            self._atomic_write_text(self.meta_path, json.dumps(meta, ensure_ascii=False))
             self._atomic_write_text(self.cache_path, body)
         except OSError as exc:
             logger.warning(
@@ -378,12 +350,6 @@ class UserProfileFetcher:
             return text.replace("\n", " ")
         except Exception:  # noqa: BLE001
             return "<unreadable>"
-
-    @staticmethod
-    def _now_iso() -> str:
-        from datetime import datetime, timezone
-
-        return datetime.now(timezone.utc).isoformat()
 
 
 __all__ = ["UserProfileConfig", "UserProfileFetcher"]

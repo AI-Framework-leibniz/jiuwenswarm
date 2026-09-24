@@ -99,7 +99,7 @@ def _is_cloud_deployment() -> bool:
 
     未设置或其他值视为 PC 端（向后兼容）。
     """
-    return os.environ.get("OFFICE_ACE_DEPLOYMENT", "").strip().lower() == "cloud"
+    return os.environ.get("OFFICE_ACE_DEPLOYMENT", "pc").strip().lower() == "cloud"
 
 
 def get_office_ace_user_profile_config(

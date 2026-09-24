@@ -533,19 +533,6 @@ class AgentWebSocketServer:
         # 启动 (用户依然可以在 TUI 里跑 /sandbox enable 重试)。
         await self._bootstrap_internal_jiuwenbox()
         await self._start_loop_lag_monitor()
-        # OfficeAce 用户画像后台周期拉取（进程级单例，与 rail 实例解耦；
-        # rail 卸载只影响 prompt 注入，后台拉取不中断。config 每 tick 重读。）
-        try:
-            from jiuwenswarm.agents.harness.common.rails.office_ace_user_profile.background import (
-                user_profile_background_manager,
-            )
-
-            await user_profile_background_manager().start()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "[AgentWebSocketServer] user profile background manager start failed: %s",
-                exc,
-            )
 
     async def _start_loop_lag_monitor(self) -> None:
         """启动事件循环 lag 观测 task 与停摆探针（验收用，不主动断连/不发应用心跳）。"""
@@ -965,18 +952,6 @@ class AgentWebSocketServer:
         lag_task = self._loop_lag_task
         self._loop_lag_task = None
         await _cancel_warmup_task(lag_task, "loop lag monitor")
-        # OfficeAce 用户画像后台拉取（进程级单例，随 server 退出停止）
-        try:
-            from jiuwenswarm.agents.harness.common.rails.office_ace_user_profile.background import (
-                user_profile_background_manager,
-            )
-
-            await user_profile_background_manager().stop()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "[AgentWebSocketServer] user profile background manager stop failed: %s",
-                exc,
-            )
         had_server = self._server is not None
         if had_server:
             self._server.close()

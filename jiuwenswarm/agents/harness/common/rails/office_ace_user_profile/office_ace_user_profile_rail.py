@@ -38,8 +38,9 @@ if TYPE_CHECKING:
 class OfficeAceUserProfileRail(DeepAgentRail):
     """Inject the cloud-side user profile (memory overview) into the system prompt.
 
-    Loaded source: ``~/.jiuwenswarm/memory/user_profile_{userId}.md``, written
-    by :class:`UserProfileFetcher` (background periodic + on-missing sync fetch).
+    Loaded source: ``~/.office-claw/users/<userId>/user-profile.md``, written
+    by :class:`UserProfileFetcher` (on-demand sync fetch in ``before_model_call``
+    when the local cache is missing or stale).
 
     Priority 130 — higher than ProjectMemoryRail (120), lower than runtime prompt
     rails, so the user profile sits close to the agent's runtime identity.
@@ -71,7 +72,7 @@ class OfficeAceUserProfileRail(DeepAgentRail):
             )
 
     def uninit(self, agent: "DeepAgent") -> None:
-        """清段。后台周期拉取由进程级 manager 负责,不在此取消。"""
+        """清段。无后台周期任务，仅需移除注入的 prompt 段。"""
         if self._system_prompt_builder is not None:
             try:
                 self._system_prompt_builder.remove_section(SECTION_NAME)
