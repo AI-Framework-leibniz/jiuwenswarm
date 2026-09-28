@@ -781,7 +781,7 @@ class TestGetAllSessionsMetadata:
     def test_explicit_sessions_root_is_used_for_channel_lock_migration(
         sessions_dir, tmp_path
     ):
-        """多租户批量迁移只读写显式租户根，不访问默认根同名会话。"""
+        """多租户批量读取仅修复返回值，不改写任一会话根。"""
         from jiuwenswarm.server.runtime.session.session_metadata import (
             _METADATA_CACHE,
             _METADATA_QUEUE,
@@ -825,7 +825,10 @@ class TestGetAllSessionsMetadata:
 
         assert total == 1
         assert sessions[0]["channel_id"] == "web"
-        assert _read_json(tenant_dir / "metadata.json")["channel_id"] == "web"
+        assert (
+            _read_json(tenant_dir / "metadata.json")["channel_id"]
+            == "tenant-overwritten"
+        )
         assert _read_json(default_dir / "metadata.json")["channel_id"] == "default-original"
 
     @staticmethod
@@ -851,13 +854,12 @@ class TestGetAllSessionsMetadata:
         assert not (session_dir / "metadata.json").exists()
 
     @staticmethod
-    def test_unusable_history_is_marked_checked_once(
+    def test_unusable_history_is_not_persisted_by_read_only_list(
         sessions_dir, monkeypatch
     ):
-        """非空历史无有效用户通道时只检查一次，避免列表请求重复解析。"""
+        """非空历史无有效用户通道时，列表读取不得持久化迁移标记。"""
         from jiuwenswarm.server.runtime.session import session_history
         from jiuwenswarm.server.runtime.session.session_metadata import (
-            _CHANNEL_ID_LOCK_VERSION,
             _CHANNEL_ID_LOCK_VERSION_KEY,
             _METADATA_CACHE,
             _METADATA_QUEUE,
@@ -897,9 +899,9 @@ class TestGetAllSessionsMetadata:
         get_all_sessions_metadata(sessions_root=sessions_dir)
         _METADATA_QUEUE.join()
 
-        assert load_count == 1
+        assert load_count == 2
         persisted = _read_json(session_dir / "metadata.json")
-        assert persisted[_CHANNEL_ID_LOCK_VERSION_KEY] == _CHANNEL_ID_LOCK_VERSION
+        assert _CHANNEL_ID_LOCK_VERSION_KEY not in persisted
         assert persisted["channel_id"] == "feishu"
 
     @staticmethod

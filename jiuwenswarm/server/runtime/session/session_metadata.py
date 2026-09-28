@@ -204,8 +204,8 @@ def _apply_metadata_defaults_with_inference(
             ``None`` 时本函数自行构建(单条读取场景)。
         id_to_work_mode: 批量入口预构建的 project_id → work_mode 映射;
             ``None`` 时与 ``dir_to_projects`` 一起自行构建。
-        enable_writeback: 是否允许写盘。批量入口在循环中调用时传 ``True``,
-            但写盘走异步队列,不会阻塞读路径。
+        enable_writeback: 是否允许写盘。传 ``False`` 时仍会在本次返回值中完成
+            确定性推断和旧会话通道修复，但不会产生任何持久化副作用。
         enable_channel_lock_migration: 是否允许修复旧会话归属通道。无
             ``metadata.json`` 的异常残留会话应传 ``False``,避免迁移新建元数据。
 
@@ -230,9 +230,9 @@ def _apply_metadata_defaults_with_inference(
     metadata.setdefault("pin_order", 0)
     metadata.setdefault("status", "idle")
 
-    # 一次性修复旧版本中被后续跨通道请求覆写的会话归属。
-    # 即使批量读取关闭了普通字段回写，此迁移仍需持久化版本标记，
-    # 否则每次 session.list 都会重复读取 history，且无法真正完成一次性修复。
+    # 修复旧版本中被后续跨通道请求覆写的会话归属。
+    # 只读调用只修复本次返回值；是否持久化必须统一服从 enable_writeback，
+    # 避免 session.list 等读路径意外改写 metadata.json。
     channel_lock_migrated = enable_channel_lock_migration and (
         _migrate_legacy_channel_id_lock(
             session_id, metadata, sessions_root=sessions_root
@@ -319,7 +319,7 @@ def _apply_metadata_defaults_with_inference(
                         break
 
     # 确定性推断成功时异步写盘(不阻塞读路径)
-    if changed and (enable_writeback or channel_lock_migrated):
+    if changed and enable_writeback:
         try:
             _enqueue_write(
                 session_id,
