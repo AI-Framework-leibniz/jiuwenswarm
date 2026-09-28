@@ -10657,8 +10657,6 @@ class JiuWenSwarmDeepAdapter:
                 _btid = getattr(bootstrap_request, "thread_id", None)
                 if isinstance(_btid, str) and _btid:
                     self._parent_thread_id = _btid
-            config_base = merge_memory_config_into_config(config_base)
-            config_base = self._merge_enterprise_models_into_config(config_base)
             # 与模型槽位一致：Agent 级 permissions 模板在构建 rail 前绑定到 Task
             token_perm_agent = self._bind_agent_permissions_base()
             try:
