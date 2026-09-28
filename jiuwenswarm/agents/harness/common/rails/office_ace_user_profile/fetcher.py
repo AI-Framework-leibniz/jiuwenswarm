@@ -84,7 +84,7 @@ class UserProfileFetcher:
         config: UserProfileConfig,
         cache_dir: Optional[Path] = None,
     ) -> None:
-        self._config = config
+        self.config = config
         self._cache_dir = cache_dir or _default_cache_dir(config.user_id)
 
     # ------------------------------------------------------------------
@@ -119,13 +119,13 @@ class UserProfileFetcher:
             return None
 
         headers = {
-            "Authorization": f"Bearer {self._config.api_key}",
+            "Authorization": f"Bearer {self.config.api_key}",
             "Accept": "application/json",
         }
         # pc 端 appapi 用 X-Chat-User-Id 头传递用户身份；cloud 端 internal 用 path actor_id。
         if not self._is_cloud():
-            headers["X-Chat-User-Id"] = self._config.user_id
-            headers["Authorization"] = f"OfficeAceToken {self._config.api_key}"
+            headers["X-Chat-User-Id"] = self.config.user_id
+            headers["Authorization"] = f"OfficeAceToken {self.config.api_key}"
 
         url = self._build_url()
         last_err: Optional[str] = None
@@ -136,7 +136,7 @@ class UserProfileFetcher:
                 async with httpx.AsyncClient(
                     trust_env=False,
                     verify=False,
-                    timeout=self._config.timeout_seconds,
+                    timeout=self.config.timeout_seconds,
                 ) as client:
                     resp = await client.get(url, headers=headers)
                 return self._handle_response(resp)
@@ -160,7 +160,7 @@ class UserProfileFetcher:
 
         logger.info(
             "[UserProfileFetcher] fetch failed after retries (user=%s): %s",
-            self._config.user_id,
+            self.config.user_id,
             last_err,
         )
         return None
@@ -175,12 +175,12 @@ class UserProfileFetcher:
         except OSError as exc:
             logger.debug(
                 "[UserProfileFetcher] read cache failed (user=%s): %s",
-                self._config.user_id,
+                self.config.user_id,
                 exc,
             )
             return None
 
-    def _is_cache_fresh(self) -> bool:
+    def is_cache_fresh(self) -> bool:
         """本地缓存是否新鲜（距上次写入 < fetch_interval）。
 
         读缓存文件 mtime（``cache_path.stat().st_mtime``）+ ``fetch_interval_minutes`` 判断。
@@ -191,12 +191,12 @@ class UserProfileFetcher:
         except OSError as exc:
             logger.debug(
                 "[UserProfileFetcher] stat cache failed (user=%s): %s",
-                self._config.user_id,
+                self.config.user_id,
                 exc,
             )
             return False
         elapsed = time.time() - mtime
-        return elapsed < self._config.fetch_interval_minutes * 60
+        return elapsed < self.config.fetch_interval_minutes * 60
 
     # ------------------------------------------------------------------
     # Internal
@@ -206,15 +206,15 @@ class UserProfileFetcher:
         # cloud 端 internal 接口还需 space_id（path 参数）
         if self._is_cloud():
             return bool(
-                self._config.endpoint
-                and self._config.api_key
-                and self._config.user_id
-                and self._config.space_id,
+                self.config.endpoint
+                and self.config.api_key
+                and self.config.user_id
+                and self.config.space_id,
             )
         return bool(
-            self._config.endpoint
-            and self._config.api_key
-            and self._config.user_id,
+            self.config.endpoint
+            and self.config.api_key
+            and self.config.user_id,
         )
 
     @staticmethod
@@ -223,13 +223,13 @@ class UserProfileFetcher:
         return os.environ.get("OFFICE_ACE_DEPLOYMENT", "pc").strip().lower() == "cloud"
 
     def _build_url(self) -> str:
-        base = self._config.endpoint.rstrip("/")
+        base = self.config.endpoint.rstrip("/")
         if self._is_cloud():
             # api-memory-access-internal.yaml：
             # GET /v1/core/internal/spaces/{space_id}/memory-user-profile/{actor_id}
-            actor_id = self._config.user_id
+            actor_id = self.config.user_id
             return (
-                f"{base}/v1/core/internal/spaces/{self._config.space_id}"
+                f"{base}/v1/core/internal/spaces/{self.config.space_id}"
                 f"/memory-user-profile/{actor_id}"
             )
         # chat-service-app-api-memory.yaml：GET /v1/appapi/memory/user-profile
@@ -248,7 +248,7 @@ class UserProfileFetcher:
             logger.info(
                 "[UserProfileFetcher] business status %d (user=%s): %s",
                 resp.status_code,
-                self._config.user_id,
+                self.config.user_id,
                 self._safe_body_snippet(resp),
             )
             return None
@@ -257,7 +257,7 @@ class UserProfileFetcher:
             logger.info(
                 "[UserProfileFetcher] unexpected status %d (user=%s)",
                 resp.status_code,
-                self._config.user_id,
+                self.config.user_id,
             )
             return None
 
@@ -273,14 +273,14 @@ class UserProfileFetcher:
                 "[UserProfileFetcher] profile too large: %d bytes > %d (user=%s)",
                 len(body_bytes),
                 _MAX_CONTENT_BYTES,
-                self._config.user_id,
+                self.config.user_id,
             )
             return None
 
         self._write_cache_atomic(body)
         logger.info(
             "[UserProfileFetcher] fetched ok (user=%s, %d chars)",
-            self._config.user_id,
+            self.config.user_id,
             len(body),
         )
         return body
@@ -306,7 +306,7 @@ class UserProfileFetcher:
         if not isinstance(content, str) or not content.strip():
             logger.info(
                 "[UserProfileFetcher] empty/missing 'content' field (user=%s)",
-                self._config.user_id,
+                self.config.user_id,
             )
             return None
         return content
@@ -319,7 +319,7 @@ class UserProfileFetcher:
         except OSError as exc:
             logger.warning(
                 "[UserProfileFetcher] write cache failed (user=%s): %s",
-                self._config.user_id,
+                self.config.user_id,
                 exc,
             )
 

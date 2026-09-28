@@ -92,25 +92,25 @@ class OfficeAceUserProfileRail(DeepAgentRail):
         # 缓存不存在或已过期才同步触发一次拉取（带超时，不阻塞对话）。
         # 拉取失败/业务态无内容时降级用过期缓存（可能略旧）而非清空，零阻断。
         content = self._fetcher.read_cache()
-        if content is None or not self._fetcher._is_cache_fresh():  # noqa: SLF001
+        if content is None or not self._fetcher.is_cache_fresh():
             stale = content  # 旧缓存（可能为 None），fetch 失败时降级用
             try:
                 content = await asyncio.wait_for(
                     self._fetcher.fetch_once(),
-                    timeout=self._fetcher._config.timeout_seconds,  # noqa: SLF001
+                    timeout=self._fetcher.config.timeout_seconds,
                 )
             except asyncio.TimeoutError:
                 logger.info(
                     "[OfficeAceUserProfileRail] sync fetch timed out (user=%s); "
                     "falling back to stale cache",
-                    self._fetcher._config.user_id,  # noqa: SLF001
+                    self._fetcher.config.user_id,
                 )
                 content = stale
             except Exception as exc:  # noqa: BLE001
                 logger.debug(
                     "[OfficeAceUserProfileRail] sync fetch failed (user=%s): %s; "
                     "falling back to stale cache",
-                    self._fetcher._config.user_id,  # noqa: SLF001
+                    self._fetcher.config.user_id,
                     exc,
                 )
                 content = stale
@@ -130,7 +130,7 @@ class OfficeAceUserProfileRail(DeepAgentRail):
             return
 
         # 截断到 max_chars
-        max_chars = self._fetcher._config.max_chars  # noqa: SLF001
+        max_chars = self._fetcher.config.max_chars
         if len(content) > max_chars:
             content = content[:max_chars] + "\n\n[...已截断...]"
 

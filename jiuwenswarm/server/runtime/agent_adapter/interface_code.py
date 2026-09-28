@@ -943,7 +943,8 @@ class JiuwenSwarmCodeAdapter(JiuWenSwarmDeepAdapter):
             )
             return None
 
-    def _build_office_ace_user_profile_rail(self) -> OfficeAceUserProfileRail | None:
+    @staticmethod
+    def _build_office_ace_user_profile_rail() -> OfficeAceUserProfileRail | None:
         """Build OfficeAceUserProfileRail to inject cloud-side user profile.
 
         启用条件由 external memory 开关 + provider=officeace_cloud + 凭证齐全隐含控制

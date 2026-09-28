@@ -21880,7 +21880,8 @@ class JiuWenSwarmDeepAdapter:
             self._external_memory_rail = None
             self._external_memory_rail_registered = False
 
-    def _build_office_ace_user_profile_rail(self):
+    @staticmethod
+    def _build_office_ace_user_profile_rail():
         """Build OfficeAceUserProfileRail from config, or None if disabled/failed.
 
         启用条件由 external memory 开关 + provider=officeace_cloud + 凭证齐全隐含控制
