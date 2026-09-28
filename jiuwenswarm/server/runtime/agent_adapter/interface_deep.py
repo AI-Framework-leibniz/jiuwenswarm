@@ -313,12 +313,19 @@ from jiuwenswarm.agents.harness.common.rails.disabled_tools_rail import (
 from jiuwenswarm.agents.harness.common.rails.skill_active_state import (
     SkillActiveStateRail,
     clear_session_skill_state,
+    get_session_active_skill,
     resolve_stale_invoke_limit,
 )
 from jiuwenswarm.agents.harness.common.rails.skill_credential_injection_rail import (
     SkillCredentialInjectionRail,
     coalesce_config_skill_envs,
     coalesce_skill_envs,
+)
+from jiuwenswarm.agents.harness.common.rails.skill_sleep_rail import SkillSleepRail
+from jiuwenswarm.agents.harness.common.skill_sleep import (
+    SkillCallCounter,
+    SkillSleepRunner,
+    SleepModelSpec,
 )
 from jiuwenswarm.agents.harness.common.rails.concurrent_safe_rails import (
     ConcurrentSafeSysOperationRail,
@@ -529,6 +536,8 @@ from jiuwenswarm.common.config import (
     get_sandbox_runtime,
     get_sandbox_startup_mode,
     get_skill_create_enabled,
+    get_skill_sleep_call_threshold,
+    get_skill_sleep_config,
     coerce_config_bool,
     _get_ttse_config,
     get_ttse_embedding_config,
@@ -1528,20 +1537,20 @@ def build_progressive_tool_rail_from_config(
     agent_card_id: str | None = None,
     subagent_kind: str | None = None,
     deepresearch_context_provider: Callable[[], dict[str, str]] | None = None,
+    active_skill_provider: Callable[[], str | None] | None = None,
 ) -> ProgressiveToolRail | None:
     """Build ProgressiveToolRail from react.tool_lazy_load config.
 
-    Fixed eager-tools schema; deferred tools are reached via tools_search +
-    invoke_tool. For subagents, set profile="subagent" and configure
+    Stable base eager-tools schema; deferred tools are reached via tools_search
+    + invoke_tool, while ToolCard skill gates may add direct tools for the
+    active session skill. For subagents, set profile="subagent" and configure
     react.tool_lazy_load.subagents.
     """
     config = react_config if isinstance(react_config, dict) else {}
     lazy_cfg = config.get("tool_lazy_load") or {}
     if not isinstance(lazy_cfg, dict):
         lazy_cfg = {}
-
-    if not lazy_cfg.get("enabled", False):
-        return None
+    lazy_load_enabled = bool(lazy_cfg.get("enabled", False))
 
     enable_for_models = _normalize_tool_names(
         lazy_cfg.get("enable_for_models", []), []
@@ -1571,10 +1580,6 @@ def build_progressive_tool_rail_from_config(
             lazy_cfg.get("eager_tools", _DEFAULT_PROGRESSIVE_EAGER_TOOLS),
             _DEFAULT_PROGRESSIVE_EAGER_TOOLS,
         )
-        # This tool owns native multi-step HITL. It must execute directly;
-        # invoke_tool would hide the outer call from its lifecycle Rail.
-        if "deepresearch_execute" not in eager_tools:
-            eager_tools.insert(2, "deepresearch_execute")
 
     eager_tools = _ensure_ttse_consult_eager_tool(eager_tools, config)
 
@@ -1590,8 +1595,10 @@ def build_progressive_tool_rail_from_config(
         )
 
     logger.info(
-        "[ProgressiveToolRail] enabled profile=%s kind=%s eager_tools=%s "
+        "[ProgressiveToolRail] mounted lazy_load_enabled=%s profile=%s "
+        "kind=%s eager_tools=%s "
         "agent_id=%s agent_card_id=%s enable_for_models=%s disabled_tools=%s",
+        lazy_load_enabled,
         normalized_profile,
         subagent_kind or "",
         eager_tools,
@@ -1602,13 +1609,14 @@ def build_progressive_tool_rail_from_config(
     )
 
     return ProgressiveToolRail(
-        enabled=True,
+        enabled=lazy_load_enabled,
         eager_tools=eager_tools,
         language=normalized_language,
         agent_id=agent_id,
         agent_card_id=agent_card_id,
         enable_for_models=enable_for_models,
         deepresearch_context_provider=deepresearch_context_provider,
+        active_skill_provider=active_skill_provider,
         disabled_tools=disabled_tools,
     )
 
@@ -1667,6 +1675,38 @@ def parse_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_bool(value: Any, *, default: bool = False) -> bool:
+    """Parse YAML bool / env-var-backed boolean strings.
+
+    ``${VAR:-default}`` 插值会把 env 值解析成字符串（config.resolve_env_vars），
+    所以「环境变量驱动的开关」必须容忍 "true"/"1"/"yes"/"on" 这类字符串，不能
+    用 ``is True`` 判等。
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off", ""}:
+        return False
+    return default
+
+
+def _model_routing_enabled(config: dict[str, Any] | None) -> bool:
+    """model_routing 总开关：config.yaml ``model_routing.enabled``（默认 false）+ 进程级 env 覆盖。
+
+    relay 侧可经 spawn env 注入 ``JIUWENSWARM_MODEL_ROUTING_ENABLED``（进程级开关，
+    仿 JIUWENSWARM_CODE_COAUTHOR_HEADER_ENABLED）；env 显式设置时优先于 config.yaml。
+    """
+    enabled = _parse_bool((config or {}).get("model_routing", {}).get("enabled"))
+    env_val = os.getenv("JIUWENSWARM_MODEL_ROUTING_ENABLED")
+    if env_val is not None and env_val.strip():
+        enabled = _parse_bool(env_val)
+    return enabled
 
 
 def _resolve_instance_config_base(config_base: dict[str, Any] | None) -> dict[str, Any]:
@@ -2587,10 +2627,12 @@ class JiuWenSwarmDeepAdapter:
         self._agent_permissions_body: dict[str, Any] | None = None
         self._permissions_persist_agent_id: str | None = None
         self._skill_active_state_rail: SkillActiveStateRail | None = None
+        self._skill_sleep_rail: SkillSleepRail | None = None
         self._skill_credential_injection_rail: SkillCredentialInjectionRail | None = None
         self._avatar_rail: Any = None
         self._tool_cards = None
         self._evolution_watcher_tasks: set[asyncio.Task] = set()
+        self._ttse_cleanup_tasks: set[asyncio.Task] = set()
         self._sys_operation = None
         self._sys_operation_card: SysOperationCard | None = None
         # 专供 rail 使用的本地 sysop（忽略沙箱配置；与 self._sys_operation 可不同）
@@ -2939,13 +2981,14 @@ class JiuWenSwarmDeepAdapter:
         remove_lock: bool = True,
         remove_runtime_state: bool = True,
     ) -> None:
-        self._session_adapters.pop(session_id, None)
+        adapter = self._session_adapters.pop(session_id, None)
         if remove_lock:
             self._session_adapter_locks.pop(session_id, None)
         self._session_adapter_last_used.pop(session_id, None)
         self._session_adapter_versions.pop(session_id, None)
         self._session_adapter_reload_failures.pop(session_id, None)
         clear_session_skill_state(session_id)
+        self._forget_skill_sleep_session(session_id, adapter)
         if not remove_runtime_state:
             return
         try:
@@ -5608,6 +5651,34 @@ class JiuWenSwarmDeepAdapter:
                 len(ext_config),
             )
 
+    @staticmethod
+    def _inject_model_selection_into_inputs(
+        request: AgentRequest, inputs: dict[str, Any]
+    ) -> None:
+        """把请求的模型选择值注入 ``inputs["run"]["context"]["extra"]["model_selection"]``，供 ModelRoutingRail 每请求读取。
+
+        relay 前端下拉框与具体模型同级：四档（fast/balanced/extreme/auto）与具体
+        模型统一经 frame ``params.model_name`` → ``request.params`` → 这里写入
+        ``run_context.extra``（DeepAgent ``_normalize_inputs`` 会把它带进
+        ``InvokeInputs.run_context.extra``）。取值可为具体模型名，或
+        fast/balanced/extreme/auto（写死路由）；缺失不写入，rail 侧走
+        "具体模型/默认"分支（跳过路由）。
+        """
+        params = request.params if isinstance(request.params, dict) else {}
+        raw = str(params.get("model_name") or "").strip()
+        if not raw:
+            return
+        run_extra = (
+            inputs.setdefault("run", {})
+            .setdefault("context", {})
+            .setdefault("extra", {})
+        )
+        if isinstance(run_extra, dict):
+            run_extra["model_selection"] = raw
+            logger.info(
+                "[JiuWenSwarmDeepAdapter] model_selection injected: value=%s", raw
+            )
+
     def _refresh_multimodal_configs(
         self,
         config_base: dict[str, Any],
@@ -6204,6 +6275,39 @@ class JiuWenSwarmDeepAdapter:
     def _build_model_from_entry(mcc: dict, mco: dict) -> Model:
         """根据单个模型条目的 model_client_config / model_config_obj 构建 Model 实例。"""
         name = mcc.get("model_name", "")
+        # models.json 在 relay spawn 前落盘；未登录时 maas 条目 api_base/api_key 为空，
+        # Model 构建会失败（整批跳过，四档路由只能 keep current）。登录后 invoke 同步
+        # 把 maas 凭证 env（API_BASE/API_KEY/default_headers）注入 tip，这里在 api_base
+        # 缺失时原位回填：仅当候选 base 命中 maas 端点标记才填，避免把自定义 OpenAI
+        # 网关误配给 maas 模型。原位修改 mcc 使 _register_model_cache_entry 的
+        # model_ref 哈希与注入后的一致。
+        if not str(mcc.get("api_base") or "").strip():
+            try:
+                from jiuwenswarm.llm_sse_patch import _is_huawei_maas_api_base
+
+                for _base_key in (
+                    "OFFICE_CLAW_HUAWEI_MAAS_BASE_URL",
+                    "API_BASE",
+                    "OPENAI_BASE_URL",
+                    "OPENAI_API_BASE",
+                ):
+                    _base_val = read_env(_base_key, "").strip()
+                    if _base_val and _is_huawei_maas_api_base(_base_val):
+                        mcc["api_base"] = _base_val
+                        # 仅「候选 base 命中 maas 端点标记」时才回填 api_key，与注释承诺一致；
+                        # 避免把 OPENAI_API_KEY/API_KEY/huawei-maas-session 假凭证写进
+                        # 任意 api_base 为空的非 maas 条目（本方法被全部模型缓存构建复用）。
+                        if not str(mcc.get("api_key") or "").strip():
+                            mcc["api_key"] = (
+                                read_env("OPENAI_API_KEY", "").strip()
+                                or read_env("API_KEY", "").strip()
+                                or "huawei-maas-session"
+                            )
+                        break
+            except Exception as exc:
+                logger.debug(
+                    "[JiuWenSwarmDeepAdapter] MaaS credential backfill skipped: %s", exc
+                )
         mcc_fields = {k: v for k, v in mcc.items() if k != "model_name"}
         if not mcc_fields.get("client_provider"):
             mcc_fields["client_provider"] = "OpenAI"
@@ -6322,6 +6426,41 @@ class JiuWenSwarmDeepAdapter:
         name_counter: dict[str, int] = {}
 
         for entry in get_default_models(config):
+            self._register_model_cache_entry(entry, name_counter)
+
+        # sidecar 模式：把 relay 落盘的 models.json 条目也登记进缓存，使具体模型的
+        # model_ref（maas 端点哈希）能被 _resolve_model_by_identity 解析——这些哈希只在
+        # models.json 里有，config.yaml 里没有（config.yaml 仅 glm-5.2 火山）。
+        self._register_models_json_cache_entries(name_counter)
+
+    def _register_models_json_cache_entries(self, name_counter: dict[str, int]) -> None:
+        """把 sidecar 模式 relay 落盘的 models.json::defaults 条目登记进模型缓存。
+
+        models.json 与 config.yaml 条目同构（model_client_config/model_config_obj/顶层
+        字段），直接复用 _register_model_cache_entry；与 config.yaml 条目按 name_counter
+        顺序分配 #index key。同名（config.yaml 已登记本地实配模型）时跳过，避免
+        _resolve_model_by_name 出现歧义。
+        """
+        try:
+            from jiuwenswarm.agents.harness.common.rails.model_routing.capability import (
+                _load_models_json,
+            )
+            models_json = _load_models_json()
+        except Exception as exc:
+            logger.debug(
+                "[JiuWenSwarmDeepAdapter] models.json cache register skipped: %s", exc
+            )
+            return
+        defaults = models_json.get("defaults") if isinstance(models_json, dict) else None
+        if not isinstance(defaults, list):
+            return
+        for entry in defaults:
+            if not isinstance(entry, dict):
+                continue
+            mcc = entry.get("model_client_config") or {}
+            name = str(mcc.get("model_name") or "").strip()
+            if not name or name in self._model_name_to_keys:
+                continue
             self._register_model_cache_entry(entry, name_counter)
 
     def _build_model_cache_legacy(self, config: dict) -> None:
@@ -7004,6 +7143,17 @@ class JiuWenSwarmDeepAdapter:
         sys_operation = self._resolve_sys_operation()
         if sys_operation is not None:
             self._retain_sys_operation(str(sys_operation.id))
+            try:
+                from jiuwenswarm.server.runtime.workspace.fs_quota_guard import (
+                    install_write_quota_guard,
+                )
+
+                install_write_quota_guard(sys_operation)
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "[JiuWenSwarmDeepAdapter] install write quota guard failed",
+                    exc_info=True,
+                )
 
         to_release = [sid for sid in previously_retained if sid != local_keep_id]
         # agent 与 local 共用同一张卡时：新 retain 已加上，只丢掉上一轮那一票。
@@ -7298,6 +7448,18 @@ class JiuWenSwarmDeepAdapter:
             if sysop_obj is not None:
                 self._retain_sys_operation(str(sysop_obj.id))
             self._local_sys_operation = sysop_obj
+            if sysop_obj is not None:
+                try:
+                    from jiuwenswarm.server.runtime.workspace.fs_quota_guard import (
+                        install_write_quota_guard,
+                    )
+
+                    install_write_quota_guard(sysop_obj)
+                except Exception:  # noqa: BLE001
+                    logger.debug(
+                        "[JiuWenSwarmDeepAdapter] install local write quota guard failed",
+                        exc_info=True,
+                    )
             logger.info(
                 "[SandboxPerf] create_local_sys_operation: agent_id=%s ok=%s "
                 "elapsed_ms=%.1f",
@@ -7343,6 +7505,7 @@ class JiuWenSwarmDeepAdapter:
             "_progressive_tool_rail",
             "_skill_authorization_rail",
             "_skill_active_state_rail",
+            "_skill_sleep_rail",
             "_skill_credential_injection_rail",
             "_llm_retry_rail",
             "_skill_create_rail",
@@ -7564,6 +7727,14 @@ class JiuWenSwarmDeepAdapter:
                     (time.monotonic() - _t0) * 1000,
                 )
                 return
+            if status == "quota_exceeded":
+                logger.warning(
+                    "[JiuWenSwarmDeepAdapter] init_workspace_on_host blocked by quota: "
+                    "agent_id=%s path=%s",
+                    self._agent_id,
+                    root_path,
+                )
+                raise RuntimeError("WORKSPACE_QUOTA_EXCEEDED")
             logger.info(
                 "[SandboxPerf] init_workspace_on_host: agent_id=%s backend=%s ok=1 "
                 "mode=%s dirs=%d elapsed_ms=%.1f path=%s",
@@ -8083,6 +8254,160 @@ class JiuWenSwarmDeepAdapter:
                 exc,
             )
             return None
+
+    @staticmethod
+    def _resolve_skill_sleep_traces_dir() -> Path:
+        """Resolve OTel file-exporter traces dir for skill sleep harvest."""
+        try:
+            full = get_config()
+        except Exception:
+            full = {}
+        if not isinstance(full, dict):
+            full = {}
+        for key in ("agent_observability", "team_observability"):
+            block = full.get(key)
+            if isinstance(block, dict):
+                raw = str(block.get("traces_dir") or "").strip()
+                if raw:
+                    return Path(raw).expanduser()
+        return get_user_workspace_dir() / ".trace"
+
+    def _resolve_skill_sleep_skills_dirs(self) -> list[Path]:
+        """All registered skills dirs, so sleep finds each skill where it lives."""
+        dirs = [Path(d) for d in self._resolve_skill_dirs() if str(d or "").strip()]
+        return dirs or [get_agent_skills_dir()]
+
+    def _resolve_skill_sleep_state_dir(self, sleep_cfg: dict[str, Any]) -> Path:
+        raw = str(sleep_cfg.get("state_dir") or "").strip()
+        if raw:
+            return Path(raw).expanduser()
+        root = Path(self._workspace_dir) if self._workspace_dir else get_agent_workspace_dir()
+        return root / ".skill_sleep"
+
+    def _build_skill_sleep_rail(self, config: dict[str, Any]) -> SkillSleepRail | None:
+        """Build SkillSleepRail; per-skill selfEvolution gating happens in the runner."""
+        try:
+            sleep_cfg = get_skill_sleep_config(config)
+            state_dir = self._resolve_skill_sleep_state_dir(sleep_cfg)
+            counter = SkillCallCounter(state_dir / "call_counts.json")
+            skills_dirs = self._resolve_skill_sleep_skills_dirs()
+            runner = SkillSleepRunner(
+                counter=counter,
+                trajectory_dir=self._resolve_skill_sleep_traces_dir(),
+                skills_base_dir=skills_dirs,
+                state_dir=state_dir,
+                backend=str(sleep_cfg.get("backend") or "model"),
+                gate_mode=str(sleep_cfg.get("gate_mode") or "on"),
+                rubric_synthesis=str(sleep_cfg.get("rubric_synthesis") or "off"),
+                on_task_created=self._track_skill_sleep_task,
+                model_provider=self._skill_sleep_model_spec,
+                skills_dirs_provider=self._resolve_skill_sleep_skills_dirs,
+            )
+            rail = SkillSleepRail(
+                counter=counter,
+                runner=runner,
+                call_threshold=get_skill_sleep_call_threshold(config),
+                last_skills_path=state_dir / "last_skills.json",
+            )
+            logger.info(
+                "[JiuWenSwarmDeepAdapter] SkillSleepRail create success "
+                "threshold=%s trajectory=%s skills=%s state=%s",
+                rail.call_threshold,
+                self._resolve_skill_sleep_traces_dir(),
+                ";".join(str(d) for d in skills_dirs),
+                state_dir,
+            )
+            traces_dir = self._resolve_skill_sleep_traces_dir()
+            if not traces_dir.exists():
+                logger.warning(
+                    "[JiuWenSwarmDeepAdapter] SkillSleepRail trajectory dir %s does not "
+                    "exist yet; sleep cycles are skipped until traces are exported "
+                    "(check agent_observability file exporter)",
+                    traces_dir,
+                )
+            return rail
+        except Exception as exc:
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] SkillSleepRail create failed: %s",
+                exc,
+            )
+            return None
+
+    def _skill_sleep_model_spec(self) -> SleepModelSpec | None:
+        """Resolve the sleep-training model from the main conversation config.
+
+        ``evolution.skill_sleep.model_name`` / ``model_tier`` override the
+        adapter default. Returns None (env fallback) when no model is set.
+        """
+        if self._model is None:
+            return None
+        sleep_cfg = get_skill_sleep_config(self._config_cache)
+        model, _ = self._resolve_model(
+            model_name=str(sleep_cfg.get("model_name") or ""),
+            model_tier=str(sleep_cfg.get("model_tier") or ""),
+        )
+        request_config = model.model_config
+        model_name = str(
+            getattr(request_config, "model_name", "")
+            or getattr(request_config, "model", "")
+            or self._default_model_name
+            or ""
+        )
+        return SleepModelSpec(
+            client_config=model.model_client_config,
+            request_config=request_config,
+            model_name=model_name,
+        )
+
+    def _forget_skill_sleep_session(
+        self, session_id: str, adapter: "JiuWenSwarmDeepAdapter | None" = None
+    ) -> None:
+        """Drop SkillSleepRail per-session state held by this and *adapter*."""
+        if not session_id:
+            return
+        rails: dict[int, Any] = {}
+        for rail in (
+            getattr(self, "_skill_sleep_rail", None),
+            getattr(adapter, "_skill_sleep_rail", None),
+        ):
+            if rail is not None:
+                rails[id(rail)] = rail
+        for rail in rails.values():
+            try:
+                rail.forget_session(session_id)
+            except Exception:
+                logger.warning(
+                    "[JiuWenSwarmDeepAdapter] SkillSleepRail forget_session failed: "
+                    "session_id=%s",
+                    session_id,
+                    exc_info=True,
+                )
+
+    def _track_skill_sleep_task(self, task: asyncio.Task) -> None:
+        """Track background sleep tasks with evolution watcher set."""
+        task.add_done_callback(self._on_evolution_watcher_done)
+        self._evolution_watcher_tasks.add(task)
+
+    async def _reconcile_skill_sleep_rail(self) -> None:
+        """Register SkillSleepRail when it is not mounted yet."""
+        if self._instance is None or self._skill_sleep_rail is not None:
+            return
+        rail = self._build_skill_sleep_rail(self._config_cache)
+        if rail is None:
+            logger.info(
+                "[JiuWenSwarmDeepAdapter] SkillSleepRail build returned None; skip register"
+            )
+            return
+        try:
+            await self._instance.register_rail(rail)
+        except Exception as exc:
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] SkillSleepRail register failed: %s",
+                exc,
+            )
+            return
+        self._skill_sleep_rail = rail
+        logger.info("[JiuWenSwarmDeepAdapter] SkillSleepRail registered")
 
     def _build_skill_credential_injection_rail(
         self,
@@ -9234,6 +9559,46 @@ class JiuWenSwarmDeepAdapter:
             logger.warning("[JiuWenSwarmDeepAdapter] CircuitBreakerRail create failed: %s", exc)
             return None
 
+    @staticmethod
+    def _build_model_routing(config: dict[str, Any] | None = None) -> Any | None:
+        """构建 ModelRoutingRail（模型路由）。
+
+        - 使能：config.yaml ``model_routing.enabled`` = true，或进程级 env
+          ``JIUWENSWARM_MODEL_ROUTING_ENABLED``（relay spawn 注入，见 _model_routing_enabled）。
+        - 始终真切换（apply_routing=True）。
+        - 模型选择由前端下拉框与具体模型同级：四档（fast / balanced / extreme / auto）
+          与具体模型统一经 frame ``params.model_name`` 注入（四档写死模式，或具体
+          模型名），见 ModelRoutingRail。
+        - 能力表来自 ``routing_state/models.json``（sidecar）或 config.yaml ``models.defaults``
+          + ``models.vision``（后者作 model_type="vision" 候选）；model_builder 传
+          _build_model_from_entry 使能力表带 Model 对象（真切换前置）。
+        """
+        if not _model_routing_enabled(config):
+            return None
+
+        try:
+            from jiuwenswarm.agents.harness.common.rails.model_routing import (
+                ModelRoutingRail,
+                build_capability_table_from_config,
+            )
+
+            caps = build_capability_table_from_config(
+                config,
+                model_builder=JiuWenSwarmDeepAdapter._build_model_from_entry,
+            )
+            rail = ModelRoutingRail(
+                caps,
+                apply_routing=True,
+            )
+            logger.info(
+                "[JiuWenSwarmDeepAdapter] ModelRoutingRail create success, %d models",
+                len(caps),
+            )
+            return rail
+        except Exception as exc:
+            logger.warning("[JiuWenSwarmDeepAdapter] ModelRoutingRail create failed: %s", exc)
+            return None
+
     def _build_runtime_prompt_rail(self) -> RuntimePromptRail | None:
         """Build RuntimePromptRail for per-model-call time/channel/runtime injection."""
         try:
@@ -9314,12 +9679,29 @@ class JiuWenSwarmDeepAdapter:
             agent_id=self._tool_owner_id(),
             agent_card_id=self._tool_owner_id(),
             deepresearch_context_provider=self._get_deepresearch_tool_context,
+            active_skill_provider=self._get_progressive_active_skill,
         )
         if rail is not None:
             logger.info(
-                "[JiuWenSwarmDeepAdapter] ProgressiveToolRail enabled (fixed schema mode)"
+                "[JiuWenSwarmDeepAdapter] ProgressiveToolRail mounted mode=%s",
+                "progressive" if rail.enabled else "skill-gate-only",
             )
         return rail
+
+    def _get_progressive_active_skill(self) -> str | None:
+        """Return active-skill state for this adapter's current session."""
+        session_id = str(self._skill_rail_session_id() or "").strip()
+        if not session_id:
+            session_id = str(get_runtime_tool_session_id() or "").strip()
+        if not session_id:
+            session_id = str(
+                self._current_request_route.get("session_id") or ""
+            ).strip()
+        if not session_id:
+            session_id = str(
+                self._runtime_cron_tool_context.session_id or ""
+            ).strip()
+        return get_session_active_skill(session_id) if session_id else None
 
     @staticmethod
     def _build_disabled_tools_rail(
@@ -9541,6 +9923,7 @@ class JiuWenSwarmDeepAdapter:
         """Build DeepAgent rails consistently for cold start and hot reload."""
         rail_infos = [
             _RailBuildInfo("_request_summary_rail", self._build_request_summary_rail),
+            _RailBuildInfo("_model_routing_rail", self._build_model_routing, {"config": config_base}),
             _RailBuildInfo("_runtime_prompt_rail", self._build_runtime_prompt_rail),
             _RailBuildInfo("_response_prompt_rail", self._build_response_prompt_rail),
             _RailBuildInfo(
@@ -9688,6 +10071,16 @@ class JiuWenSwarmDeepAdapter:
             _RailBuildInfo(
                 "_skill_active_state_rail",
                 self._build_skill_active_state_rail,
+                {"config": config},
+            ),
+        )
+        # SkillSleepRail is always mounted; per-skill selfEvolution decides
+        # whether a sleep cycle actually runs.
+        rail_infos.insert(
+            2,
+            _RailBuildInfo(
+                "_skill_sleep_rail",
+                self._build_skill_sleep_rail,
                 {"config": config},
             ),
         )
@@ -11750,6 +12143,8 @@ class JiuWenSwarmDeepAdapter:
                 self._sync_ttse_rail_config(self._config_cache)
         elif self._ttse_rail is not None:
             await self._unconfigure_ttse_rail()
+
+        await self._reconcile_skill_sleep_rail()
 
     @staticmethod
     def _user_interaction_rail_attribute() -> str:
@@ -14137,6 +14532,7 @@ class JiuWenSwarmDeepAdapter:
                     exc,
                 )
             clear_session_skill_state(str(self._parent_session_id or "").strip())
+            self._forget_skill_sleep_session(str(self._parent_session_id or "").strip())
         try:
             await self._sync_personal_context_rail("cleanup")
         except BaseException as exc:  # noqa: BLE001
@@ -18193,6 +18589,7 @@ class JiuWenSwarmDeepAdapter:
         await self._refresh_stale_mcp_tool_lists()
 
         self._inject_extension_config_into_inputs(inputs)
+        self._inject_model_selection_into_inputs(request, inputs)
 
         _req_model = (request.params.get("model_name") or "") if isinstance(request.params, dict) else ""
         if not self._has_valid_model_config(_req_model):
@@ -18977,6 +19374,7 @@ class JiuWenSwarmDeepAdapter:
         await self._refresh_stale_mcp_tool_lists()
 
         self._inject_extension_config_into_inputs(inputs)
+        self._inject_model_selection_into_inputs(request, inputs)
 
         _req_model = (request.params.get("model_name") or "") if isinstance(request.params, dict) else ""
         if not self._has_valid_model_config(_req_model):
@@ -20457,8 +20855,8 @@ class JiuWenSwarmDeepAdapter:
                 ttse_task = asyncio.create_task(
                     self._cleanup_ttse_background_tasks(rid, session_id)
                 )
-                ttse_task.add_done_callback(self._on_evolution_watcher_done)
-                self._evolution_watcher_tasks.add(ttse_task)
+                ttse_task.add_done_callback(self._on_ttse_cleanup_done)
+                self._ttse_cleanup_tasks.add(ttse_task)
             if _debug_logger is not None:
                 if run_failure is not None:
                     _debug_logger.end_run(
@@ -22981,6 +23379,14 @@ class JiuWenSwarmDeepAdapter:
             task.result()
         except Exception as exc:
             logger.warning("[JiuWenSwarmDeepAdapter] evolution watcher task exception: %s", exc)
+
+    def _on_ttse_cleanup_done(self, task: asyncio.Task) -> None:
+        """Drop a finished TTSE cleanup task and log a normal failure."""
+        self._ttse_cleanup_tasks.discard(task)
+        try:
+            task.result()
+        except Exception as exc:
+            logger.warning("[JiuWenSwarmDeepAdapter] TTSE cleanup task exception: %s", exc)
 
     @staticmethod
     def _is_approval_event(evt) -> bool:

@@ -644,6 +644,54 @@ def get_skill_create_enabled(config: dict[str, Any] | None) -> bool:
     return _get_evolution_config(config).get("skill_create", False)
 
 
+def get_skill_sleep_config(config: dict[str, Any] | None) -> dict[str, Any]:
+    """Return ``react.evolution.skill_sleep`` block (empty dict when unset)."""
+    raw = _get_evolution_config(config).get("skill_sleep")
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def get_skill_sleep_action(skill_name: str, *, skills_dirs: Any = None) -> str:
+    """Return the offline sleep action for *skill_name*: ``off`` / ``suggest`` / ``auto``.
+
+    Driven by per-skill ``selfEvolution`` in ``.office-claw/capabilities.json``.
+    Skills without a ``selfEvolution`` entry (including builtin skills and a
+    missing capabilities file) resolve to ``off``.
+    """
+    name = str(skill_name or "").strip()
+    if not name:
+        return "off"
+    try:
+        from openjiuwen.agent_evolving.skill_self_evolution import (
+            get_skill_self_evolution_mode,
+            resolve_skill_evolution_action,
+        )
+
+        if get_skill_self_evolution_mode(name, skills_dirs=skills_dirs) is None:
+            return "off"
+        return str(resolve_skill_evolution_action(name, skills_dirs=skills_dirs))
+    except Exception:
+        logger.warning(
+            "[skill_sleep] resolve selfEvolution failed for skill=%s; treat as off",
+            name,
+            exc_info=True,
+        )
+        return "off"
+
+
+def get_skill_sleep_call_threshold(config: dict[str, Any] | None) -> int:
+    """Return per-skill usage threshold (trigger when usage count > value).
+
+    Optional override via ``react.evolution.skill_sleep.call_threshold``; when
+    absent, uses the fixed default 20.
+    """
+    raw = get_skill_sleep_config(config).get("call_threshold", 20)
+    try:
+        threshold = int(raw)
+    except (TypeError, ValueError):
+        return 20
+    return max(threshold, 1)
+
+
 def get_evolution_auto_save_enabled(config: dict[str, Any] | None = None) -> bool:
     """Return whether evolution approvals may auto-save without user action."""
     try:
