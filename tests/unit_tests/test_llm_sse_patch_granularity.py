@@ -47,6 +47,11 @@ def fresh_patch_state(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(patch_mod, name, False, raising=False)
     for name in _CLIENT_PATCH_FLAGS:
         monkeypatch.setattr(oai_mod.OpenAIModelClient, name, False, raising=False)
+    monkeypatch.delattr(
+        oai_mod.OpenAIModelClient,
+        "_response_assembly_original_parse_response",
+        raising=False,
+    )
     monkeypatch.setattr(headers_helper, "_auth_header_patch_applied", False, raising=False)
 
 
@@ -186,3 +191,24 @@ def test_runtime_refresh_applies_patch_after_xiaoyi_claw_is_enabled(
     config["channels"]["xiaoyi"]["apps"][0]["mode"] = "xiaoyi_claw"
     assert app_agentserver.refresh_openai_response_assembly_patch() is True
     assert calls == [True]
+
+
+def test_runtime_refresh_removes_patch_after_xiaoyi_claw_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    fresh_patch_state: None,
+) -> None:
+    """运行时禁用 xiaoyi_claw 后应恢复原方法，避免影响其他渠道。"""
+    config = {"channels": {"xiaoyi": {"apps": [{"mode": "xiaoyi_claw"}]}}}
+    _stub_config(monkeypatch, config)
+    original = oai_mod.OpenAIModelClient._parse_response  # pylint: disable=protected-access
+
+    assert app_agentserver.refresh_openai_response_assembly_patch() is True
+    assert oai_mod.OpenAIModelClient._parse_response is not original  # pylint: disable=protected-access
+
+    config["channels"]["xiaoyi"]["apps"][0]["mode"] = "chat"
+    assert app_agentserver.refresh_openai_response_assembly_patch() is False
+    assert oai_mod.OpenAIModelClient._parse_response is original  # pylint: disable=protected-access
+    assert (
+        oai_mod.OpenAIModelClient._response_assembly_patch_applied  # pylint: disable=protected-access
+        is False
+    )

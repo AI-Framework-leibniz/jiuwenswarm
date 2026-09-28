@@ -153,6 +153,7 @@ from jiuwenswarm.llm_sse_patch import (
     apply_huawei_maas_span_id_patch,
     apply_openai_auth_header_patch,
     apply_openai_response_assembly_patch,
+    remove_openai_response_assembly_patch,
 )
 
 apply_openai_auth_header_patch()
@@ -193,12 +194,13 @@ def _should_apply_sse_invoke_patch() -> bool:
 
 
 def refresh_openai_response_assembly_patch() -> bool:
-    """Apply the SSE response assembly patch when the current config needs it.
+    """Synchronize the SSE response assembly patch with the current config.
 
-    The patch is idempotent, so this can be called both at process startup and
-    after a runtime config reload that enables ``xiaoyi_claw``.
+    Both operations are idempotent, so this can be called at process startup and
+    after a runtime config reload that enables or disables ``xiaoyi_claw``.
     """
     if not _should_apply_sse_invoke_patch():
+        remove_openai_response_assembly_patch()
         return False
     apply_openai_response_assembly_patch()
     return True

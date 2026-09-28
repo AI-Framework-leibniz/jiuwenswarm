@@ -436,6 +436,9 @@ def apply_openai_response_assembly_patch() -> None:
         return
 
     _orig_parse_response = client_cls._parse_response  # pylint: disable=protected-access
+    client_cls._response_assembly_original_parse_response = (  # pylint: disable=protected-access
+        _orig_parse_response
+    )
 
     async def _parse_response_with_sse_guard(
         self: Any,
@@ -450,6 +453,36 @@ def apply_openai_response_assembly_patch() -> None:
     client_cls._response_assembly_patch_applied = True  # pylint: disable=protected-access
     _RESPONSE_ASSEMBLY_PATCH_APPLIED = True
     logger.info("[llm_sse_patch] OpenAIModelClient SSE 响应组装补丁已应用")
+
+
+def remove_openai_response_assembly_patch() -> bool:
+    """移除按渠道启用的 SSE 响应组装补丁，并恢复原始解析方法。
+
+    运行时配置可能删除或禁用 ``xiaoyi_claw``。此时必须撤销进程级补丁，避免
+    后续其他渠道的普通字符串响应继续经过 SSE 组装逻辑。
+    """
+    global _RESPONSE_ASSEMBLY_PATCH_APPLIED
+
+    client_cls = _import_openai_model_client()
+    if client_cls is None:
+        return False
+
+    original = getattr(
+        client_cls,
+        "_response_assembly_original_parse_response",
+        None,
+    )
+    if original is None:
+        _RESPONSE_ASSEMBLY_PATCH_APPLIED = False
+        client_cls._response_assembly_patch_applied = False  # pylint: disable=protected-access
+        return False
+
+    client_cls._parse_response = original  # pylint: disable=protected-access
+    delattr(client_cls, "_response_assembly_original_parse_response")
+    client_cls._response_assembly_patch_applied = False  # pylint: disable=protected-access
+    _RESPONSE_ASSEMBLY_PATCH_APPLIED = False
+    logger.info("[llm_sse_patch] OpenAIModelClient SSE 响应组装补丁已移除")
+    return True
 
 
 def apply_glm_tool_xml_sanitize_patch() -> None:
