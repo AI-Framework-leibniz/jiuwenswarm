@@ -57,3 +57,16 @@ class PolicyUpsertRequest(BaseModel):
             order = None
         self.source_order_num = order
         return self
+
+
+class UsageListQuery(BaseModel):
+    """本集群用量缓存查询（只读，不访问 Agent）。"""
+
+    user_id: str | None = Field(default=None, max_length=64)
+    group_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="有则过滤；无组织行传空串",
+    )
+    bot_id: str | None = Field(default=None, max_length=64)
+    limit: int = Field(default=20, ge=1, le=100)
