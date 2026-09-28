@@ -18,6 +18,7 @@ from jiuwenswarm.agents.harness.common.rails.invocation_context_rail import (
 from jiuwenswarm.common.invocation_context import (
     INVOCATION_CONTEXT_EXTRA_KEY,
     INVOCATION_CONTEXT_VERSION,
+    TRACE_HEADER_EXPORTER_METADATA_KEY,
     InvocationContext,
     TraceContext,
     attach_invocation_context,
@@ -148,6 +149,55 @@ def test_builder_prefers_cron_identity_for_trace() -> None:
         conversation_id="job-1",
         interaction_id="run%2F1",
     )
+
+
+def test_builder_names_desktop_exporter_for_desktop_trace() -> None:
+    """桌面渠道带 metadata.interaction_id：trace 建立且导出器名补登记为 desktop。
+
+    回归守卫（2026-09-20 实测事故）：导出器名缺位时 Team 边界
+    team_manager._apply_trace_context 查不到注册表项提前返回空，团队各成员
+    模型调用丢 x-hag-trace-id，服务端按 trace 归集计费时整轮仅首调归账
+    （16 次调用 15 次漏计，FINISH consumedPoints=0.01）。
+    """
+    invocation = build_invocation_context(
+        AgentRequest(
+            request_id="request-1",
+            channel_id="desktop",
+            session_id="session-1",
+            metadata={"interaction_id": "8b9f57fc-1cdb-4625-97bf-9c0bf85e531c"},
+        )
+    )
+    assert invocation.trace == TraceContext(
+        version=1,
+        trace_id="session-1&8b9f57fc",
+        conversation_id="session-1",
+        interaction_id="8b9f57fc-1cdb-4625-97bf-9c0bf85e531c",
+    )
+    assert invocation.metadata[TRACE_HEADER_EXPORTER_METADATA_KEY] == "desktop"
+
+
+def test_builder_keeps_xiaoyi_exporter_name_for_xiaoyi_channel() -> None:
+    invocation = build_invocation_context(
+        AgentRequest(
+            request_id="request-1",
+            channel_id="xiaoyi",
+            metadata={"xiaoyi_task_id": "root&19&abc&0"},
+        )
+    )
+    assert invocation.metadata[TRACE_HEADER_EXPORTER_METADATA_KEY] == "xiaoyi"
+
+
+def test_builder_skips_exporter_name_when_trace_absent() -> None:
+    """无 trace 的桌面请求（客户端未下发 interaction_id）不补导出器名。"""
+    invocation = build_invocation_context(
+        AgentRequest(
+            request_id="request-1",
+            channel_id="desktop",
+            session_id="session-1",
+        )
+    )
+    assert invocation.trace is None
+    assert TRACE_HEADER_EXPORTER_METADATA_KEY not in invocation.metadata
 
 
 @pytest.mark.parametrize(
@@ -498,6 +548,125 @@ async def test_real_deep_agent_persistent_lifecycle_binds_tool_task_context() ->
 
 async def _drain_interaction_output(stream) -> list[object]:
     return [item async for item in stream]
+
+
+@pytest.mark.asyncio
+async def test_real_deep_agent_second_turn_rebinds_invocation_context() -> None:
+    """同一常驻会话的第二轮必须改绑到第二轮的 InvocationContext.
+
+    桌面计费事故回归（2026-09-20）：DeepAgent 常驻运行时的 supervisor/round
+    任务树在首轮创建，asyncio.create_task 只拷贝创建时刻的 contextvar 快照；
+    没有 rail 逐轮改绑时，次轮模型调用的 x-hag-trace-id 冻结在首轮，服务端按
+    trace 归集计费恒为 0。本用例走真实 start/attach_output/send_input 链路，
+    验证 InvocationContextRail 在次轮把执行上下文改绑到次轮。
+    """
+
+    def _turn_context(tag: str) -> InvocationContext:
+        return InvocationContext(
+            version=INVOCATION_CONTEXT_VERSION,
+            invocation_id=f"inv-{tag}",
+            request_id=f"request-{tag}",
+            session_id="session-shared",
+            channel_id="desktop",
+            chat_id=f"chat-{tag}",
+            trace=TraceContext(
+                version=1,
+                trace_id=f"session-shared&{tag}",
+                conversation_id="session-shared",
+                interaction_id=tag,
+            ),
+            metadata={},
+        )
+
+    context_1 = _turn_context("turn1")
+    context_2 = _turn_context("turn2")
+    inputs_1 = attach_invocation_context({"query": "first"}, context_1)
+    inputs_2 = attach_invocation_context({"query": "second"}, context_2)
+
+    card = AgentCard(id="invocation-context-rebind", name="invocation-context-rebind")
+    rail = InvocationContextRail()
+    observed: asyncio.Queue[tuple[str, InvocationContext | None]] = asyncio.Queue()
+
+    class _ProbeReactAgent:
+        async def register_callback(self, *args, **kwargs) -> None:
+            return None
+
+        async def invoke(self, effective, session, _streaming=False):
+            query = effective.get("query") if isinstance(effective, dict) else ""
+            observed.put_nowait((str(query), get_current_invocation_context()))
+            return {"output": "context observed", "result_type": "answer"}
+
+        async def write_invoke_result_to_stream(self, result, session) -> None:
+            return None
+
+    agent = DeepAgent(card).configure(
+        DeepAgentConfig(
+            card=card,
+            enable_task_loop=True,
+            completion_timeout=5.0,
+            auto_create_workspace=False,
+            rails=[rail],
+        )
+    )
+    agent.set_react_agent(_ProbeReactAgent())
+    await agent.ensure_initialized()
+    session = create_agent_session(session_id="rebind-session", card=card)
+    await session.pre_run(inputs={})
+
+    try:
+        await agent.start(session=session)
+        stream = await agent.attach_output()
+        assert stream is not None
+        await agent.send_input(
+            SendInputRequest(request_id=context_1.request_id, inputs=inputs_1)
+        )
+        query_1, seen_1 = await asyncio.wait_for(observed.get(), timeout=5.0)
+        assert query_1 == "first"
+        assert seen_1 is not None and seen_1.request_id == "request-turn1"
+        await asyncio.wait_for(_drain_interaction_output(stream), timeout=5.0)
+
+        # 与桌面端行为一致：每轮重新 attach_output 领取读流租约（上一轮读流
+        # 排空后租约释放，不重新 attach 的话 supervisor 会停在等消费者）。
+        stream_2 = await agent.attach_output()
+        assert stream_2 is not None
+        await agent.send_input(
+            SendInputRequest(request_id=context_2.request_id, inputs=inputs_2)
+        )
+        query_2, seen_2 = await asyncio.wait_for(observed.get(), timeout=5.0)
+        assert query_2 == "second"
+        # 核心断言：次轮在执行任务内读到的是次轮上下文，不是冻结的首轮。
+        assert seen_2 is not None and seen_2.request_id == "request-turn2"
+        assert seen_2.trace is not None and seen_2.trace.trace_id == "session-shared&turn2"
+        await asyncio.wait_for(_drain_interaction_output(stream_2), timeout=5.0)
+    finally:
+        await agent.stop()
+        completion_rail = agent.find_rail_by_name("TaskCompletionRail")
+        if completion_rail is not None:
+            completion_rail.uninit(agent)
+        await session.post_run()
+
+    assert get_current_invocation_context() is None
+
+
+def test_instantiate_rails_always_mounts_invocation_context_rail_first() -> None:
+    """_instantiate_rails 是全模式共享装配点：必须恒挂 InvocationContextRail 于首位.
+
+    回归守护：code 模式（JiuwenSwarmCodeAdapter._build_agent_rails）曾独立声明
+    rail 列表且漏挂本 rail，导致桌面对话次轮起计费 trace 冻结（2026-09-20）。
+    挂载点收口到 _instantiate_rails 后，本用例锁定「agent/code 两条声明路径
+    都必然带上该 rail、且只挂一次」。
+    """
+    from jiuwenswarm.server.runtime.agent_adapter.interface_deep import (
+        JiuWenSwarmDeepAdapter,
+    )
+
+    adapter = object.__new__(JiuWenSwarmDeepAdapter)
+    adapter._parent_session_id = "session-test"
+    rails = adapter._instantiate_rails([], {})
+    invocation_rails = [r for r in rails if isinstance(r, InvocationContextRail)]
+    assert len(invocation_rails) == 1
+    assert rails[0] is invocation_rails[0]
+    assert adapter._invocation_context_rail is invocation_rails[0]
 
 
 def test_extract_invocation_context_accepts_run_context_mapping() -> None:

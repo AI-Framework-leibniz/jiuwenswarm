@@ -6,6 +6,7 @@ import logging
 import uuid
 from typing import Any
 
+from jiuwenswarm.common.invocation_context import TRACE_HEADER_EXPORTER_METADATA_KEY
 from jiuwenswarm.common.invocation_context.codec import attach_invocation_context
 from jiuwenswarm.common.invocation_context.models import (
     INVOCATION_CONTEXT_VERSION,
@@ -13,6 +14,7 @@ from jiuwenswarm.common.invocation_context.models import (
 )
 from jiuwenswarm.common.schema.agent import AgentRequest
 from jiuwenswarm.server.xiaoyi_invocation import (
+    DESKTOP_TRACE_HEADER_EXPORTER_NAME,
     build_xiaoyi_invocation_extension,
     build_xiaoyi_trace_context,
 )
@@ -46,6 +48,17 @@ def build_invocation_context(request: AgentRequest) -> InvocationContext:
     if channel_id is None:
         raise ValueError("channel_id is required to build InvocationContext")
 
+    trace = build_xiaoyi_trace_context(request)
+    metadata = build_xiaoyi_invocation_extension(request)
+    if trace is not None and TRACE_HEADER_EXPORTER_METADATA_KEY not in metadata:
+        # 桌面/通用渠道：trace 已建立（客户端经 metadata.interaction_id 显式下发），
+        # 但无 Xiaoyi 扩展、导出器名缺位——补登记 desktop 导出器。Team 边界
+        # （team_manager._apply_trace_context）依该名把 trace 头注入各成员模型配置；
+        # 缺位会让团队内模型调用丢 x-hag-trace-id，服务端按 trace 归集时整轮漏计。
+        metadata = {
+            **metadata,
+            TRACE_HEADER_EXPORTER_METADATA_KEY: DESKTOP_TRACE_HEADER_EXPORTER_NAME,
+        }
     context = InvocationContext(
         version=INVOCATION_CONTEXT_VERSION,
         invocation_id=f"inv_{uuid.uuid4().hex}",
@@ -53,8 +66,8 @@ def build_invocation_context(request: AgentRequest) -> InvocationContext:
         session_id=_first_text(request.session_id),
         channel_id=channel_id,
         chat_id=_first_text(request.chat_id),
-        trace=build_xiaoyi_trace_context(request),
-        metadata=build_xiaoyi_invocation_extension(request),
+        trace=trace,
+        metadata=metadata,
     )
     logger.info(
         "[INVOCATION_CTX] BUILT invocation_id=%s request_id=%s session_id=%s channel_id=%s",

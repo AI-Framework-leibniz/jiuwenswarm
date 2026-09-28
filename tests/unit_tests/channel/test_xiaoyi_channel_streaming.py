@@ -92,10 +92,12 @@ async def test_streaming_final_and_gateway_notice_use_expected_terminal_frames()
     assert len(sent) == 2
     artifact = _result(sent[0])
     assert artifact["kind"] == "artifact-update"
-    assert artifact["append"] is False
+    # 终帧按「扣住末片、段末补换行」语义作为增量收尾帧下发：append=True、
+    # 末片带 \n、lastChunk=True（语义约定见 test_xiaoyi_text_segment_newline.py）
+    assert artifact["append"] is True
     assert artifact["lastChunk"] is True
     assert artifact["final"] is False
-    assert artifact["artifact"]["parts"] == [{"kind": "text", "text": summary}]
+    assert artifact["artifact"]["parts"] == [{"kind": "text", "text": f"{summary}\n"}]
 
     status = _result(sent[1])
     assert status["taskId"] == artifact["taskId"]
@@ -113,7 +115,7 @@ async def test_streaming_final_and_gateway_notice_use_expected_terminal_frames()
         notices.append(msg)
 
     handler.publish_robot_messages = capture_notice
-    await handler._send_channel_notice(
+    await handler.send_channel_notice(
         {
             "id": "request-1",
             "meta_data": {
@@ -135,7 +137,8 @@ async def test_streaming_final_and_gateway_notice_use_expected_terminal_frames()
     assert len(sent) == 1
     notice = _result(sent[0])
     assert notice["kind"] == "artifact-update"
-    assert notice["append"] is False
+    # 通知与正文终帧统一走「扣住末片」拆帧路径，append=True（上游 630374805 起的行为）
+    assert notice["append"] is True
     assert notice["lastChunk"] is True
     assert notice["final"] is True
 
