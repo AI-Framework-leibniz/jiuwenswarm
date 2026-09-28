@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 from openjiuwen.core.single_agent.rail.base import (
     AgentCallbackContext,
+    InvokeInputs,
     ToolCallInputs,
 )
 
@@ -66,6 +67,33 @@ def test_generic_repeat_warns_without_force_finish() -> None:
     assert result.detector == "generic_repeat"
 
 
+def test_no_progress_streak_stops_at_a_different_call() -> None:
+    """Intervening tools must not be skipped when counting a no-progress streak."""
+    rail = _rail(global_breaker_threshold=3, warning_threshold=10)
+    history = [
+        _record("read_file", "a", "same"),
+        _record("bash", "b", "other"),
+        _record("read_file", "a", "same"),
+        _record("read_file", "a", "same"),
+    ]
+    assert rail._get_no_progress_streak(history, "read_file", "a") == 2
+    result = rail._detect(history, "read_file", "a")
+    assert result.stuck is False
+
+
+def test_no_progress_streak_stops_when_result_hash_is_missing() -> None:
+    """A missing result hash cannot continue a no-progress streak."""
+    rail = _rail(global_breaker_threshold=2, warning_threshold=10)
+    history = [
+        _record("bash", "cmd", "same"),
+        _record("bash", "cmd", None),
+        _record("bash", "cmd", "same"),
+    ]
+    assert rail._get_no_progress_streak(history, "bash", "cmd") == 1
+    result = rail._detect(history, "bash", "cmd")
+    assert result.stuck is False
+
+
 def test_global_breaker_interrupts_no_progress() -> None:
     rail = _rail(global_breaker_threshold=5)
     history = [_record("bash", "cmd", "same") for _ in range(5)]
@@ -97,6 +125,17 @@ def test_ping_pong_critical_when_both_sides_stall() -> None:
     assert result.stuck is True
     assert result.level == "critical"
     assert result.detector == "ping_pong"
+
+
+async def test_before_invoke_clears_history_for_conversation() -> None:
+    rail = _rail()
+    rail._histories["conv"] = [_record("bash", "a")]
+    ctx = AgentCallbackContext(
+        agent=object(),
+        inputs=InvokeInputs(query="hello", conversation_id="conv"),
+    )
+    await rail.before_invoke(ctx)
+    assert rail._histories["conv"] == []
 
 
 def test_cleanup_session_drops_history() -> None:

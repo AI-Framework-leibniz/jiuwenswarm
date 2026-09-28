@@ -11,11 +11,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextvars
 import hashlib
 import json
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -314,7 +314,7 @@ class CircuitBreakerRail(DeepAgentRail):
         super().__init__()
         self._config = config or CircuitBreakerConfig()
         self._histories: dict[str, list[ToolCallRecord]] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._locks: dict[str, threading.Lock] = {}
         self._language = _normalize_language(language)
 
     def set_language(self, language: str) -> None:
@@ -322,10 +322,15 @@ class CircuitBreakerRail(DeepAgentRail):
         self._language = _normalize_language(language)
 
     def cleanup_session(self, session_id: str = "") -> None:
-        """Remove per-session history and lock for *session_id*."""
+        """Remove per-session history and lock for *session_id*.
+
+        Adapter teardown calls this synchronously, so the guard is a
+        ``threading.Lock``. The critical section does not await.
+        """
         sid = session_id or "default"
-        self._histories.pop(sid, None)
-        self._locks.pop(sid, None)
+        with self._get_lock(sid):
+            self._histories.pop(sid, None)
+            self._locks.pop(sid, None)
 
     def _resolve_sid(self, ctx: AgentCallbackContext) -> str:
         invoke_sid = _invoke_sid.get()
@@ -351,10 +356,10 @@ class CircuitBreakerRail(DeepAgentRail):
             self._histories[sid] = history
         return history
 
-    def _get_lock(self, sid: str) -> asyncio.Lock:
+    def _get_lock(self, sid: str) -> threading.Lock:
         lock = self._locks.get(sid)
         if lock is None:
-            lock = asyncio.Lock()
+            lock = threading.Lock()
             self._locks[sid] = lock
         return lock
 
@@ -380,7 +385,8 @@ class CircuitBreakerRail(DeepAgentRail):
         sid = raw_conv_id or "default"
         ctx.extra[self._SID_KEY] = sid
         _invoke_sid.set(sid)
-        self._histories[sid] = []
+        with self._get_lock(sid):
+            self._histories[sid] = []
 
     async def after_invoke(self, ctx: AgentCallbackContext) -> None:
         sid = _invoke_sid.get()
@@ -411,7 +417,7 @@ class CircuitBreakerRail(DeepAgentRail):
             tool_result, ctx,
         )
 
-        async with self._get_lock(sid):
+        with self._get_lock(sid):
             history = self._get_history(sid)
             history.append(ToolCallRecord(
                 tool_name=tool_name,
@@ -536,9 +542,9 @@ class CircuitBreakerRail(DeepAgentRail):
         latest_hash = None
         for record in reversed(history):
             if record.tool_name != tool_name or record.args_hash != args_hash:
-                continue
+                break
             if record.result_hash is None:
-                continue
+                break
             if latest_hash is None:
                 latest_hash = record.result_hash
                 streak = 1

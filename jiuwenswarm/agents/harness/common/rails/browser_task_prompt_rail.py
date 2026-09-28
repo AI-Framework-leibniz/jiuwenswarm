@@ -15,6 +15,30 @@ from jiuwenswarm.agents.harness.common.prompt.browser_task_prompt import (
 )
 
 
+def _card_name(card: object) -> str | None:
+    """Return a public ``name`` from a card object or dict."""
+    if card is None:
+        return None
+    if isinstance(card, dict):
+        name = card.get("name")
+        return name if isinstance(name, str) else None
+    name = getattr(card, "name", None)
+    return name if isinstance(name, str) else None
+
+
+def _spec_name(spec: object) -> str | None:
+    """Read a subagent name from public card fields.
+
+    ``SubAgentConfig`` exposes ``agent_card``. A live DeepAgent exposes
+    ``card``. Neither path calls ``SubagentRail._extract_agent_meta``.
+    """
+    for attr in ("agent_card", "card"):
+        name = _card_name(getattr(spec, attr, None))
+        if name is not None:
+            return name
+    return _card_name(spec)
+
+
 def _subagent_rail_init_kwargs(
     *,
     enable_async_subagent: bool,
@@ -64,13 +88,14 @@ class BrowserTaskPromptRail(SubagentRail):
             return None
         return build_browser_task_prompt(language)
 
-    def _has_browser_agent(self, agent: object) -> bool:
+    @staticmethod
+    def _has_browser_agent(agent: object) -> bool:
         deep_config = getattr(agent, "deep_config", None)
         subagents = getattr(deep_config, "subagents", None) or []
-        return any(
-            self._extract_agent_meta(spec)[0] == "browser_agent"
-            for spec in subagents
-        )
+        for spec in subagents:
+            if _spec_name(spec) == "browser_agent":
+                return True
+        return False
 
 
 __all__ = ["BrowserTaskPromptRail"]
