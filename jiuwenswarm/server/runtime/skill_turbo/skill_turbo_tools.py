@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Any
 
@@ -24,23 +25,260 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 中立收尾
-_SKILL_TURBO_STOP_HINT_NEUTRAL = (
-    "\n\n[SYSTEM] The skill_acceleration_exec task has finished, but the internal "
-    "delivery pipeline did NOT confirm that the file(s) were generated and sent "
-    "to the user. You should now summarize this result to the user HONESTLY "
-    "based on the artifact summary above: clearly state which parts are "
-    "incomplete or failed and that the file has NOT been delivered. Do NOT "
-    "claim the file was sent. Do NOT call skill_acceleration_exec or skill_tool "
-    "again for this task unless the user asks for a retry. Do NOT call "
-    "send_file_to_user either; file delivery is handled by the internal pipeline."
+
+# ── 技能清单 TTL 缓存：避免每次模型调用前重复扫盘 ──────────────────────────
+# SkillTurboPromptRail.before_model_call 每轮模型调用都触发 refresh ->
+# _collect_skill_entries 扫盘（iterdir + meta.json 读 + glob，同步 IO 阻塞
+# 事件循环）。同一会话连续多轮调用间技能目录集合不变，重复扫描无意义。
+_ENTRIES_CACHE_TTL_SECONDS = 60.0
+_entries_cache: dict[frozenset[str], tuple[float, dict[str, str]]] = {}
+
+
+def _resolve_skill_roots() -> frozenset[str]:
+    """解析当前上下文可见的技能根目录集合（仅作清单缓存 key）。
+
+    与 discover_external_turbo_skills 内部解析同源；失败返回空集
+    （空集 key 只在"解析失败"的场景间共享，语义一致）。
+    """
+    try:
+        from jiuwenswarm.common.utils import resolve_agent_registered_skill_dirs
+
+        return frozenset(
+            str(p) for p in resolve_agent_registered_skill_dirs()
+        )
+    except Exception:
+        return frozenset()
+
+
+def _collect_skill_entries() -> tuple[dict[str, str], bool]:
+    """双源扫描当前可见技能，返回 (external_name -> 条目文案, 外部源扫描是否成功)。
+
+    内置 skill_codes 目录 + 外部技能目录（turbo/turbo_codes，经
+    ``turbo_package_loader.discover_external_turbo_skills`` 走
+    ``resolve_agent_registered_skill_dirs`` 标准链路）下的 meta.json；
+    external_name 同名时外部覆盖内置。外部源扫描异常时返回 ok=False
+    （调用方可据此沿用上次成功清单，避免瞬时故障导致清单闪断）。
+
+    带 TTL 缓存（见 ``_entries_cache``）：同一根目录集合在 TTL 窗口内的
+    重复调用直接返回上次成功结果，不重复扫盘；仅成功结果落缓存。
+    """
+    from pathlib import Path
+
+    from jiuwenswarm.server.runtime.skill_turbo.skill_meta import (
+        find_skill_root_file,
+        load_skill_meta,
+    )
+
+    roots = _resolve_skill_roots()
+    now = time.monotonic()
+    cached = _entries_cache.get(roots)
+    if cached is not None and now - cached[0] < _ENTRIES_CACHE_TTL_SECONDS:
+        return dict(cached[1]), True
+
+    # external_name -> 条目文案（外部源后写入覆盖内置同名条目）
+    entries_by_external: dict[str, str] = {}
+
+    def _add_entry(external_name: str, description: str, match_keywords: list) -> None:
+        trigger_hint = ""
+        if match_keywords:
+            trigger_hint = f"（触发词：{'、'.join(match_keywords[:5])}）"
+        entries_by_external[external_name] = f"{external_name}（{description}{trigger_hint}）"
+
+    # ─── 源一：内置 skill_codes 目录 ───────────────────────────
+    try:
+        skill_codes_dir = Path(__file__).resolve().parent / "skill_codes"
+        if skill_codes_dir.is_dir():
+            for skill_dir in sorted(skill_codes_dir.iterdir()):
+                if not skill_dir.is_dir():
+                    continue
+                name = skill_dir.name
+                if name.startswith("_") or name.startswith("."):
+                    continue
+                if find_skill_root_file(skill_dir) is None:
+                    continue
+                meta = load_skill_meta(name, skill_dir)
+                _add_entry(
+                    str(meta.get("external_name") or name.replace("_", "-")),
+                    str(meta.get("description") or f"{name} 任务流"),
+                    list(meta.get("match_keywords") or [name]),
+                )
+    except Exception:
+        logger.warning(
+            "[ToolsLoader] builtin skill_codes description scan failed",
+            exc_info=True,
+        )
+
+    # ─── 源二：外部 turbo同名覆盖内置 ──
+    external_ok = True
+    try:
+        from jiuwenswarm.server.runtime.skill_turbo.turbo_package_loader import (
+            discover_external_turbo_skills,
+        )
+
+        for item in discover_external_turbo_skills():
+            _add_entry(
+                item.external_name,
+                str(item.meta.get("description") or f"{item.skill_name} 任务流"),
+                list(item.meta.get("match_keywords") or [item.skill_name]),
+            )
+    except Exception:
+        external_ok = False
+        logger.warning(
+            "[ToolsLoader] external turbo description scan failed",
+            exc_info=True,
+        )
+
+    if external_ok:
+        _entries_cache[roots] = (now, dict(entries_by_external))
+    return entries_by_external, external_ok
+
+
+def _render_tool_description(entries: dict[str, str]) -> str:
+    """把技能条目渲染为工具描述的清单主体。"""
+    ordered = [entries[k] for k in sorted(entries)]
+    skills_list = "、".join(ordered) if ordered else "暂无"
+    return (
+        "技能加速模块。当用户意图涉及技能类任务（如生成 PPT、文档转换等结构化产出）时，"
+        "应优先调用此工具以获得更快的生成流程。工具内部会二次判断是否真正匹配已支持的技能，"
+        "不匹配时自动降级为普通对话。当前内部支持："
+        + skills_list
+        + "。"
+        "【重要】每次调用仅处理一个独立任务。若用户要求生成多个同类产物（如多份不同主题的 PPT），"
+        "必须为每个产物分别发起独立调用，且严格串行：等待前一次调用完全结束并收到返回结果后，"
+        "才能发起下一次调用。严禁在同一轮对话中并行发起多次调用。"
+    )
+
+
+# 静态尾部：模板排除段（临时措施，与清单无关，刷新时原样保留）
+_TEMPLATE_EXCLUSION_SUFFIX = (
+    "【临时排除】当任务需要使用自定义/指定模板时，不要调用此工具--"
+    "无论该模板路径是出现在当前用户消息里、引用历史会话中生成或上传的模板"
+    "（如“使用刚才生成的风格模板”“用之前那个模板”等自然语言引用）、"
+    "还是消息中含 模板目录路径、模板主文件路径、pack_dir 等字段名。"
+    "判断“是否涉及自定义模板”应基于语义。"
+    "当前 skill 加速器暂未适配模板包功能，此类请求应改用 skill_tool 走 pptx-craft 标准流程。"
+    "此排除规则为临时措施，待 skill 加速器适配模板功能后移除。"
 )
 
-_PPT_DELIVERY_SUMMARY_POST_TOOL_HINT = (
-    "\n\n[SYSTEM] PPT 交付总结骨架将由系统在本工具结果之后通过流式通道发送给用户，"
-    "无需在本回合重复输出交付总结。禁止 tool_call，禁止再调 "
-    "send_file_to_user / skill_tool / skill_acceleration_exec。"
+
+def _build_tool_description() -> str:
+    """从已注册 skill 生成 tool description（内置 skill_codes + 外部 turbo 双源）。
+
+    模块导入时（@tool 装饰器求值 description 参数）执行一次作为初始值；
+    运行期由 ``refresh_skill_acceleration_description`` 在每次模型调用前
+    请求期刷新（见 SkillTurboPromptRail.before_model_call）——外部目录的
+    可见性依赖请求级上下文（session 绑定目录 / env），启动时刻不可见，
+    固化的初始清单可能为"暂无"，请求期刷新后即为当前真实清单。
+    """
+    entries, _external_ok = _collect_skill_entries()
+    return _render_tool_description(entries) + _TEMPLATE_EXCLUSION_SUFFIX
+
+
+# 最近一次外部源扫描成功的技能条目（进程级；瞬时扫描失败时沿用，防清单闪断）
+_last_good_entries: dict[str, str] = {}
+
+
+def refresh_skill_acceleration_description() -> list[str]:
+    """请求期刷新 skill_acceleration_exec 的 ToolCard.description，返回当前技能清单。
+
+    - 请求级上下文（session 绑定目录 / env）此时可见，外部发现能拿到真实清单；
+    - 幂等：清单无变化时不产生 card 写入；
+    - 异常安全：外部源扫描失败时沿用最近一次成功清单（``_last_good_entries``），
+      绝不让描述闪断为"暂无"；整体异常时保留 card 旧值并返回最近已知清单；
+    - 并发语义：ToolCard 为进程级共享对象，多请求并发下"最后写入生效"
+      （per-user sidecar 内并发请求可见技能目录一致，无实际冲突）。
+
+    Returns:
+        当前可见技能的 external_name 列表（排序后；空列表表示无加速技能）。
+    """
+    global _last_good_entries
+    try:
+        entries, external_ok = _collect_skill_entries()
+        if external_ok:
+            _last_good_entries = dict(entries)
+        elif _last_good_entries:
+            entries = _last_good_entries
+        card = globals().get("skill_turbo")
+        card_obj = getattr(card, "card", None)
+        if card_obj is not None:
+            new_desc = _render_tool_description(entries) + _TEMPLATE_EXCLUSION_SUFFIX
+            if card_obj.description != new_desc:
+                card_obj.description = new_desc
+        return sorted(entries)
+    except Exception:
+        logger.warning(
+            "[ToolsLoader] refresh skill_acceleration_exec description failed, keep old",
+            exc_info=True,
+        )
+        return sorted(_last_good_entries)
+
+# 中立收尾
+
+# 通用交付确认收尾：非 PPT 技能（docx/xlsx 等）交付节点产物 info 声明
+# send_file_status=sent 时使用（与 NEUTRAL 的区别：明确文件已发送，
+# 禁止重复调用/重复发送）。PPT 技能不走本提示（有专属骨架路径）。
+_SKILL_TURBO_STOP_HINT_CONFIRMED = (
+    "\n\n[SYSTEM] The skill_acceleration_exec task has finished, and the internal "
+    "delivery pipeline confirmed that the file(s) have been generated and sent "
+    "to the user. Summarize the result for the user now based on the artifact "
+    "summary above. Do NOT call skill_acceleration_exec, skill_tool, or "
+    "send_file_to_user again for this task."
 )
+
+
+# 中立收尾（按语言切换，语言源复用 request metadata；两份停止提示保持同语言）
+_SKILL_TURBO_STOP_HINT_NEUTRAL = {
+    "cn": (
+        "\n\n[SYSTEM] skill_acceleration_exec 任务已结束，但内部交付流水线未能确认"
+        "文件已生成并发送给用户。请基于上方产物摘要如实向用户总结：明确说明哪些部分"
+        "未完成或失败、文件尚未交付。不要声称文件已发送。除非用户明确要求重试，"
+        "不要再次调用 skill_acceleration_exec 或 skill_tool。也不要调用 "
+        "send_file_to_user；文件交付由内部流水线处理。"
+    ),
+    "en": (
+        "\n\n[SYSTEM] The skill_acceleration_exec task has finished, but the internal "
+        "delivery pipeline did NOT confirm that the file(s) were generated and sent "
+        "to the user. You should now summarize this result to the user HONESTLY "
+        "based on the artifact summary above: clearly state which parts are "
+        "incomplete or failed and that the file has NOT been delivered. Do NOT "
+        "claim the file was sent. Do NOT call skill_acceleration_exec or skill_tool "
+        "again for this task unless the user asks for a retry. Do NOT call "
+        "send_file_to_user either; file delivery is handled by the internal pipeline."
+    ),
+}
+
+_PPT_DELIVERY_SUMMARY_POST_TOOL_HINT = {
+    "cn": (
+        "\n\n[SYSTEM] PPT 交付总结骨架将由系统在本工具结果之后通过流式通道发送给用户，"
+        "无需在本回合重复输出交付总结。禁止 tool_call，禁止再调 "
+        "send_file_to_user / skill_tool / skill_acceleration_exec。"
+    ),
+    "en": (
+        "\n\n[SYSTEM] The PPT delivery summary skeleton will be streamed to the user "
+        "by the system after this tool result; do NOT repeat the delivery summary "
+        "in this turn. No further tool calls. Do NOT call send_file_to_user / "
+        "skill_tool / skill_acceleration_exec again."
+    ),
+}
+
+_EN_LANGUAGE_VALUES = frozenset({"en", "en-us", "english"})
+_CN_LANGUAGE_VALUES = frozenset({"zh", "cn", "zh-cn", "chinese"})
+
+
+def _resolve_stop_hint_language() -> str:
+    """停止提示语言：读 request metadata 的 language/preferred_language，默认中文。"""
+    try:
+        meta = get_current_request_metadata()
+    except Exception:
+        return "cn"
+    if isinstance(meta, dict):
+        for key in ("language", "preferred_language"):
+            raw = str(meta.get(key) or "").strip().lower()
+            if raw in _EN_LANGUAGE_VALUES:
+                return "en"
+            if raw in _CN_LANGUAGE_VALUES:
+                return "cn"
+    return "cn"
 
 # HITL 续跑没有外层 tool_result / DeliverySummaryRail；可见终稿用骨架或安全短句，
 # 禁止把产物摘要账本发给用户。
@@ -51,13 +289,14 @@ PPT_TURBO_UNCONFIRMED_FINISH_TEXT = (
 )
 _SKILL_TURBO_ARTIFACT_SUMMARY_MARKER = "[SkillAccelerationExec 产物摘要]"
 
-# 工具返回值会先被 AbilityManager 收成 ToolMessage。after_tool_call 再用
-# StreamEventRail._tool_interrupted_message（随 prompt 语言中/英）覆写 tool_msg。
-# _fix_incomplete_tool_context 认 rail 文案 + 中英文 legacy 模板，故本常量取中文
-# 默认句即可。禁止返回 {'success': False, 'error': '任务已暂停等待审批'}：
-# str(dict) 进 ToolMessage 后模型会当成加速失败并回退 skill_tool。
+# HITL 暂停时工具不再返回本占位文案（改返回 _SKILL_TURBO_HITL_RESULT_KEY 标记
+# dict，见 build_skill_turbo_hitl_result）。本常量保留两个用途：
+# 1) after_tool_call 改写后的 tool_msg 文案基准（"已暂停等待回答"，非"被用户打断"，
+#    防止外层模型把暂停误读为失败而放弃加速通道）；
+# 2) _fix_incomplete_tool_context 的中断占位识别模板。
 _SKILL_TURBO_HITL_PLACEHOLDER = (
-    "[工具执行被中断] 工具 skill_acceleration_exec 执行过程中被用户打断，没有执行结果。"
+    "[技能加速已暂停] 工具 skill_acceleration_exec 正在等待用户回答，"
+    "回答后将自动继续执行，没有失败。"
 )
 
 # ── 待在外层 tool_result 之后发出的 PPT 交付总结 ──
@@ -229,7 +468,14 @@ def reset_skill_turbo_outer_todo_active(token: Token) -> None:
 # skill_turbo_tools catch AbortError 后提取 ToolInterruptException 存入此 ContextVar，
 # StreamEventRail.after_tool_call 读取后改写 ctx.inputs.tool_result 为 TIE，
 # 使 harness 原生 HITL 机制（build_interrupt_state）检测并触发暂停。
+# ContextVar 依赖工具体与 after_tool_call 同执行上下文，跨上下文时不可见，
+# 仅作为旧路径兜底；主信号走工具返回值中的 _SKILL_TURBO_HITL_RESULT_KEY 标记。
 _skill_turbo_hitl_tic: ContextVar[Any] = ContextVar("skill_turbo_hitl_tic", default=None)
+
+# HITL 暂停信号随工具返回值传递：SDK tracer 在工具结束时会对含返回值的
+# span 执行 copy.deepcopy，故标记值必须是可深拷贝的纯数据（dict/JSON），
+# 禁止直接返回 ToolInterruptException 等异常对象（无法按 SDK 方式重建）。
+_SKILL_TURBO_HITL_RESULT_KEY = "__skill_turbo_hitl__"
 
 
 def set_skill_turbo_hitl_tic(tic: Any) -> Token:
@@ -238,6 +484,13 @@ def set_skill_turbo_hitl_tic(tic: Any) -> Token:
 
 def get_skill_turbo_hitl_tic() -> Any:
     return _skill_turbo_hitl_tic.get()
+
+
+def build_skill_turbo_hitl_result(tic: Any) -> dict[str, Any]:
+    """构造随工具返回值传递的 HITL 暂停标记（deepcopy 安全的纯数据）。"""
+    request = getattr(tic, "request", None)
+    dump = request.model_dump(mode="json") if request is not None else {}
+    return {_SKILL_TURBO_HITL_RESULT_KEY: True, "request": dump}
 
 
 def set_pending_ppt_delivery_summary(summary: str) -> None:
@@ -255,18 +508,44 @@ def take_pending_ppt_delivery_summary() -> str:
     return text
 
 
+def _ppt_delivery_summary_start() -> str:
+    """PPT 交付总结骨架起始标记（常量归 ppt code 所有，经动态包引用）。
+
+    包名经 ``dynamic_package_prefix("ppt")`` 构造（前缀单一来源，
+    禁止手写 ``skill_turbo_codes_`` 字面量，防止技能改名时骨架标记
+    静默漂移）。ppt 技能不在场（动态包未注册）时返回空串——调用方
+    对空标记的 startswith 判断显式短路，走各自的兜底文案路径。
+
+    .. note::
+        当前为 PPT 专属交付确认机制（resume 骨架 + send_file 判定）。
+        泛化路线图（meta.json ``deliver_skeleton`` 声明 + 引擎按声明路由）
+        见设计方案 §10 后续扩展，届时新增带交付确认的技能无需改引擎。
+    """
+    try:
+        import importlib
+
+        from jiuwenswarm.server.runtime.skill_turbo.turbo_package_loader import (
+            dynamic_package_prefix,
+        )
+
+        module = importlib.import_module(
+            f"{dynamic_package_prefix('ppt')}ppt.delivery_summary"
+        )
+        return str(module.DELIVERY_SUMMARY_START)
+    except Exception:
+        return ""
+
+
 async def emit_pending_ppt_delivery_summary(session: "Session") -> bool:
     """在外层 tool_result 之后发出无 task_id 的交付总结 chat.delta。
 
     返回是否实际发出。session 为 None 或骨架非法时静默跳过。
     """
-    from jiuwenswarm.server.runtime.skill_turbo.skill_codes.ppt.delivery_summary import (
-        DELIVERY_SUMMARY_START,
-    )
     from openjiuwen.core.session.stream.base import OutputSchema
 
     summary = take_pending_ppt_delivery_summary()
-    if not summary.startswith(DELIVERY_SUMMARY_START):
+    start_marker = _ppt_delivery_summary_start()
+    if not start_marker or not summary.startswith(start_marker):
         return False
     if session is None:
         logger.warning(
@@ -354,63 +633,6 @@ def _resume_user_input_from_raw(
         if callable(convert):
             return convert(raw, resume_ctx)
     return raw
-
-
-# ────────────────── 中断恢复 hint（一次性 fresh 调用守卫） ──────────────────
-# prepare_interrupt_artifacts_for_request 注入产物摘要时，会在 request.metadata 上
-# 挂一份结构化 hint。本请求内 skill_acceleration_exec 若被全新调用（非 HITL resume），
-# 工具层守卫据此先拒绝一次并附上产物摘要，引导 LLM 走非 skillTurbo 流程基于已有
-# 产物继续；LLM 明确重试（视为全新任务）时 hint 已被消费，放行。
-# request.metadata 经 _update_runtime_config 浅拷贝进 rail metadata（内部 dict 共享
-# 引用），故 consumed 标记在原地标记即可对所有副本生效。
-
-SKILL_TURBO_INTERRUPT_RECOVERY_KEY = "skill_turbo_interrupt_recovery"
-
-
-def set_interrupt_recovery_hint(request: Any, *, summary: str, skill: str = "") -> None:
-    """把一次性中断恢复 hint 挂到 request.metadata（仅注入产物摘要的请求调用）。"""
-    metadata = getattr(request, "metadata", None)
-    if not isinstance(metadata, dict):
-        # metadata 缺失时无处挂载：放弃 hint，守卫对本请求不生效（降级，不影响主流程）
-        return
-    metadata[SKILL_TURBO_INTERRUPT_RECOVERY_KEY] = {
-        "summary": summary,
-        "skill": skill,
-        "request_id": str(getattr(request, "request_id", "") or ""),
-        "consumed": False,
-    }
-
-
-def _pending_interrupt_recovery_hint(request_metadata: Any) -> dict[str, Any] | None:
-    """读取本请求未消费的中断恢复 hint；无 hint 或已消费返回 None。"""
-    if not isinstance(request_metadata, dict):
-        return None
-    hint = request_metadata.get(SKILL_TURBO_INTERRUPT_RECOVERY_KEY)
-    if isinstance(hint, dict) and hint.get("summary") and not hint.get("consumed"):
-        return hint
-    return None
-
-
-def _consume_interrupt_recovery_hint(hint: dict[str, Any]) -> None:
-    """标记 hint 已消费：同请求内的下一次 fresh 调用放行（视为明确的全新任务）。"""
-    hint["consumed"] = True
-
-
-def _build_interrupt_recovery_reject(hint: dict[str, Any]) -> dict[str, Any]:
-    """构造 fresh 调用守卫的一次性拒绝结果（success=False，引导非 skillTurbo 继续）。"""
-    summary = str(hint.get("summary") or "").strip()
-    error = (
-        "检测到上一轮被中断的 SkillAccelerationExec 任务仍有可复用的已完成产物：\n\n"
-        f"{summary}\n\n"
-        "全新调用 skill_acceleration_exec 会丢弃以上产物并从 p0 重新规划执行，"
-        "导致已完成的工作被重复执行。\n"
-        "- 若用户想继续或完成被中断的任务：请勿调用 skill_acceleration_exec，"
-        "改用 skill_tool 走标准流程（可基于以上产物文件继续），"
-        "或用 read_file / edit_file 等工具直接处理产物文件；\n"
-        "- 若用户明确要求与已有产物无关的全新任务：请直接再次调用 "
-        "skill_acceleration_exec，本次将被放行（该提示仅生效一次）。"
-    )
-    return {"success": False, "error": error}
 
 
 def _resolve_skill_turbo_resume_session_id(
@@ -510,6 +732,25 @@ def _ppt_delivery_failed_error(artifact_holder: dict[str, Any] | None) -> str:
     )
 
 
+def _generic_delivery_confirmed(artifact_holder: dict[str, Any] | None) -> bool:
+    """非 PPT 技能的通用交付确认：任一节点产物 info 声明 send_file_status=sent。
+
+    仅认交付节点显式写入的确认信号（docx D8 / xlsx X9 的
+    ``__artifact__.info.send_file_status == "sent"``），不做模糊推断。
+    PPT 技能不经过本函数（有专属 p10_delivery 骨架路径，且 sent 必伴随
+    骨架，先行分支已拦截）。
+    """
+    for node_info in (artifact_holder or {}).values():
+        if not isinstance(node_info, dict):
+            continue
+        info = node_info.get("info")
+        if not isinstance(info, dict):
+            continue
+        if str(info.get("send_file_status") or "") == "sent":
+            return True
+    return False
+
+
 def visible_ppt_turbo_finish_text(
     holder: dict[str, Any] | None,
     *,
@@ -521,13 +762,10 @@ def visible_ppt_turbo_finish_text(
     成功时优先发 P10 已填好的交付骨架；没有骨架则用交付未确认的中立短句。
     失败只回可读错误。产物账本不得出现在返回值里。
     """
-    from jiuwenswarm.server.runtime.skill_turbo.skill_codes.ppt.delivery_summary import (
-        DELIVERY_SUMMARY_START,
-    )
-
     if success:
         skeleton = _ppt_delivery_summary(holder)
-        if skeleton.startswith(DELIVERY_SUMMARY_START):
+        start_marker = _ppt_delivery_summary_start()
+        if start_marker and skeleton.startswith(start_marker):
             return skeleton
         return PPT_TURBO_UNCONFIRMED_FINISH_TEXT
     text = str(detail or "").strip() or "任务未完成"
@@ -548,6 +786,7 @@ def _wrap_skill_turbo_result(
     artifact_text = _build_artifact_summary(artifact_holder or {})
     ppt_summary = _ppt_delivery_summary(artifact_holder)
     if result_dict.get("success"):
+        lang = _resolve_stop_hint_language()
         parts = [result_dict.get("result") or ""]
         if artifact_text:
             parts.append(artifact_text)
@@ -555,11 +794,16 @@ def _wrap_skill_turbo_result(
             # 骨架不进 tool_result 正文、也不在流水线内提前 chat.delta；
             # 挂到 ContextVar，由 after_tool_call 在外层 tool_result 之后流式发出。
             set_pending_ppt_delivery_summary(ppt_summary)
-            parts.append(_PPT_DELIVERY_SUMMARY_POST_TOOL_HINT)
+            parts.append(_PPT_DELIVERY_SUMMARY_POST_TOOL_HINT[lang])
         else:
             clear_pending_ppt_delivery_summary()
-            # 无 P10 骨架 = 交付未确认，不宣称文件已发送。
-            parts.append(_SKILL_TURBO_STOP_HINT_NEUTRAL)
+            if _generic_delivery_confirmed(artifact_holder):
+                # 非 PPT 技能交付节点已确认发送（case_3 docx D8 send=sent
+                # 却被"未确认"提示误导重复发送）：按已确认收尾。
+                parts.append(_SKILL_TURBO_STOP_HINT_CONFIRMED[lang])
+            else:
+                # 无 P10 骨架且无通用确认信号 = 交付未确认，不宣称文件已发送。
+                parts.append(_SKILL_TURBO_STOP_HINT_NEUTRAL[lang])
         result_dict["result"] = "\n\n".join(p for p in parts if p)
     else:
         clear_pending_ppt_delivery_summary()
@@ -572,21 +816,7 @@ def _wrap_skill_turbo_result(
 
 @tool(
     name="skill_acceleration_exec",
-    description=(
-        "技能加速模块。当用户意图涉及技能类任务（如生成 PPT、文档转换等结构化产出）时，"
-        "可优先尝试调用此工具以获得更快的生成流程。工具内部会二次判断是否真正匹配已支持的技能，"
-        "不匹配时自动降级为普通对话。当前内部支持 ppt-craft 技能（PPT 演示文稿制作）。"
-        "【重要】每次调用仅处理一个独立任务。若用户要求生成多个同类产物（如多份不同主题的 PPT），"
-        "必须为每个产物分别发起独立调用，且严格串行：等待前一次调用完全结束并收到返回结果后，"
-        "才能发起下一次调用。严禁在同一轮对话中并行发起多次调用。"
-        "【临时排除】当任务需要使用自定义/指定模板时，不要调用此工具--"
-        "无论该模板路径是出现在当前用户消息里、引用历史会话中生成或上传的模板"
-        "（如“使用刚才生成的风格模板”“用之前那个模板”等自然语言引用）、"
-        "还是消息中含 模板目录路径、模板主文件路径、pack_dir 等字段名。"
-        "判断“是否涉及自定义模板”应基于语义。"
-        "当前 skill 加速器暂未适配模板包功能，此类请求应改用 skill_tool 走 pptx-craft 标准流程。"
-        "此排除规则为临时措施，待 skill 加速器适配模板功能后移除。"
-    ),
+    description=_build_tool_description(),
     stateless=True,
 )
 async def skill_turbo(query: str) -> dict[str, Any] | str:
@@ -635,13 +865,10 @@ async def skill_turbo(query: str) -> dict[str, Any] | str:
     # 忠实总结——多数选区请求会保留"选区"字样，但 LLM 偶尔会脑补成"生成 N 页 PPT"
     # （上述 case 即如此，query 变成"8页左右"）。因此本块是对"query 保留选区语义"的兜底；
     # 真正的主防线在 SkillTurboPromptRail 注入的排除提示词（LLM 调工具前能看到完整
-    # user message）。两层叠加降低误进概率。
+    # user message）。两层引用同一份关键词（region_edit.py），叠加降低误进概率。
     # 删除方式：待 pptx-craft 流水线支持"编辑已有 PPT"短路分支后，搜索 [REGION-EDIT-BYPASS] 删除本块。
-    region_keywords = (
-        "PPT选区", "选区原文", "选区类型", "选区位置", "选区容器",
-        "选区 class", "选区class", "修改要求", "选区字段", "布局优化", "选区优化", "内容优化"
-    )
-    if any(kw in query for kw in region_keywords):
+    from jiuwenswarm.server.runtime.skill_turbo.region_edit import REGION_EDIT_KEYWORDS
+    if any(kw in query for kw in REGION_EDIT_KEYWORDS):
         logger.info(
             "[SkillTurboTool] 检测到 PPT 选区/编辑已有 PPT 请求，跳过 skill 加速器，"
             "建议改用 skill_tool 走 pptx-craft 标准流程或直接编辑已有 PPT 文件"
@@ -664,7 +891,6 @@ async def skill_turbo(query: str) -> dict[str, Any] | str:
     )
     from jiuwenswarm.agents.harness.common.tools.subagent_executor.context_vars import (
         get_effective_request_workspace_dir,
-        get_effective_request_output_dir,
     )
     from openjiuwen.core.session.stream.base import OutputSchema
     from jiuwenswarm.server.runtime.skill_turbo.plan_node import AbortError
@@ -842,20 +1068,6 @@ async def skill_turbo(query: str) -> dict[str, Any] | str:
                 task_states=resume_ctx.get("task_states"),
             )
         else:
-            # fresh 调用守卫：本请求注入过"中断恢复 hint"（上一轮中断任务有未消费产物）
-            # 时，先一次性拒绝并附产物摘要，避免新 executor 从 p0 清盘重跑（产物已在
-            # prepare_interrupt_artifacts_for_request 注入时落盘清空，此处只拦 LLM 的
-            # 盲目重启）。LLM 重试（明确全新任务）时 hint 已消费，直接放行。
-            recovery_hint = _pending_interrupt_recovery_hint(request_metadata)
-            if recovery_hint is not None:
-                _consume_interrupt_recovery_hint(recovery_hint)
-                logger.info(
-                    "[SkillTurboTool] interrupt recovery guard: reject fresh "
-                    "run_stream once (unconsumed artifacts from interrupted task)"
-                )
-                return _wrap_skill_turbo_result(
-                    _build_interrupt_recovery_reject(recovery_hint)
-                )
             stream = skill_turbo_inst.run_stream(
                 query, inputs, request_id, channel_id
             )
@@ -968,7 +1180,7 @@ async def skill_turbo(query: str) -> dict[str, Any] | str:
             )
             set_skill_turbo_hitl_tic(tic)
             hitl_interrupt = True
-            return _SKILL_TURBO_HITL_PLACEHOLDER
+            return build_skill_turbo_hitl_result(tic)
         # Fallback: AbortError 无 ToolInterruptException cause，返回错误
         logger.warning("[SkillTurboTool] AbortError without ToolInterruptException cause")
         return _wrap_skill_turbo_result(

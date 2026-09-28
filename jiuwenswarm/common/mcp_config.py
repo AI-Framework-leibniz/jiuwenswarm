@@ -875,6 +875,9 @@ class OfficeClawMcpRegistration:
     # Relay callback invocation id pinned into the MCP subprocess env for this
     # request (OFFICE_CLAW_INVOCATION_ID). Empty when unknown / not office-claw.
     invocation_id: str = ""
+    # Owning chat session. Request-scoped Team rails use this stable key to
+    # discover the current registration without serializing tools into TeamSpec.
+    session_id: str = ""
 
 
 # Request-scoped long-lived MCP worker pool
@@ -1359,6 +1362,9 @@ _live_office_claw_registration_count_by_tool_name: dict[str, int] = {}
 _live_office_claw_tool_instances: weakref.WeakKeyDictionary[Any, frozenset[str]] = (
     weakref.WeakKeyDictionary()
 )
+_live_request_scoped_mcp_registrations_by_session: dict[
+    str, OfficeClawMcpRegistration
+] = {}
 _live_office_claw_allowlist_lock = threading.Lock()
 
 
@@ -1455,6 +1461,61 @@ def get_live_office_claw_allowlist_for_tool_instance(
         return _live_office_claw_tool_instances.get(tool)
 
 
+def publish_request_scoped_mcp_registration(
+    registration: OfficeClawMcpRegistration,
+) -> None:
+    """Expose the current request's MCP tools to in-process Team members."""
+
+    session_id = str(registration.session_id or "").strip()
+    if not session_id:
+        return
+    with _live_office_claw_allowlist_lock:
+        _live_request_scoped_mcp_registrations_by_session[session_id] = registration
+
+
+def get_request_scoped_mcp_registration(
+    session_id: str,
+) -> OfficeClawMcpRegistration | None:
+    """Return the current in-process request-scoped MCP registration for a session."""
+
+    normalized = str(session_id or "").strip()
+    if not normalized:
+        return None
+    with _live_office_claw_allowlist_lock:
+        return _live_request_scoped_mcp_registrations_by_session.get(normalized)
+
+
+def replace_request_scoped_mcp_registration(
+    expected: OfficeClawMcpRegistration,
+    replacement: OfficeClawMcpRegistration,
+) -> bool:
+    """Replace one session state only while *expected* still owns it."""
+
+    session_id = str(expected.session_id or "").strip()
+    replacement_session_id = str(replacement.session_id or "").strip()
+    if not session_id or replacement_session_id != session_id:
+        return False
+    with _live_office_claw_allowlist_lock:
+        if _live_request_scoped_mcp_registrations_by_session.get(session_id) is not expected:
+            return False
+        _live_request_scoped_mcp_registrations_by_session[session_id] = replacement
+        return True
+
+
+def revoke_request_scoped_mcp_registration(
+    registration: OfficeClawMcpRegistration,
+) -> None:
+    """Revoke *registration* without clearing a newer request for the session."""
+
+    session_id = str(registration.session_id or "").strip()
+    if not session_id:
+        return
+    with _live_office_claw_allowlist_lock:
+        current = _live_request_scoped_mcp_registrations_by_session.get(session_id)
+        if current is registration:
+            _live_request_scoped_mcp_registrations_by_session.pop(session_id, None)
+
+
 def _office_claw_invocation_id_from_params(params: Mapping[str, Any] | None) -> str:
     """Extract OFFICE_CLAW_INVOCATION_ID from MCP connect params, if present."""
 
@@ -1499,6 +1560,7 @@ def _clear_live_office_claw_allowlists_for_tests() -> None:
         _live_office_claw_allowlists_by_tool_id.clear()
         _live_office_claw_registration_count_by_tool_name.clear()
         _live_office_claw_tool_instances.clear()
+        _live_request_scoped_mcp_registrations_by_session.clear()
 
 
 def _office_claw_tool_ids_carrier(agent: Any) -> Any:
@@ -1557,12 +1619,22 @@ def set_agent_office_claw_tool_ids(agent: Any, tool_ids: Iterable[str] | None) -
             pass
 
 
-def clear_agent_office_claw_tool_ids(agent: Any) -> None:
-    """Remove the request-scoped allowlist from the shared ability_manager."""
+def clear_agent_office_claw_tool_ids(
+    agent: Any,
+    expected_tool_ids: Iterable[str] | None = None,
+) -> None:
+    """Remove the allowlist, optionally only when it still matches expected ids."""
 
     carrier = _office_claw_tool_ids_carrier(agent)
     if carrier is None:
         return
+    if expected_tool_ids is not None:
+        expected = frozenset(
+            str(tool_id) for tool_id in expected_tool_ids if str(tool_id)
+        )
+        current = getattr(carrier, _OFFICE_CLAW_TOOL_IDS_ATTR, None)
+        if current != expected:
+            return
     try:
         delattr(carrier, _OFFICE_CLAW_TOOL_IDS_ATTR)
     except AttributeError:
@@ -1835,11 +1907,56 @@ async def _list_office_claw_mcp_tools_uncached(
         await stack.aclose()
 
 
+def _apply_tool_filter(
+    tool_defs: list[dict[str, Any]],
+    config: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """按 config.tool_filter（启用工具名白名单）裁剪 tool defs。
+
+    缺省/非 list → 全量返回（兼容旧载荷）；空 list → 空列表（server 保留在册，
+    注入零工具）。工具名与 OA 侧 mcp_connector_tools.tool_name 同源（均来自
+    MCP tools/list 的 name），两侧天然一致。
+    """
+    raw = config.get("tool_filter")
+    if not isinstance(raw, list):
+        return tool_defs
+    allow = {str(name).strip() for name in raw if str(name).strip()}
+    if not allow:
+        return []
+    return [
+        tool for tool in tool_defs
+        if str(tool.get("name") or "").strip() in allow
+    ]
+
+
 async def list_request_mcp_server_tools(
     server_name: str,
     config: Mapping[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """发现单个用户连接器的 tool schema。
+    """发现单个用户连接器的 tool schema，并按 config.tool_filter 裁剪。
+
+    本函数是所有工具发现的唯一入口（McpServerRegistry._discover / 周期扫描 /
+    旧路径 request-scoped 注册均调用），在入口统一过滤即可让三条消费路径
+    同时只暴露启用工具。过滤只影响工具列表，不影响 connect_params。
+
+    空名单（[] / 全空白项）短路：全关工具不依赖连接器可达性
+    （「全关工具 ≠ 断开连接器」）——不建立 MCP 连接、不调 tools/list，
+    返回最小 connect_params 供 registry 入册占位（零工具，不会被 acquire；
+    filter 变化触发 update 重扫时会走真实发现覆盖）。
+    """
+    raw = config.get("tool_filter")
+    if isinstance(raw, list) and not {str(name).strip() for name in raw if str(name).strip()}:
+        client_type = _normalize_mcp_client_type(config.get("type")) or "stdio"
+        return [], {"_mcp_client_type": client_type}
+    tool_defs, params = await _list_request_mcp_server_tools_inner(server_name, config)
+    return _apply_tool_filter(tool_defs, config), params
+
+
+async def _list_request_mcp_server_tools_inner(
+    server_name: str,
+    config: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """发现单个用户连接器的 tool schema（未过滤）。
 
     config 是 Relay 的启动载荷（无 tool schema），需起一次服务调 list_tools() 收集，
     对齐 _list_office_claw_mcp_tools_uncached。支持 stdio / sse / streamable-http。
@@ -2374,18 +2491,22 @@ __all__ = [
     "get_active_office_claw_mcp_tool_ids",
     "get_live_office_claw_allowlist_for_tool_id",
     "get_live_office_claw_allowlist_for_tool_instance",
+    "get_request_scoped_mcp_registration",
     "invalidate_office_claw_mcp_schema_cache",
     "is_office_claw_tool_name_live_concurrent",
     "list_office_claw_mcp_tools",
     "list_request_mcp_server_tools",
     "preflight_mcp_server_reachable",
     "publish_live_office_claw_allowlist",
+    "publish_request_scoped_mcp_registration",
     "register_live_office_claw_tool_instance",
     "release_request_scoped_mcp_sessions",
+    "replace_request_scoped_mcp_registration",
     "shutdown_pooled_mcp_worker",
     "resolve_active_office_claw_invocation_id",
     "resolve_active_office_claw_tool_id",
     "revoke_live_office_claw_allowlist",
+    "revoke_request_scoped_mcp_registration",
     "unregister_live_office_claw_tool_instance",
     "validate_office_claw_mcp_config",
     "_is_blocked_host",

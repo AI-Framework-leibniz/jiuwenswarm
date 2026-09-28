@@ -15,13 +15,16 @@ from jiuwenswarm.common.audit_emit import (
     emit_audit_evt,
     emit_audit_ua,
 )
+from jiuwenswarm.common.audit_gate import set_audit_config_enabled
 
 
 @pytest.fixture(autouse=True)
 def _audit_memory():
     mem = MemoryEmitter()
     reset_audit_manager(AuditManager(emitter=mem))
+    set_audit_config_enabled(True)
     yield mem
+    set_audit_config_enabled(False)
     reset_audit_manager()
 
 
@@ -62,6 +65,46 @@ def test_emit_audit_caller_is_business_site(_audit_memory: MemoryEmitter, monkey
     caller = _audit_memory.records[0]["attributes"]["caller"]
     assert caller.startswith("test_audit_emit.test_emit_audit_caller_is_business_site:")
     assert "audit_claw_log" not in caller
+
+
+def test_emit_audit_ua_passes_uid_without_context(
+    _audit_memory: MemoryEmitter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JIUWENSWARM_EDITION", "enterprise")
+    emit_audit_ua(SUBMDL="api_client", PROC="http_agent_send", UA="ok", UID="user1")
+    attrs = _audit_memory.records[0]["attributes"]
+    assert attrs.get("UID") == "user1"
+
+
+def test_emit_audit_maps_session_request_to_trace_txn(
+    _audit_memory: MemoryEmitter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """挂点传 session_id/request_id → 映射为 trace_id/txn_seq。"""
+    monkeypatch.setenv("JIUWENSWARM_EDITION", "enterprise")
+    emit_audit_ua(
+        SUBMDL="gateway",
+        PROC="http_resolve_identity",
+        UA="ok",
+        UID="user1",
+        session_id="webhttp_abc",
+        request_id="req_001",
+    )
+    attrs = _audit_memory.records[0]["attributes"]
+    assert attrs.get("trace_id") == "webhttp_abc"
+    assert attrs.get("txn_seq") == "req_001"
+    assert attrs.get("UID") == "user1"
+
+
+def test_emit_audit_noop_when_config_disabled(
+    _audit_memory: MemoryEmitter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JIUWENSWARM_EDITION", "enterprise")
+    set_audit_config_enabled(False)
+    emit_audit_ua(SUBMDL="gateway", PROC="http_agent_send", UA="ok")
+    assert _audit_memory.records == []
 
 
 def test_audit_timer_cost_ms() -> None:

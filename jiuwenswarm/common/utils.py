@@ -1,4 +1,5 @@
 import atexit
+import functools
 from jiuwenswarm.edition import is_enterprise
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
@@ -47,11 +48,18 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal, Optional
 import logging
 import queue as _queue
+from jiuwenswarm.common.log_context import NO_SESSION_ID, current_log_session_id
 from logging.handlers import BaseRotatingHandler, QueueHandler, QueueListener
 from collections import OrderedDict
 import yaml
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
+
+from jiuwenswarm.common.path_provider import (
+    PathCategory,
+    current_path_context,
+    get_path_provider,
+)
 
 # 尝试导入 pythonjsonlogger（用于 JSON 格式化输出，缺失时优雅降级为文本 Formatter）
 try:
@@ -360,7 +368,11 @@ def _deep_merge(
         if key not in override:
             result[key] = copy.deepcopy(tmpl_val)
         elif isinstance(tmpl_val, dict) and isinstance(override.get(key), dict):
-            result[key] = _deep_merge(tmpl_val, override[key], depth + 1)
+            # 模板空表（如 permissions.agents: {}）表示开放分桶，保留用户键。
+            if not tmpl_val:
+                result[key] = copy.deepcopy(override[key])
+            else:
+                result[key] = _deep_merge(tmpl_val, override[key], depth + 1)
         else:
             result[key] = override[key]
 
@@ -669,6 +681,37 @@ def _find_package_root() -> Path | None:
     return current
 
 
+# 播种在冷启动时按租户逐次调用，每次都要重解析出厂模板，故按文件 mtime/size 缓存语言解析结果。
+_PREFERRED_LANGUAGE_CACHE: dict[str, tuple[tuple[int, int], str | None]] = {}
+
+
+def _read_preferred_language_cached(cfg_path: Path) -> str | None:
+    """读取该路径声明的 zh/en；文件缺失、解析异常或值非法时返回 None。"""
+    try:
+        st = cfg_path.stat()
+    except OSError:
+        return None
+    cache_key = str(cfg_path)
+    stamp = (st.st_mtime_ns, st.st_size)
+    cached = _PREFERRED_LANGUAGE_CACHE.get(cache_key)
+    if cached is not None and cached[0] == stamp:
+        # 缓存也记住“该路径无有效语言”，但解析异常不缓存，保持每次报错可见。
+        return cached[1]
+    value: str | None = None
+    try:
+        rt = YAML()
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = rt.load(f) or {}
+        lang = str(data.get("preferred_language") or "").strip().lower()
+        if lang in ("zh", "en"):
+            value = lang
+    except Exception as e:
+        logger.error(f"Failed to load config.yaml: {e}")
+        return None
+    _PREFERRED_LANGUAGE_CACHE[cache_key] = (stamp, value)
+    return value
+
+
 def _resolve_preferred_language(
     config_yaml_dest: Path, explicit: Optional[str]
 ) -> str:
@@ -678,16 +721,9 @@ def _resolve_preferred_language(
         return lang if lang in ("zh", "en") else "zh"
     # 稀疏 override 模式：先读 override，再读模板
     for cfg_path in (config_yaml_dest, resolve_shipped_template_config_path()):
-        if cfg_path.exists():
-            try:
-                rt = YAML()
-                with open(cfg_path, "r", encoding="utf-8") as f:
-                    data = rt.load(f) or {}
-                lang = str(data.get("preferred_language") or "").strip().lower()
-                if lang in ("zh", "en"):
-                    return lang
-            except Exception as e:
-                logger.error(f"Failed to load config.yaml: {e}")
+        lang = _read_preferred_language_cached(cfg_path)
+        if lang is not None:
+            return lang
     return "zh"
 
 
@@ -1850,6 +1886,46 @@ def get_root_dir() -> Path:
     return _root_dir
 
 
+def _dispatch_path(category, *, node=None, session_id=None, explicit=None):
+    """Resolve optional overrides without displacing explicit tenant paths."""
+    if explicit is not None:
+        return None
+    provider = get_path_provider()
+    if provider is None:
+        return None
+    try:
+        ctx = current_path_context(session_id=session_id)
+        if category == PathCategory.SHARED_SKILLS_DIRS:
+            paths = provider.resolve_path_list(category, ctx)
+            if paths is None:
+                return None
+            resolved_paths = [Path(path) for path in paths]
+            return resolved_paths
+        path = provider.resolve_path(
+            category, ctx, node=node, session_id=ctx.session_id,
+        )
+        if path is None:
+            return None
+        return Path(path)
+    except Exception:
+        logger.warning(
+            "path provider resolve failed, fallback to default", exc_info=True
+        )
+        return None
+
+
+def _dispatch_workspace_directories():
+    """Resolve Workspace directory nodes from the path provider, if any."""
+    provider = get_path_provider()
+    if provider is None:
+        return None
+    try:
+        return provider.build_workspace_directories(current_path_context())
+    except Exception:
+        logger.warning("path provider workspace build failed", exc_info=True)
+        return None
+
+
 def get_agent_workspace_dir() -> Path:
     """Get the agent workspace directory path.
 
@@ -1861,6 +1937,9 @@ def get_agent_workspace_dir() -> Path:
         ``~/.jiuwenswarm/workspace_default/agent/jiuwenclaw_workspace``
         (or the request-bound tenant workspace when ContextVar is set).
     """
+    overridden = _dispatch_path(PathCategory.WORKSPACE)
+    if overridden is not None:
+        return overridden
     try:
         from jiuwenswarm.server.runtime.tenant_context import get_bound_jiuwenclaw_workspace
 
@@ -1879,6 +1958,9 @@ def get_default_project_workspace_dir() -> Path:
     under ``get_agent_workspace_dir()``. This directory is only the default cwd
     / workspace boundary for user task artifacts when no project is selected.
     """
+    overridden = _dispatch_path(PathCategory.PROJECT_WORKSPACE)
+    if overridden is not None:
+        return overridden
     return get_agent_workspace_dir() / "projects"
 
 
@@ -1892,6 +1974,13 @@ def get_default_project_session_workspace_dir(session_id: str | None = None) -> 
     workspace. If it is missing during early adapter initialization, the shared
     projects root is returned so no throwaway session directory is created.
     """
+    overridden = _dispatch_path(
+        PathCategory.PROJECT_SESSION_WORKSPACE,
+        session_id=session_id,
+    )
+    if overridden is not None:
+        overridden.mkdir(parents=True, exist_ok=True)
+        return overridden
     base = get_default_project_workspace_dir()
     raw_session = str(session_id or "").strip()
     if not raw_session:
@@ -1909,6 +1998,9 @@ def get_default_project_session_workspace_dir(session_id: str | None = None) -> 
 def get_prompt_attachment_dir() -> Path:
     """Get the jiuwenswarm prompt attachment directory path."""
 
+    overridden = _dispatch_path(PathCategory.PROMPT_ATTACHMENT)
+    if overridden is not None:
+        return overridden
     return get_agent_workspace_dir() / "prompt_attachment"
 
 
@@ -1930,6 +2022,9 @@ def get_agent_root_dir() -> Path:
     - 企业版: ``~/.jiuwenswarm/workspace_default/agent/``
     （或请求绑定的 agent root ContextVar）。
     """
+    overridden = _dispatch_path(PathCategory.AGENT_ROOT)
+    if overridden is not None:
+        return overridden
     try:
         from jiuwenswarm.server.runtime.tenant_context import get_bound_agent_root
 
@@ -1961,16 +2056,25 @@ def collapse_nested_agent_workspace_dir(path: Path | str) -> Path:
     ``.../agent/jiuwenclaw_workspace`` (current). PPT tooling historically
     used ``{cwd}/workspace`` as the session parent, which nests a second
     ``workspace`` directory when cwd is already the agent workspace.
+
+    [PERF] 每轮回话都会以相同入参重复调用(_seed_runtime_cwd 等),resolve()
+    是 real FS 调用(实测 cwd_seed 段 46-93ms/轮);同参结果按路径语义稳定,
+    lru_cache 后重复调用近零成本。
     """
-    resolved = Path(path).expanduser()
+    return Path(_collapse_workspace_dir_cached(str(path)))
+
+
+@functools.lru_cache(maxsize=8192)
+def _collapse_workspace_dir_cached(path_str: str) -> str:
+    resolved = Path(path_str).expanduser()
     try:
         resolved = resolved.resolve()
     except OSError:
         resolved = resolved.absolute()
     parent_name = resolved.parent.name.lower()
     if resolved.name.lower() == "workspace" and parent_name in _AGENT_WORKSPACE_DIR_NAMES:
-        return resolved.parent
-    return resolved
+        return str(resolved.parent)
+    return str(resolved)
 
 
 def get_agent_sessions_relative_dir() -> Path:
@@ -2134,6 +2238,9 @@ def get_agent_memory_dir() -> Path:
     Returns:
         Path to memory directory: ~/.jiuwenswarm/agent/jiuwenclaw_workspace/memory
     """
+    overridden = _dispatch_path(PathCategory.MEMORY)
+    if overridden is not None:
+        return overridden
     return get_agent_workspace_dir() / "memory"
 
 
@@ -2145,6 +2252,9 @@ def get_agent_skills_dir() -> Path:
     Returns:
         Path to skills directory: ~/.jiuwenswarm/agent/jiuwenclaw_workspace/skills
     """
+    overridden = _dispatch_path(PathCategory.SKILLS)
+    if overridden is not None:
+        return overridden
     return get_agent_workspace_dir() / "skills"
 
 
@@ -2179,6 +2289,9 @@ def get_shared_agent_skills_dirs() -> list[Path]:
     """
     from jiuwenswarm.common.local_env_config import read_env
 
+    overridden = _dispatch_path(PathCategory.SHARED_SKILLS_DIRS)
+    if overridden is not None:
+        return overridden
     raw = read_env(JIUWENSWARM_SHARED_SKILLS_DIRS_ENV, "")
     if not raw or not raw.strip():
         return []
@@ -2249,6 +2362,9 @@ def get_interactions_dir() -> Path:
     Returns:
         Path to interactions directory: {workspace}/agent/jiuwenclaw_workspace/interactions
     """
+    overridden = _dispatch_path(PathCategory.INTERACTIONS)
+    if overridden is not None:
+        return overridden
     return get_agent_workspace_dir() / "interactions"
 
 
@@ -2382,6 +2498,9 @@ def get_deepagent_todo_dir() -> Path:
     Returns:
         Path to todo directory: ~/.jiuwenswarm/agent/jiuwenclaw_workspace/todo
     """
+    overridden = _dispatch_path(PathCategory.TODO)
+    if overridden is not None:
+        return overridden
     return get_agent_workspace_dir() / "todo"
 
 
@@ -2391,6 +2510,9 @@ def get_deepagent_messages_dir() -> Path:
     Returns:
         Path to messages directory: ~/.jiuwenswarm/agent/jiuwenclaw_workspace/messages
     """
+    overridden = _dispatch_path(PathCategory.MESSAGES)
+    if overridden is not None:
+        return overridden
     return get_agent_workspace_dir() / "messages"
 
 
@@ -2400,6 +2522,9 @@ def get_deepagent_agents_dir() -> Path:
     Returns:
         Path to agents directory: ~/.jiuwenswarm/agent/jiuwenclaw_workspace/agents
     """
+    overridden = _dispatch_path(PathCategory.AGENTS)
+    if overridden is not None:
+        return overridden
     return get_agent_workspace_dir() / "agents"
 
 
@@ -2409,6 +2534,9 @@ def get_deepagent_heartbeat_path() -> Path:
     Returns:
         Path to HEARTBEAT.md: ~/.jiuwenswarm/agent/jiuwenclaw_workspace/HEARTBEAT.md
     """
+    overridden = _dispatch_path(PathCategory.WORKSPACE_MD, node="HEARTBEAT.md")
+    if overridden is not None:
+        return overridden
     return get_agent_workspace_dir() / "HEARTBEAT.md"
 
 
@@ -2418,6 +2546,9 @@ def get_deepagent_agent_md_path() -> Path:
     Returns:
         Path to AGENT.md: ~/.jiuwenswarm/agent/jiuwenclaw_workspace/AGENT.md
     """
+    overridden = _dispatch_path(PathCategory.WORKSPACE_MD, node="AGENT.md")
+    if overridden is not None:
+        return overridden
     return get_agent_workspace_dir() / "AGENT.md"
 
 
@@ -2427,6 +2558,9 @@ def get_deepagent_soul_md_path() -> Path:
     Returns:
         Path to SOUL.md: ~/.jiuwenswarm/agent/jiuwenclaw_workspace/SOUL.md
     """
+    overridden = _dispatch_path(PathCategory.WORKSPACE_MD, node="SOUL.md")
+    if overridden is not None:
+        return overridden
     return get_agent_workspace_dir() / "SOUL.md"
 
 
@@ -2436,6 +2570,9 @@ def get_deepagent_identity_md_path() -> Path:
     Returns:
         Path to IDENTITY.md: ~/.jiuwenswarm/agent/jiuwenclaw_workspace/IDENTITY.md
     """
+    overridden = _dispatch_path(PathCategory.WORKSPACE_MD, node="IDENTITY.md")
+    if overridden is not None:
+        return overridden
     return get_agent_workspace_dir() / "IDENTITY.md"
 
 
@@ -2445,6 +2582,9 @@ def get_deepagent_user_md_path() -> Path:
     Returns:
         Path to USER.md: ~/.jiuwenswarm/agent/jiuwenclaw_workspace/USER.md
     """
+    overridden = _dispatch_path(PathCategory.WORKSPACE_MD, node="USER.md")
+    if overridden is not None:
+        return overridden
     return get_agent_workspace_dir() / "USER.md"
 
 
@@ -2466,6 +2606,9 @@ def get_agent_sessions_dir() -> Path:
     Path: ``~/.jiuwenswarm/workspace_default/agent/sessions``
     (or the request-bound tenant sessions dir when ContextVar is set).
     """
+    overridden = _dispatch_path(PathCategory.SESSIONS)
+    if overridden is not None:
+        return overridden
     return get_agent_root_dir() / "sessions"
 
 
@@ -2474,6 +2617,9 @@ def get_agent_evolution_trajectories_dir(workspace_key: str | None = None) -> Pa
 
     Path: ``workspace_{key}/agent/evolution_trajectories``
     """
+    overridden = _dispatch_path(PathCategory.EVOLUTION_TRAJECTORIES, explicit=workspace_key)
+    if overridden is not None:
+        return overridden
     if workspace_key is not None:
         return resolve_tenant_agent_root_dir(workspace_key) / "evolution_trajectories"
     return get_agent_root_dir() / "evolution_trajectories"
@@ -2527,6 +2673,9 @@ def get_checkpoint_dir() -> Path:
 
     Per-agent isolation uses ``set_checkpoint`` / ``get_multi_tenant_user_workspace_dir``.
     """
+    overridden = _dispatch_path(PathCategory.CHECKPOINT)
+    if overridden is not None:
+        return overridden
     return get_multi_tenant_user_workspace_dir("default") / ".checkpoint"
 
 
@@ -2553,6 +2702,9 @@ def get_logs_dir(service_id: str | None = None) -> Path:
     ``service_id`` 解析顺序：显式参数 > 当前 ``bind_agent_env_ns`` 的 sid > ``default``。
     进程启动时的 FileHandler（``setup_logger``）通常无 bind，仍落在 ``service_default/.logs``。
     """
+    overridden = _dispatch_path(PathCategory.LOGS, explicit=service_id)
+    if overridden is not None:
+        return overridden
     log_root_path = os.getenv("LOG_ROOT_PATH", "").strip()
     if log_root_path:
         return Path(log_root_path).expanduser().resolve()
@@ -2811,8 +2963,8 @@ class JsonUserVisibleFormatter(jsonlogger.JsonFormatter if jsonlogger else loggi
     """JSON 格式化日志输出。
 
     继承 pythonjsonlogger.JsonFormatter（缺失时降级为 logging.Formatter）。
-    字段顺序：timestamp → process → level → user_tag → user_id/domain_id/app_id →
-    logger → lineno → message → component → user_visible。
+    字段顺序：timestamp → process → session_id → level → user_tag →
+    user_id/domain_id/app_id → logger → lineno → message → component → user_visible。
     身份字段始终输出（null 便于聚合）。复用 dev-stable 的 _log_component_from_logger_name 与 _sanitize_log_text。
     """
 
@@ -2855,6 +3007,7 @@ class JsonUserVisibleFormatter(jsonlogger.JsonFormatter if jsonlogger else loggi
         if "timestamp" in log_record:
             ordered["timestamp"] = log_record["timestamp"]
         ordered["process"] = record.process
+        ordered["session_id"] = getattr(record, "session_id", None) or NO_SESSION_ID
         if "level" in log_record:
             ordered["level"] = log_record["level"]
         user_tag = getattr(record, "user_tag", None)
@@ -2969,6 +3122,18 @@ class UserVisibleTagFilter(logging.Filter):
         return True
 
 
+class SessionIdFilter(logging.Filter):
+    """从 ``log_session_id`` ContextVar 写入 ``record.session_id``。始终放行。
+
+    须挂在 ``QueueHandler``（emit 调用线程）。挂到 ``QueueListener`` 目标
+    handler 会在独立线程读到空上下文，全部变成 ``<nosid>``。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.session_id = current_log_session_id()
+        return True
+
+
 class IdentityFieldFilter(logging.Filter):
     """从 IdentityStore 读身份，写入字段并预先拼好 ``record.identity``。始终放行。
 
@@ -2998,13 +3163,15 @@ class IdentityFieldFilter(logging.Filter):
 class IdentityTextFormatter(logging.Formatter):
     """文本 Formatter：使用 Filter 阶段已写好的 ``record.identity`` 排版。
 
-    若上游未挂 IdentityFieldFilter（单测直调 Formatter），则按字段现场拼一份
-    兜底 identity，不再在此处做脱敏。
+    若上游未挂 IdentityFieldFilter / SessionIdFilter（单测直调 Formatter），
+    则按字段现场拼一份兜底 identity / session_id，不再在此处做脱敏。
     """
 
     def format(self, record: logging.LogRecord) -> str:
         if not isinstance(getattr(record, "identity", None), str):
             record.identity = build_log_identity(record)
+        if not isinstance(getattr(record, "session_id", None), str):
+            record.session_id = current_log_session_id()
         return super().format(record)
 
 
@@ -3104,8 +3271,7 @@ def setup_logger(log_level: Optional[str] = None) -> logging.Logger:
     _log_queue = _queue.SimpleQueue()
     listener_targets: list[logging.Handler] = []
 
-    log_root_path = os.getenv("LOG_ROOT_PATH", "").strip()
-    logs_root = Path(log_root_path).expanduser().resolve() if log_root_path else get_logs_dir()
+    logs_root = get_logs_dir()
     logs_root.mkdir(parents=True, exist_ok=True)
 
     levels = _resolve_logging_levels(log_level)
@@ -3124,7 +3290,7 @@ def setup_logger(log_level: Optional[str] = None) -> logging.Logger:
     json_config = _resolve_json_config() if log_format in ("json", "dual") else {}
     # 文本格式串（含 process/identity/user_tag/lineno）
     text_fmt = (
-        "%(asctime)s.%(msecs)03d [%(process)d] %(levelname)s "
+        "%(asctime)s.%(msecs)03d [%(process)d] [%(session_id)s] %(levelname)s "
         "%(identity)s%(user_tag)s%(name)s:%(lineno)d: %(message)s"
     )
 
@@ -3143,6 +3309,7 @@ def setup_logger(log_level: Optional[str] = None) -> logging.Logger:
     privacy_filter = SensitiveDataFilter()
     tag_config = LoggingTagConfig() if log_format in ("text", "dual", "json") else None
     identity_filter = IdentityFieldFilter()
+    session_id_filter = SessionIdFilter()
 
     def _add_rotating(
         filename: str,
@@ -3209,8 +3376,10 @@ def setup_logger(log_level: Optional[str] = None) -> logging.Logger:
     if listener_targets:
         queue_handler = QueueHandler(_log_queue)
         queue_handler.setLevel(logging.NOTSET)
-        # 必须在 emit 线程执行：IdentityStore 基于 contextvars，listener 线程读不到。
+        # 必须在 emit 线程执行：IdentityStore / log_session_id 基于 contextvars，
+        # listener 线程读不到。
         queue_handler.addFilter(identity_filter)
+        queue_handler.addFilter(session_id_filter)
         queue_handler.addFilter(privacy_filter)
         root.addHandler(queue_handler)
         if _SUPPORTS_RESPECT_HANDLER_LEVEL:
@@ -3343,7 +3512,11 @@ def update_log_levels(
     agent_server: Optional[str] = None,
     full: Optional[str] = None,
 ) -> logging.Logger:
-    """运行时动态更新 ``jiuwenswarm`` 根日志及各 handler 的级别，无需重建 handler。"""
+    """运行时动态更新 ``jiuwenswarm`` 根日志及各 handler 的级别。
+
+    企业版同时把解析后的 ``agent_server`` 级别写到 openjiuwen core。单机版不改
+    core，避免覆盖 ``logging.yaml`` 或启动时的 INFO 默认。
+    """
     levels = _resolve_logging_levels(log_level)
 
     if console_level is not None:
@@ -3373,7 +3546,22 @@ def update_log_levels(
         elif isinstance(h, logging.StreamHandler):
             h.setLevel(levels.console)
 
+    if is_enterprise():
+        _sync_openjiuwen_log_level(levels.agent_server)
     return root
+
+
+def _sync_openjiuwen_log_level(level: int) -> None:
+    """Push the managed AgentServer level onto openjiuwen core loggers."""
+    try:
+        from jiuwenswarm.common.openjiuwen_logging import apply_openjiuwen_log_level
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[logging_config] openjiuwen level sync import failed: %s", exc)
+        return
+    try:
+        apply_openjiuwen_log_level(level)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[logging_config] openjiuwen level sync failed: %s", exc)
 
 
 _LOGGING_CONFIG_TABLE = "logging_config"

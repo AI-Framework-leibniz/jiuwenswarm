@@ -26,6 +26,7 @@ from jiuwenswarm.common.e2a.constants import (
 )
 from jiuwenswarm.gateway.message_handler.file_transfer_mixin import FileTransferMixin
 from jiuwenswarm.common.config import get_evolution_auto_save_enabled
+from jiuwenswarm.common.log_context import bind_log_session, unbind_log_session
 from jiuwenswarm.gateway.routing.session_map import SessionMap
 from jiuwenswarm.gateway.routing.agent_request_timeout import (
     send_agent_request_with_timeout,
@@ -2530,6 +2531,22 @@ class MessageHandler(FileTransferMixin, ABC):
     async def _prepare_agent_dispatch_message(self, msg: "Message") -> "Message":
         from jiuwenswarm.common.schema.message import ReqMethod
 
+        if msg.req_method in (ReqMethod.CHAT_STEER, ReqMethod.CHAT_STEER_STATUS):
+            # Resolve only an existing ACP alias; control requests must never
+            # allocate a session or prepare a normal chat/approval response.
+            external = str(msg.session_id or "").strip()
+            internal = (
+                self._acp_session_aliases.get(external)
+                if msg.channel_id == _ACP_CHANNEL_ID else None
+            )
+            if internal:
+                metadata = dict(msg.metadata or {})
+                metadata.setdefault(_ACP_ORIGINAL_SESSION_ID_KEY, external)
+                return replace(
+                    msg, session_id=internal,
+                    params={**(msg.params or {}), "session_id": internal}, metadata=metadata,
+                )
+            return msg
         msg = self._attach_original_request_to_ask_user_answer(msg)
         if msg.channel_id != _ACP_CHANNEL_ID:
             return msg
@@ -4347,12 +4364,18 @@ class MessageHandler(FileTransferMixin, ABC):
             msg: Message | None = None
             external_cancel_handed_off = False
             external_cancel_error: BaseException | None = None
+            log_bind: tuple | None = None
             try:
                 msg = await self.consume_user_messages(timeout=None)
                 if msg is None:
                     continue
-                
-         
+
+                if msg.req_method in (ReqMethod.CHAT_STEER, ReqMethod.CHAT_STEER_STATUS):
+                    control = replace(msg, is_stream=False)
+                    agent_msg = await self._prepare_agent_dispatch_message(control)
+                    await self._process_non_stream_request(control, self.message_to_e2a(agent_msg))
+                    continue
+
                 # 先处理受控通道的 Channel 控制指令（如 /new_session、/mode、/skills list）
                 if await self._handle_channel_control(msg):
                     # 该消息仅用于修改 session/mode，已给 Channel 回复提示，不再转发给 Agent
@@ -4378,6 +4401,9 @@ class MessageHandler(FileTransferMixin, ABC):
                 ):
                     state = self.get_or_create_channel_state(msg)
                     msg.session_id = await self._allocate_channel_session(msg, state)
+
+                # 会话已确定后再绑。create_task 会拷贝当前上下文，随后父循环处理下一条消息不会改掉子任务。
+                log_bind = bind_log_session(msg.session_id)
 
                 # V2: _apply_channel_state has resolved msg.session_id to the real team
                 # session_id and injected params.mode; register GodView now so it lands
@@ -4956,6 +4982,9 @@ class MessageHandler(FileTransferMixin, ABC):
                     continue
                 raise
             finally:
+                if log_bind is not None:
+                    unbind_log_session(*log_bind)
+                    log_bind = None
                 if self._is_external_channel_cancel(
                     msg
                 ) and not external_cancel_handed_off:
