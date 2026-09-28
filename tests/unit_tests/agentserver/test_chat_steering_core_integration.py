@@ -8,7 +8,6 @@ normal single-agent streaming, steering dispatch, binding and Core are real.
 from __future__ import annotations
 
 import asyncio
-import inspect
 from importlib.util import find_spec
 import uuid
 from types import SimpleNamespace
@@ -23,6 +22,7 @@ from openjiuwen.core.foundation.llm import (
 )
 from openjiuwen.core.foundation.llm.schema.message_chunk import AssistantMessageChunk
 from openjiuwen.core.foundation.tool import Tool, ToolCard
+from openjiuwen.core.context_engine.token.base import TokenCounter
 from openjiuwen.core.runner import Runner
 from openjiuwen.core.session.agent import Session
 from openjiuwen.harness import create_deep_agent
@@ -41,6 +41,19 @@ from jiuwenswarm.server.runtime.agent_adapter.interface_deep import (
 # The locked official SDK predates steering. Check the independent schema
 # marker so a broken capability implementation in a newer SDK still fails.
 _CORE_HAS_STEERING = find_spec("openjiuwen.core.single_agent.schema.steering") is not None
+
+
+class _FastTokenCounter(TokenCounter):
+    """Deterministic counter for a test that does not exercise tokenization."""
+
+    def count(self, text, *, model="", **kwargs):
+        return len(text)
+
+    def count_messages(self, messages, *, model="", **kwargs):
+        return sum(self.count(str(message.content)) for message in messages)
+
+    def count_tools(self, tools, *, model="", **kwargs):
+        return len(tools)
 
 
 class _BlockingTool(Tool):
@@ -176,22 +189,16 @@ async def test_chat_pipeline_steers_real_core_during_tool_without_replacing_orig
     tool_entered_task = None
     try:
         await core.start(session=Session(session_id=sid))
-        # This test exercises the real Core loop and steering path, not context
-        # callback delivery.  Earlier tests in the full suite may leave process-
-        # global CONTEXT_RETRIEVED callbacks registered; invoking those callbacks
-        # can block context creation for 30 seconds and make the 10-second tool
-        # entry assertion fail before the tool is scheduled.  Bypass only the
-        # event decorator while retaining the real ContextEngine implementation.
-        context_engine = core._react_agent.context_engine
-        raw_create_context = inspect.unwrap(type(context_engine).create_context)
-
-        async def create_context_without_global_callbacks(*args, **kwargs):
-            return await raw_create_context(context_engine, *args, **kwargs)
+        # This test exercises steering, not tiktoken initialization.  A cold
+        # tiktoken cache can spend more than 30 seconds loading its encoding in
+        # the full parallel suite, exhausting the tool-entry deadline before the
+        # real Core loop reaches the fake tool.
+        from openjiuwen.core.context_engine.token import tiktoken_counter
 
         monkeypatch.setattr(
-            context_engine,
-            "create_context",
-            create_context_without_global_callbacks,
+            tiktoken_counter,
+            "TiktokenCounter",
+            _FastTokenCounter,
         )
         adapter = JiuWenSwarmDeepAdapter()
         adapter.mark_as_session_scoped(sid)
