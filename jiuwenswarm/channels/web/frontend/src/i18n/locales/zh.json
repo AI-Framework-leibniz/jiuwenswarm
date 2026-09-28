@@ -771,6 +771,24 @@
       "invalidField": "请检查字段：{{field}}"
     }
   },
+  "settingsPanel": {
+    "title": "设置",
+    "categories": {
+      "personalContext": "上下文"
+    },
+    "feedback": {
+      "saving": "正在保存",
+      "saved": "已保存",
+      "saveFailed": "保存失败"
+    },
+    "access": {
+      "readOnly": "当前为只读状态。"
+    },
+    "dialog": {
+      "discardTitle": "放弃未保存的修改",
+      "discardConfirm": "当前修改尚未保存，确定放弃吗？"
+    }
+  },
   "offloadFiles": {
     "title": "离线文件",
     "count": "{{count}} 个文件",
@@ -990,10 +1008,13 @@
     "title": "配置信息",
     "subtitle": "按顶部标签分类编辑；保存后后端将自动重启以加载最新配置。",
     "tabsAriaLabel": "配置分类",
+    "pcEntryTitle": "个人上下文",
+    "pcEntryDescription": "采集总开关、内容来源与授权管理",
     "tabs": {
       "model": "模型配置",
       "agent": "Agent 配置",
       "security": "安全配置",
+      "personalContext": "上下文",
       "other": "其他配置"
     },
     "tabEmpty": {

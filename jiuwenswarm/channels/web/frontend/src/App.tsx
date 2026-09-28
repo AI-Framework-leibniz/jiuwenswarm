@@ -17,6 +17,8 @@ import { ToolPanel } from './components/ToolPanel';
 import { ConfigPanel } from './components/ConfigPanel';
 import { ChannelsPanel } from './components/ChannelsPanel';
 import { PersonalContextPanel } from './components/PersonalContext';
+import { SettingsPage } from './features/settings/SettingsPage';
+import { settingsPageDefinition } from './features/settings/registry/openSourceDefinition';
 import { BrowserPanel } from './components/BrowserPanel';
 import { UpdatePanel } from './components/UpdatePanel';
 import { A2AIngressPanel } from './components/A2AIngressPanel';
@@ -420,8 +422,9 @@ function AppContent() {
   }, [activeNav]);
 
   // 个人上下文入口开关关闭时，回退到对话页，避免恢复出失效导航。
+  // 设置页当前仅承载个人上下文模块，随开关一并回退。
   useEffect(() => {
-    if (!FEATURE_PERSONAL_CONTEXT_UI && activeNav === 'personalContext') {
+    if (!FEATURE_PERSONAL_CONTEXT_UI && (activeNav === 'personalContext' || activeNav === 'settings')) {
       setActiveNav('chat');
     }
   }, [activeNav]);
@@ -737,6 +740,7 @@ function AppContent() {
   // WebSocket 连接 - provider 由后端配置决定 - provider 由后端配置决定，前端默认不在 URL query 传递
   const {
     isConnected,
+    connectionState,
     request,
     persistMedia,
     persistDocuments,
@@ -2749,6 +2753,16 @@ function AppContent() {
         {FEATURE_PERSONAL_CONTEXT_UI && hasVisitedPersonalContext && (
           <div className={`app-section ${activeNav === 'personalContext' ? '' : 'is-hidden'}`}>
             <PersonalContextPanel isConnected={isConnected} isActive={activeNav === 'personalContext'} />
+          </div>
+        )}
+        {FEATURE_PERSONAL_CONTEXT_UI && activeNav === 'settings' && (
+          <div className="app-section">
+            <SettingsPage
+              definition={settingsPageDefinition}
+              isConnected={isConnected}
+              connectionState={connectionState}
+              request={request}
+            />
           </div>
         )}
         {activeNav === 'extensions' && (

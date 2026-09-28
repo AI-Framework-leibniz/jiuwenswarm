@@ -14,6 +14,7 @@ export const ENTERPRISE_HIDDEN_NAV_ITEMS = [
   "agents",
   "teams",
   "personalContext",
+  "settings",
   "extensions",
   "configpanel",
   "browserpanel",
