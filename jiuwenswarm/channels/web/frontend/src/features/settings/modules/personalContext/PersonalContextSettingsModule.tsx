@@ -10,7 +10,7 @@ import { PersonalContextSettingsPanel } from '../../../../components/PersonalCon
  * feature 关闭时返回 null，模块项仍在列表但内容为空，不暴露入口。
  */
 export function PersonalContextSettingsModule() {
-  if (!FEATURE_PERSONAL_CONTEXT_UI) return null;
   const { isConnected } = useSettingsServices();
+  if (!FEATURE_PERSONAL_CONTEXT_UI) return null;
   return <PersonalContextSettingsPanel isConnected={isConnected} />;
 }
