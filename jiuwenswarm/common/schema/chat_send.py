@@ -18,7 +18,7 @@ class ChatSendParams(TypedDict, total=False):
     - skills: 用户选中的 skill 名列表（当前为 prompt 提示语义，非强制生效）。
     - mode: 运行模式（agent.plan / agent.fast / code.normal / team 等）
     - attachments: 附件列表（@file 等）
-    - files: 文件更新字典（传统字段，逐步迁出到 attachments）
+    - files: 文件更新字典或附件数组（传统字段，逐步迁出到 attachments）
     """
 
     content: str
@@ -45,8 +45,11 @@ class ChatSendParams(TypedDict, total=False):
     attachments: NotRequired[list[dict]]
     """附件列表（@file 等）。结构待统一定义。"""
 
-    files: NotRequired[dict]
-    """文件更新字典（传统字段）。逐步迁出到 attachments，当前兼容保留。"""
+    files: NotRequired[dict | list[dict]]
+    """文件更新字典或附件数组（传统字段）。逐步迁出到 attachments，当前兼容保留。"""
+
+    media_items: NotRequired[list[dict]]
+    """本轮已落盘的图片或文档附件。"""
 
     trusted_dirs: NotRequired[list[str]]
     """可信目录列表（权限白名单）。"""

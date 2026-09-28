@@ -1,6 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 
-"""User prompt helpers for multimodal image attachments."""
+"""User prompt helpers for message attachments and multimodal images."""
 
 from __future__ import annotations
 
@@ -8,6 +8,9 @@ import base64
 import copy
 import json
 import mimetypes
+import ntpath
+import posixpath
+import re
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -30,6 +33,12 @@ _CURRENT_MULTIMODAL_IMAGE_FILES: ContextVar[tuple[dict[str, Any], ...]] = Contex
     "jiuwenswarm_current_multimodal_image_files",
     default=(),
 )
+_INJECTED_PROTOCOL_SUFFIX = re.compile(
+    r"\r?\n\r?\n(?:"
+    r"<claw_workspace>(?P<workspace>[^\r\n]*)</claw_workspace>\r?\n【工作空间】"
+    r"|<claw_cron_create></claw_cron_create>\r?\n【定时任务】"
+    r")[^\r\n]*\s*\Z"
+)
 
 
 def is_image_content_block(part: Any) -> bool:
@@ -41,8 +50,8 @@ def is_image_content_block(part: Any) -> bool:
     return "image_url" in part or "image" in part
 
 
-def extract_multimodal_image_files(params: Any) -> list[dict[str, Any]]:
-    """Return normalized image-file records from a request payload."""
+def extract_current_turn_attachments(params: Any) -> list[dict[str, Any]]:
+    """Normalize files supplied with this request, without consulting history."""
 
     if not isinstance(params, dict):
         return []
@@ -53,23 +62,201 @@ def extract_multimodal_image_files(params: Any) -> list[dict[str, Any]]:
         candidates.extend(raw_media_items)
 
     files = params.get("files")
-    if isinstance(files, dict):
-        uploaded_images = files.get("uploaded_images")
-        if isinstance(uploaded_images, list):
-            candidates.extend(uploaded_images)
+    if isinstance(files, list):
+        candidates.extend(files)
+    elif isinstance(files, dict):
+        for key in ("uploaded_images", "uploaded_documents"):
+            uploaded = files.get(key)
+            if isinstance(uploaded, list):
+                candidates.extend(uploaded)
+
+    attachments = params.get("attachments")
+    if isinstance(attachments, list):
+        candidates.extend(attachments)
+
+    query = params.get("query") or params.get("content")
+    if isinstance(query, str):
+        parsed = _parse_desktop_context(query)
+        if parsed:
+            _prefix, context, _body = parsed
+            if isinstance(context.get("files"), list):
+                candidates.extend(context["files"])
 
     normalized: list[dict[str, Any]] = []
-    seen_paths: set[str] = set()
+    by_path: dict[str, dict[str, Any]] = {}
     for item in candidates:
-        image = _normalize_image_file(item)
-        if not image:
+        if not isinstance(item, dict):
             continue
-        path = image["path"]
-        if path in seen_paths:
+        path = _attachment_string(item, "original_path", "path", "mediaPath")
+        if not path:
             continue
-        seen_paths.add(path)
-        normalized.append(image)
+        mime_type = _attachment_string(item, "mime_type", "mimeType").lower()
+        item_type = _attachment_string(item, "type").lower()
+        if not mime_type and "/" in item_type:
+            mime_type = item_type
+        mime_type = mime_type or mimetypes.guess_type(path)[0] or ""
+        attachment: dict[str, Any] = {
+            "filename": _attachment_string(item, "filename", "name") or ntpath.basename(path),
+            "path": path,
+            "mime_type": mime_type,
+        }
+        text_path = _attachment_string(item, "text_path")
+        if text_path:
+            attachment["text_path"] = text_path
+        if isinstance(item.get("size_bytes"), int):
+            attachment["size_bytes"] = item["size_bytes"]
+        parser = _attachment_string(item, "parser")
+        if parser:
+            attachment["parser"] = parser
+        if isinstance(item.get("text_truncated"), bool):
+            attachment["text_truncated"] = item["text_truncated"]
+
+        # Windows paths compare case-insensitively even on a Linux server.
+        path_key = (
+            ntpath.normcase(ntpath.normpath(path))
+            if ntpath.splitdrive(path)[0] or "\\" in path
+            else posixpath.normpath(path)
+        )
+        existing = by_path.get(path_key)
+        if existing is not None:
+            if existing["filename"] == ntpath.basename(existing["path"]):
+                existing["filename"] = attachment["filename"]
+            for key, value in attachment.items():
+                if key not in existing or existing[key] == "":
+                    existing[key] = value
+            continue
+        by_path[path_key] = attachment
+        normalized.append(attachment)
     return normalized
+
+
+def _attachment_string(item: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _without_leading_system_reminders(text: str) -> str:
+    """Keep user content after runtime reminders, including plan-mode prefixes."""
+    text = text.lstrip()
+    while text.startswith("<system-reminder>"):
+        _reminder, closing_tag, remainder = text.partition("</system-reminder>")
+        if not closing_tag:
+            return ""
+        text = remainder.lstrip()
+    return text
+
+
+def _parse_desktop_context(query: str) -> tuple[str, dict[str, Any], str] | None:
+    """Parse a valid desktop carrier at the start, keeping its prefix and body."""
+    text = _without_leading_system_reminders(query)
+    match = re.match(
+        r"^((?:/skill\s+\S+\s+)*)<claw_context>([^\r\n]*)</claw_context>", text,
+    )
+    if not match:
+        return None
+    try:
+        context = json.loads(match.group(2))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(context, dict):
+        return None
+    prefix = query[:len(query) - len(text)] + match.group(1)
+    return prefix, context, text[match.end():]
+
+
+def remove_desktop_attachment_metadata(query: str) -> str:
+    """Remove desktop files after binding them to the current user message."""
+    parsed = _parse_desktop_context(query)
+    if not parsed:
+        return query
+    prefix, context, body = parsed
+    if not isinstance(context.get("files"), list):
+        return query
+    remaining = dict(context)
+    remaining_files = remaining_legacy_file_metadata(context["files"])
+    if remaining_files:
+        remaining["files"] = remaining_files
+    else:
+        remaining.pop("files")
+    if not remaining:
+        return prefix + body.lstrip("\r\n")
+    return (
+        prefix + "<claw_context>"
+        + json.dumps(remaining, ensure_ascii=False, separators=(",", ":"))
+        + "</claw_context>" + body
+    )
+
+
+def remaining_legacy_file_metadata(files: Any) -> Any:
+    """Keep file metadata not represented by the normalized attachment list."""
+    if isinstance(files, list):
+        return [item for item in files if not extract_current_turn_attachments({"files": [item]})]
+    if isinstance(files, dict):
+        remaining = dict(files)
+        for key in ("uploaded_images", "uploaded_documents"):
+            if isinstance(files.get(key), list):
+                records = remaining_legacy_file_metadata(files[key])
+                if records:
+                    remaining[key] = records
+                else:
+                    remaining.pop(key)
+        return remaining
+    return files
+
+
+def _split_injected_protocol_suffix(query: str) -> tuple[str, str]:
+    """Separate recognized channel suffixes while preserving their exact text."""
+    body = query
+    while match := _INJECTED_PROTOCOL_SUFFIX.search(body):
+        workspace_payload = match.group("workspace")
+        if workspace_payload is not None:
+            try:
+                workspace = json.loads(workspace_payload)
+            except (ValueError, TypeError):
+                break
+            if not isinstance(workspace, dict) or not _attachment_string(workspace, "path"):
+                break
+        body = body[:match.start()]
+    return body, query[len(body):]
+
+
+def extract_image_tool_question(query: str) -> str:
+    """Keep user text, excluding valid protocol prefixes and injected suffixes."""
+    parsed = _parse_desktop_context(query)
+    question = (parsed[2] if parsed else query).strip()
+    return _split_injected_protocol_suffix(question)[0].rstrip()
+
+
+def bind_attachment_context(query: str, attachment_context: str) -> str:
+    """Keep attachments next to user text, before channel-injected instructions."""
+    if not attachment_context:
+        return query
+    body, suffix = _split_injected_protocol_suffix(query)
+    return body + attachment_context + suffix
+
+
+def render_current_turn_attachments(attachments: list[dict[str, Any]]) -> str:
+    """Describe attachment ownership in the same user message as its query."""
+    if not attachments:
+        return ""
+    return (
+        "\n\n以下附件由用户在本轮消息中提供。\n"
+        "用户对文件的指代未明确指定对象时，默认从本轮附件中解析。\n"
+        "用户明确指定的文件名、路径或历史文件优先。\n"
+        "本轮有多个附件时，根据用户要求确定处理范围；目标仍有歧义时，先澄清。\n"
+        "附件字段：path 为原文件路径，text_path 为解析文本路径（如有）。\n"
+        "<attachments>\n"
+        + json.dumps(attachments, ensure_ascii=False, separators=(",", ":"))
+        + "\n</attachments>"
+    )
+
+
+def extract_multimodal_image_files(params: Any) -> list[dict[str, Any]]:
+    """Use the same request attachments for image input and path context."""
+    return _normalize_image_files(extract_current_turn_attachments(params))
 
 
 def set_current_multimodal_image_files(image_files: list[dict[str, Any]]) -> Any:
@@ -90,7 +277,9 @@ def prepare_multimodal_image_messages(
     messages: list[Any],
     image_files: list[dict[str, Any]] | None = None,
 ) -> tuple[list[Any], int]:
-    images = _normalize_image_files(image_files or current_multimodal_image_files())
+    images = _normalize_image_files(
+        image_files if image_files is not None else current_multimodal_image_files()
+    )
     if not images:
         return messages, 0
 
@@ -250,8 +439,18 @@ def _normalize_image_file(item: Any) -> dict[str, Any] | None:
 
 def _latest_user_message_index(messages: list[Any]) -> int:
     for index in range(len(messages) - 1, -1, -1):
-        if _is_user_message(messages[index]):
-            return index
+        message = messages[index]
+        if not _is_user_message(message):
+            continue
+        content = (
+            message.get("content")
+            if isinstance(message, dict)
+            else getattr(message, "content", None)
+        )
+        text = _content_to_query_text(content).lstrip()
+        if text.startswith("<system-reminder>") and not _without_leading_system_reminders(text):
+            continue
+        return index
     return -1
 
 
