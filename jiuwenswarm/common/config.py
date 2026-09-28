@@ -2267,7 +2267,7 @@ def get_model_config(name: str, index: int | None = None) -> dict[str, Any] | No
 #     url: ...
 #     enabled: true
 #     excluded_commands: [...]
-#     files: { allow: [...], deny: [...] }
+#     files: []                    # [{path: ..., read: allow, write: deny}]
 #     idle_ttl_seconds: 600         # 可选, 默认 None = 不进行 idle 驱逐
 #     idle_check_interval: 60       # 可选, 默认 None = 让 jiuwenbox 端用自身默认值
 #     fallback_on_failure: false    # jiuwenbox exec 异常时回退本地 (见 agent-core jiuwenbox provider)
@@ -2284,7 +2284,7 @@ def get_model_config(name: str, index: int | None = None) -> dict[str, Any] | No
 _SANDBOX_RUNTIME_DEFAULTS: dict[str, Any] = {
     "enabled": False,
     "excluded_commands": [],
-    "files": {"allow": [], "deny": []},
+    "files": [],
     "idle_ttl_seconds": None,
     "idle_check_interval": None,
     "fallback_on_failure": False,
@@ -2367,12 +2367,12 @@ def _ensure_sandbox_runtime_shape(runtime: Any) -> dict[str, Any]:
         ]
     files = runtime.get("files")
     if isinstance(files, dict):
-        allow = files.get("allow")
-        deny = files.get("deny")
-        out["files"] = {
-            "allow": list(allow) if isinstance(allow, list) else [],
-            "deny": list(deny) if isinstance(deny, list) else [],
-        }
+        files = []  # Obsolete object format has no supported migration semantics.
+    if files is not None:
+        if not isinstance(files, list):
+            raise ValueError("sandbox.files must be a list")
+        from copy import deepcopy
+        out["files"] = deepcopy(files)
     if "idle_ttl_seconds" in runtime:
         # ``<= 0`` 归一化成 ``None`` (= 禁用淘汰), 与 jiuwenbox server 端
         # ``TimeoutPolicy.idle_timeout`` 的语义对齐。
@@ -2889,13 +2889,15 @@ def update_sandbox_runtime(patch: dict[str, Any]) -> dict[str, Any]:
 
     Args:
         patch: 部分字段更新；支持顶层键 ``enabled`` / ``excluded_commands``
-            / ``files`` / ``idle_ttl_seconds`` / ``idle_check_interval``
+            / ``idle_ttl_seconds`` / ``idle_check_interval``
             / ``fallback_on_failure``。
-            ``files`` 字典若提供则整体替换；其余键按值合并。 ``idle_*`` 字段
+            ``files`` 仅由 sandbox.files.sync 写入。 ``idle_*`` 字段
             接受整数秒数 (``<= 0`` 归一化为 ``None`` = 禁用淘汰) 或 ``None``。
     """
     if not isinstance(patch, dict):
         raise ValueError("patch must be an object")
+    if "files" in patch:
+        raise ValueError("sandbox.files is managed by sandbox.files.sync; edit FileGuard first")
 
     current = get_sandbox_runtime()
     merged = dict(current)
@@ -2911,16 +2913,6 @@ def update_sandbox_runtime(patch: dict[str, Any]) -> dict[str, Any]:
         merged["excluded_commands"] = [
             str(p) for p in value if str(p).strip()
         ]
-    if "files" in patch:
-        files = patch["files"] or {}
-        if not isinstance(files, dict):
-            raise ValueError("files must be an object")
-        allow = files.get("allow")
-        deny = files.get("deny")
-        merged["files"] = {
-            "allow": list(allow) if isinstance(allow, list) else merged["files"]["allow"],
-            "deny": list(deny) if isinstance(deny, list) else merged["files"]["deny"],
-        }
     if "idle_ttl_seconds" in patch:
         merged["idle_ttl_seconds"] = _coerce_optional_positive_int(
             patch["idle_ttl_seconds"], field="sandbox.idle_ttl_seconds",
@@ -2933,12 +2925,15 @@ def update_sandbox_runtime(patch: dict[str, Any]) -> dict[str, Any]:
         merged.get("excluded_commands")
     )
 
-    data = _load_yaml_round_trip(_CONFIG_YAML_PATH)
-    if "sandbox" not in data or not isinstance(data.get("sandbox"), dict):
-        data["sandbox"] = {}
-    sandbox_block = data["sandbox"]
-    # 写入扁平 runtime 字段, 每次 update 都把全集刷一遍, 保证 yaml 形状稳定。
-    for key in _SANDBOX_RUNTIME_KEYS:
-        sandbox_block[key] = merged[key]
-    _dump_yaml_round_trip(_CONFIG_YAML_PATH, data)
+    def mutate(data):
+        sandbox_block = data.setdefault("sandbox", {})
+        if isinstance(sandbox_block.get("files"), dict):
+            sandbox_block["files"] = []
+        # Preserve concurrently synchronized files; this entry cannot write files.
+        for key in patch:
+            if key in _SANDBOX_RUNTIME_KEYS:
+                sandbox_block[key] = merged[key]
+        return data
+
+    update_config(mutate)
     return merged

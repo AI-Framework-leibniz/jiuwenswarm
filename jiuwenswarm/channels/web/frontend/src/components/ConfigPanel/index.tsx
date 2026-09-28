@@ -16,6 +16,7 @@ import {
 } from "./openaiAccountModelState";
 import { ConfigFieldHintLabel } from "./ConfigFieldHintLabel";
 import { PermissionsToolsEditor } from "./PermissionsToolsEditor";
+import { FileSecurityEditor } from "./FileSecurityEditor";
 import { ModelProviderIcon } from '../ModelProviderIcon';
 
 function MultiSelectDropdown({
@@ -4613,6 +4614,7 @@ export function ConfigPanel({
 
               {configTab === "security" ? (
                 <div role="tabpanel" aria-labelledby="config-tab-security" className="space-y-3 pb-2">
+                  <FileSecurityEditor isConnected={isConnected} />
                   {securityGroups.length === 0 ? (
                     <p className="text-sm text-text-muted px-1">{t("config.tabEmpty.security")}</p>
                   ) : (

@@ -4256,6 +4256,11 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
                     "[JiuWenSwarmDeepAdapter] reuse registered sys_operation: %s",
                     registered_sys_operation.id,
                 )
+                # Runtime patches must mutate the config used by existing providers,
+                # not the newly built (unregistered) card's detached config.
+                sysop_card.id = registered_sys_operation.id
+                if sysop_card.mode == OperationMode.SANDBOX:
+                    sysop_card.gateway_config = registered_sys_operation._run_config.config
                 return registered_sys_operation
 
             result = Runner.resource_mgr.add_sys_operation(sysop_card)
@@ -4270,6 +4275,9 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
                         "[JiuWenSwarmDeepAdapter] reuse registered sys_operation after add failure: %s",
                         registered_sys_operation.id,
                     )
+                    sysop_card.id = registered_sys_operation.id
+                    if sysop_card.mode == OperationMode.SANDBOX:
+                        sysop_card.gateway_config = registered_sys_operation._run_config.config
                     return registered_sys_operation
                 logger.warning("[JiuWenSwarmDeepAdapter] add sys_operation failed: %s", result.msg())
                 return None
@@ -4279,8 +4287,9 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
             return None
 
     async def apply_sandbox_runtime_patch(
-        self, runtime: dict[str, Any], *, files_changed: bool
-    ) -> None:
+        self, runtime: dict[str, Any], *, files_changed: bool, strict: bool = False,
+        prepare_only: bool = False,
+    ) -> bool:
         """轻量级热更新沙箱 runtime 参数（无需重建 agent）.
 
         - 通过 mutate 已构建 SysOperationCard 的 ``launcher_config.extra_params``
@@ -4299,16 +4308,20 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
                 "[JiuWenSwarmDeepAdapter] apply_sandbox_runtime_patch skipped: "
                 "no active sandbox sys_operation"
             )
-            return
+            return False
 
         launcher = card.gateway_config.launcher_config if card.gateway_config else None
         if launcher is None:
             logger.warning(
                 "[JiuWenSwarmDeepAdapter] apply_sandbox_runtime_patch: missing launcher_config"
             )
-            return
+            if strict:
+                raise RuntimeError("missing sandbox launcher_config")
+            return False
 
         sandbox_type = str(getattr(launcher, "sandbox_type", "") or "").strip().lower()
+        if strict and sandbox_type != "jiuwenbox":
+            raise ValueError("sandbox.restart currently supports jiuwenbox only")
         if sandbox_type == "yuanrong":
             logger.info(
                 "[JiuWenSwarmDeepAdapter] yuanrong runtime patch "
@@ -4362,9 +4375,10 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
         extra["excluded_commands"] = merge_connector_excluded_commands(
             runtime.get("excluded_commands")
         )
-        extra["fallback_on_failure"] = bool(runtime.get("fallback_on_failure", False))
+        # A failed explicit policy rebuild must never execute outside the sandbox.
+        extra["fallback_on_failure"] = False if strict else bool(runtime.get("fallback_on_failure", False))
         new_policy, upload_list = build_filesystem_policy(
-            runtime.get("files") or {},
+            runtime.get("files", []),
             project_dir=self._resolve_project_dir_for_sandbox(),
             is_code_agent=self._is_code_agent,
             startup_mode=get_sandbox_startup_mode(),
@@ -4388,6 +4402,8 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
             try:
                 from openjiuwen.extensions.sys_operation.sandbox.providers.jiuwenbox import (
                     force_recreate_jiuwenbox_sandbox,
+                    build_jiuwenbox_shared_scope_key,
+                    delete_jiuwenbox_sandbox,
                 )
             except Exception as exc:
                 logger.warning(
@@ -4395,10 +4411,32 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
                     "failed: %s",
                     exc,
                 )
-                return
+                if strict:
+                    raise
+                return False
             try:
+                isolation_key = self._sys_operation_isolation_key(card)
+                if strict and not isolation_key:
+                    raise RuntimeError("sandbox isolation key is unavailable")
+                shared_key = (build_jiuwenbox_shared_scope_key(str(launcher.base_url), isolation_key)
+                              if strict else None)
+                if strict:
+                    import sys
+                    # Windows sandboxes share the account used by ACL entries.
+                    # Deleting the old instance after creation revokes the new ACL.
+                    if sys.platform == "win32":
+                        old_id = extra.get("sandbox_id")
+                        deleted = await delete_jiuwenbox_sandbox(
+                            sandbox_id=old_id, shared_key=shared_key, reason="policy_changed",
+                        )
+                        if old_id and old_id not in deleted:
+                            raise RuntimeError(f"could not delete old sandbox {old_id}")
+                        extra.pop("sandbox_id", None)
+                    if prepare_only:
+                        return False
                 new_sandbox_id = await force_recreate_jiuwenbox_sandbox(
                     launcher.base_url,
+                    shared_key=shared_key,
                     policy=new_policy,
                     policy_mode=extra.get("policy_mode", "append"),
                     preserve_files_upload=upload_list,
@@ -4408,12 +4446,16 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
                     "[JiuWenSwarmDeepAdapter] sandbox instance recreated: %s",
                     new_sandbox_id,
                 )
+                return True
             except Exception as exc:
                 logger.warning(
                     "[JiuWenSwarmDeepAdapter] force_recreate_jiuwenbox_sandbox "
                     "failed: %s",
                     exc,
                 )
+                if strict:
+                    raise
+        return False
 
     @staticmethod
     def _build_filesystem_rail() -> SysOperationRail | None:

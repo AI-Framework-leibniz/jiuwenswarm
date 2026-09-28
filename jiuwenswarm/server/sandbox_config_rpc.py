@@ -45,6 +45,8 @@ def set_internal_jiuwenbox_bootstrap(cb: Callable[[], Awaitable[None]] | None) -
 
 _SANDBOX_CFG_METHODS: frozenset[ReqMethod] = frozenset(
     {
+        ReqMethod.SANDBOX_FILES_SYNC,
+        ReqMethod.SANDBOX_RESTART,
         ReqMethod.SANDBOX_ENABLED_GET,
         ReqMethod.SANDBOX_ENABLED_SET,
         ReqMethod.SANDBOX_STARTUP_MODE_GET,
@@ -274,6 +276,11 @@ def dispatch_sandbox_config_request(request: AgentRequest) -> AgentResponse:
 
     try:
         # ---- 接口1a/1b: 沙箱开关 (存 config.yaml, 基础配置) ----
+        if m == ReqMethod.SANDBOX_FILES_SYNC:
+            from jiuwenswarm.common.file_guard_config import sync_file_guard_to_sandbox
+            if params:
+                return _err(request, "sandbox.files.sync accepts no parameters")
+            return _ok(request, sync_file_guard_to_sandbox())
         if m == ReqMethod.SANDBOX_ENABLED_GET:
             return _ok(
                 request,
@@ -340,6 +347,8 @@ def dispatch_sandbox_config_request(request: AgentRequest) -> AgentResponse:
             _trigger_apply("network")
             return _ok(request, {"network": network})
 
+    except NotImplementedError as exc:
+        return _err(request, str(exc), code="ENFORCEMENT_UNSUPPORTED")
     except ValueError as exc:
         return _err(request, str(exc))
     except Exception as exc:  # noqa: BLE001

@@ -1,0 +1,264 @@
+"""Explicit restart waits for application and never hides backend failures."""
+
+from types import SimpleNamespace
+from types import MethodType
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
+from jiuwenswarm.server import agent_ws_server as server_module
+
+
+@pytest.mark.asyncio
+async def test_restart_applies_all_adapters_and_reports_failure(monkeypatch):
+    first = SimpleNamespace(apply_sandbox_runtime_patch=AsyncMock(return_value=True))
+    second = SimpleNamespace(apply_sandbox_runtime_patch=AsyncMock(return_value=True))
+    server = SimpleNamespace(
+        _agent_manager=SimpleNamespace(agents={"one": {"a": first}, "two": {"b": second}}),
+        _resolve_adapter=lambda agent: agent,
+    )
+    runtime = {"enabled": True, "files": []}
+    monkeypatch.setattr(server_module, "get_sandbox_runtime", lambda: runtime)
+    monkeypatch.setattr(server_module, "get_sandbox_endpoint", lambda: {"type": "jiuwenbox"})
+    restart = server_module.AgentWebSocketServer._restart_configured_sandboxes
+    assert (await restart(server, {}))["restarted"] == 2
+    assert first.apply_sandbox_runtime_patch.await_count == 2
+    first.apply_sandbox_runtime_patch.assert_awaited_with(runtime, files_changed=True, strict=True)
+    second.apply_sandbox_runtime_patch.side_effect = RuntimeError("backend unavailable")
+    with pytest.raises(RuntimeError, match="backend unavailable"):
+        await restart(server, {})
+
+
+@pytest.mark.asyncio
+async def test_restart_finds_session_owned_sandboxes_and_deduplicates(monkeypatch):
+    launcher = SimpleNamespace()
+    card = SimpleNamespace(gateway_config=SimpleNamespace(launcher_config=launcher))
+    first = SimpleNamespace(_sys_operation_card=card, apply_sandbox_runtime_patch=AsyncMock(return_value=True))
+    shared = SimpleNamespace(_sys_operation_card=card, apply_sandbox_runtime_patch=AsyncMock(return_value=True))
+    root = SimpleNamespace(
+        _sys_operation_card=None,
+        _session_adapters={"one": first, "two": shared},
+        apply_sandbox_runtime_patch=AsyncMock(return_value=False),
+    )
+    server = SimpleNamespace(
+        _agent_manager=SimpleNamespace(agents={"web": {"agent": SimpleNamespace(_adapter=root)}}),
+        _resolve_adapter=server_module.AgentWebSocketServer._resolve_adapter,
+    )
+    monkeypatch.setattr(server_module, "get_sandbox_runtime", lambda: {"enabled": True, "files": []})
+    monkeypatch.setattr(server_module, "get_sandbox_endpoint", lambda: {"type": "jiuwenbox"})
+    result = await server_module.AgentWebSocketServer._restart_configured_sandboxes(server, {})
+    assert result["status"] == "applied"
+    assert result["restarted"] == 1
+    assert first.apply_sandbox_runtime_patch.await_count + shared.apply_sandbox_runtime_patch.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_restart_no_active_sandbox_is_not_reported_applied(monkeypatch):
+    server = SimpleNamespace(_agent_manager=SimpleNamespace(agents={}))
+    monkeypatch.setattr(server_module, "get_sandbox_runtime", lambda: {"enabled": True})
+    monkeypatch.setattr(server_module, "get_sandbox_endpoint", lambda: {"type": "jiuwenbox"})
+    result = await server_module.AgentWebSocketServer._restart_configured_sandboxes(server, {})
+    assert result["status"] == "no_active_sandboxes"
+
+
+@pytest.mark.asyncio
+async def test_adapter_restart_uses_scoped_key_and_propagates_error(monkeypatch):
+    from jiuwenswarm.common import config
+    monkeypatch.setattr(config, "get_config", lambda: {})
+    from jiuwenswarm.server.runtime.agent_adapter import interface_deep as adapter_module
+    from openjiuwen.extensions.sys_operation.sandbox.providers import jiuwenbox
+
+    launcher = SimpleNamespace(sandbox_type="jiuwenbox", base_url="http://localhost:8321", extra_params={})
+    card = SimpleNamespace(mode=adapter_module.OperationMode.SANDBOX,
+                           gateway_config=SimpleNamespace(launcher_config=launcher))
+    adapter = SimpleNamespace(_sys_operation_card=card, _is_code_agent=False,
+                              _resolve_project_dir_for_sandbox=lambda: None,
+                              _sys_operation_isolation_key=lambda _: "scope-1")
+    monkeypatch.setattr(adapter_module, "build_filesystem_policy", lambda *a, **k: ({"filesystem_policy": {}}, []))
+    create = AsyncMock(return_value="new-id")
+    monkeypatch.setattr(jiuwenbox, "force_recreate_jiuwenbox_sandbox", create)
+    delete = AsyncMock(return_value=["new-id"])
+    monkeypatch.setattr(jiuwenbox, "delete_jiuwenbox_sandbox", delete)
+    calls = Mock()
+    calls.attach_mock(delete, "delete")
+    calls.attach_mock(create, "create")
+    apply = adapter_module.JiuWenSwarmDeepAdapter.apply_sandbox_runtime_patch
+    assert await apply(adapter, {"files": []}, files_changed=True, strict=True)
+    assert create.await_args.kwargs["shared_key"] == "http://localhost:8321|scope-1"
+    assert launcher.extra_params["sandbox_id"] == "new-id"
+    import sys
+    if sys.platform == "win32":
+        assert [call[0] for call in calls.mock_calls] == ["delete", "create"]
+    create.side_effect = RuntimeError("create failed")
+    with pytest.raises(RuntimeError, match="create failed"):
+        await apply(adapter, {"files": []}, files_changed=True, strict=True)
+
+
+@pytest.mark.asyncio
+async def test_all_old_acl_cleanup_precedes_any_replacement(monkeypatch):
+    events = []
+
+    def adapter(name):
+        async def apply(runtime, *, files_changed, strict, prepare_only=False):
+            events.append((name, "prepare" if prepare_only else "create"))
+            return not prepare_only
+        return SimpleNamespace(apply_sandbox_runtime_patch=apply)
+
+    server = SimpleNamespace(
+        _agent_manager=SimpleNamespace(agents={"test": {"a": adapter("a"), "b": adapter("b")}}),
+        _resolve_adapter=lambda agent: agent,
+    )
+    monkeypatch.setattr(server_module, "get_sandbox_runtime", lambda: {"enabled": True, "files": []})
+    monkeypatch.setattr(server_module, "get_sandbox_endpoint", lambda: {"type": "jiuwenbox"})
+    await server_module.AgentWebSocketServer._restart_configured_sandboxes(server, {})
+    assert events == [("a", "prepare"), ("b", "prepare"), ("a", "create"), ("b", "create")]
+
+
+@pytest.mark.asyncio
+async def test_reused_sysoperation_receives_restarted_policy(monkeypatch, tmp_path):
+    from jiuwenswarm.common import config
+    monkeypatch.setattr(config, "get_config", lambda: {})
+    from jiuwenswarm.server.runtime.agent_adapter import interface_deep as mod
+    from jiuwenswarm.server.runtime.agent_adapter import sysop_builder as builder
+    from openjiuwen.extensions.sys_operation.sandbox.providers import jiuwenbox
+
+    monkeypatch.setattr(builder, "_resolve_workspace_dir", lambda: None)
+    monkeypatch.setattr(builder, "_resolve_project_dir", lambda _: None)
+    monkeypatch.setattr(builder, "_resolve_config_ro_path", lambda: None)
+    old_card = builder.create_sandbox_sysop_card("http://localhost:8321", "jiuwenbox", files_runtime=[])
+    registered = mod.SysOperation(old_card)
+    cls = mod.JiuWenSwarmDeepAdapter
+    monkeypatch.setattr(cls, "_get_registered_sys_operation_by_isolation_key", staticmethod(lambda _: registered))
+    monkeypatch.setattr(mod, "get_sandbox_endpoint", lambda: {"type": "jiuwenbox", "url": "http://localhost:8321"})
+    monkeypatch.setattr(mod, "get_sandbox_runtime", lambda: {"enabled": True, "files": []})
+    adapter = SimpleNamespace(
+        _is_code_agent=False,
+        _resolve_project_dir_for_sandbox=lambda: None,
+        _create_sandbox_sys_operation=lambda url, kind, **kw: builder.create_sandbox_sysop_card(url, kind),
+        _sys_operation_isolation_key=cls._sys_operation_isolation_key,
+    )
+    assert cls._resolve_sys_operation(adapter) is registered
+    create = AsyncMock(return_value="restarted-id")
+    monkeypatch.setattr(jiuwenbox, "force_recreate_jiuwenbox_sandbox", create)
+    files = [{"path": str(tmp_path), "read": "allow", "write": "deny"}]
+    assert await cls.apply_sandbox_runtime_patch(adapter, {"files": files}, files_changed=True, strict=True)
+    actual = registered._run_config.config.launcher_config.extra_params
+    assert actual["policy"]["filesystem_policy"]["read_only"] == [str(tmp_path)]
+    assert actual["sandbox_id"] == "restarted-id"
+
+
+@pytest.mark.asyncio
+async def test_windows_second_create_failure_disables_host_fallback(monkeypatch):
+    import sys
+    from jiuwenswarm.common import config
+    monkeypatch.setattr(config, "get_config", lambda: {})
+    from jiuwenswarm.server.runtime.agent_adapter import interface_deep as mod
+    from openjiuwen.extensions.sys_operation.sandbox.providers import jiuwenbox as box
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(mod, "build_filesystem_policy", lambda *a, **kw: ({"filesystem_policy": {}}, []))
+    create = AsyncMock(side_effect=["new-one", RuntimeError("second create failed")])
+    monkeypatch.setattr(box, "force_recreate_jiuwenbox_sandbox", create)
+    async def delete(**kwargs):
+        return [kwargs["sandbox_id"]] if kwargs["sandbox_id"] else []
+    monkeypatch.setattr(box, "delete_jiuwenbox_sandbox", delete)
+    children = []
+    for name in ("one", "two"):
+        launcher = SimpleNamespace(sandbox_type="jiuwenbox", base_url="http://localhost:8321",
+                                   extra_params={"sandbox_id": name, "fallback_on_failure": True})
+        child = SimpleNamespace(
+            _sys_operation_card=SimpleNamespace(mode=mod.OperationMode.SANDBOX,
+                                                gateway_config=SimpleNamespace(launcher_config=launcher)),
+            _is_code_agent=False, _resolve_project_dir_for_sandbox=lambda: None,
+            _sys_operation_isolation_key=lambda card: str(id(card)),
+        )
+        child.apply_sandbox_runtime_patch = MethodType(mod.JiuWenSwarmDeepAdapter.apply_sandbox_runtime_patch, child)
+        children.append(child)
+    server = SimpleNamespace(_agent_manager=SimpleNamespace(agents={"web": dict(enumerate(children))}),
+                             _resolve_adapter=lambda agent: agent)
+    monkeypatch.setattr(server_module, "get_sandbox_runtime", lambda: {"enabled": True, "files": [], "fallback_on_failure": True})
+    monkeypatch.setattr(server_module, "get_sandbox_endpoint", lambda: {"type": "jiuwenbox"})
+    with pytest.raises(RuntimeError, match="second create failed"):
+        await server_module.AgentWebSocketServer._restart_configured_sandboxes(server, {})
+    extras = [child._sys_operation_card.gateway_config.launcher_config.extra_params for child in children]
+    assert all(extra["fallback_on_failure"] is False for extra in extras)
+    assert extras[0]["sandbox_id"] == "new-one"
+    assert "sandbox_id" not in extras[1]
+
+
+@pytest.mark.asyncio
+async def test_session_restart_updates_policy_and_existing_provider_cache(monkeypatch, tmp_path):
+    """Use real restart/adapter/provider logic; replace only the remote client."""
+    from jiuwenswarm.common import config
+    monkeypatch.setattr(config, "get_config", lambda: {})
+    from jiuwenswarm.server.runtime.agent_adapter import interface_deep as mod
+    from jiuwenswarm.server.runtime.agent_adapter import sysop_builder as builder
+    from openjiuwen.extensions.sys_operation.sandbox.providers import jiuwenbox as box
+
+    monkeypatch.setattr(builder, "_resolve_workspace_dir", lambda: None)
+    monkeypatch.setattr(builder, "_resolve_project_dir", lambda _: None)
+    monkeypatch.setattr(builder, "_resolve_config_ro_path", lambda: None)
+    monkeypatch.delenv("JIUWENBOX_SANDBOX_ID", raising=False)
+    mixin = box._JiuwenBoxProviderMixin
+    monkeypatch.setattr(mixin, "_shared_sandbox_ids", {})
+    monkeypatch.setattr(mixin, "_lifecycle_hooks", {})
+    events = []
+    policies = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def create_sandbox(self, *, policy, policy_mode):
+            policies.append(policy)
+            sandbox_id = f"new-{len(policies)}"
+            events.append(("create", sandbox_id))
+            return sandbox_id
+
+        def delete_sandbox(self, sandbox_id):
+            events.append(("delete", sandbox_id))
+
+    monkeypatch.setattr(box, "_JiuwenBoxClient", Client)
+    card = builder.create_sandbox_sysop_card("http://localhost:8321", "jiuwenbox", files_runtime=[])
+    child = SimpleNamespace(
+        _sys_operation_card=card, _is_code_agent=False,
+        _resolve_project_dir_for_sandbox=lambda: None,
+        _sys_operation_isolation_key=lambda _: "test-session",
+    )
+    child.apply_sandbox_runtime_patch = MethodType(mod.JiuWenSwarmDeepAdapter.apply_sandbox_runtime_patch, child)
+    root = SimpleNamespace(
+        _sys_operation_card=None, _session_adapters={"session": child},
+        apply_sandbox_runtime_patch=AsyncMock(return_value=False),
+    )
+    server = SimpleNamespace(
+        _agent_manager=SimpleNamespace(agents={"web": {"agent": SimpleNamespace(_adapter=root)}}),
+        _resolve_adapter=server_module.AgentWebSocketServer._resolve_adapter,
+    )
+    launcher = card.gateway_config.launcher_config
+    launcher.extra_params["sandbox_id"] = "old"
+    key = box.build_jiuwenbox_shared_scope_key(launcher.base_url, "test-session")
+    mixin.register_shared_sandbox_id(key, "old")
+    provider = mixin()
+    provider.config = card.gateway_config
+    provider.endpoint = SimpleNamespace(base_url=launcher.base_url, isolation_key="test-session")
+    provider._sandbox_id = "old"
+    runtime = {"enabled": True, "files": [{"path": str(tmp_path), "read": "allow", "write": "deny"}]}
+    monkeypatch.setattr(server_module, "get_sandbox_runtime", lambda: runtime)
+    monkeypatch.setattr(server_module, "get_sandbox_endpoint", lambda: {"type": "jiuwenbox"})
+    restart = server_module.AgentWebSocketServer._restart_configured_sandboxes
+    assert (await restart(server, {}))["restarted"] == 1
+    assert provider._get_sandbox_id() == "new-1"
+    assert mixin._shared_sandbox_ids[key] == "new-1"
+    assert policies[0]["filesystem_policy"]["read_only"] == [str(tmp_path)]
+    runtime["files"][0]["write"] = "allow"
+    assert (await restart(server, {}))["restarted"] == 1
+    assert provider._get_sandbox_id() == "new-2"
+    assert policies[1]["filesystem_policy"]["read_write"] == [str(tmp_path)]
+    assert ("delete", "old") in events
+    assert ("delete", "new-1") in events
