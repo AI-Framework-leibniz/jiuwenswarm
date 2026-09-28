@@ -33,6 +33,7 @@ import { isTeamLeaderMember } from '../../utils/teamMemberAvatar';
 import { TeamMemberAvatar } from '../TeamMemberAvatar';
 import welcomeBanner from '../../assets/home-banner.svg';
 import './ChatPanel.css';
+import { WorkspaceQuotaBanner } from '../WorkspacePanel/WorkspaceQuotaBanner';
 import { CodeChangesCard } from '../../features/code-mode/CodeChangesCard';
 import { useCodeTurnDiffHistory } from '../../features/code-mode/useCodeTurnDiffHistory';
 import type { CodeReviewTarget } from '../../features/code-mode/types';
@@ -1155,6 +1156,7 @@ export function ChatPanel({
           </div>
         </div>
       )}
+      <WorkspaceQuotaBanner />
       {hasHarnessProgress && (
         <div className="sticky top-0 z-10 px-3 pt-2 bg-bg/95 backdrop-blur-sm">
           <HarnessProgressBar />

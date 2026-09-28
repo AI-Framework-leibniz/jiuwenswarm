@@ -8,7 +8,8 @@ import { useState, useCallback, useEffect, useRef, Component, ReactNode, useMemo
 import { ChatPanel } from './components/ChatPanel';
 import { SessionSidebar } from './components/SessionSidebar';
 import { SkillPanel } from './components/SkillPanel';
-import { AgentPanel } from './components/AgentPanel/index';
+import { WorkspacePanel } from './components/WorkspacePanel/index';
+import { ApprovalsPanel } from './components/ApprovalsPanel';
 import { TeamPanel } from './components/TeamPanel';
 import { SessionsPanel } from './components/SessionsPanel';
 import CronPanel from './components/CronPanel';
@@ -73,7 +74,7 @@ import {
   type MainNavKey,
 } from './features/mainNavigationState';
 import { ConversationSidebar, type NewConversationOptions } from './multi-session/sidebar/ConversationSidebar';
-import { DeleteDialog } from './multi-session/dialogs/Dialogs';
+import { DeleteDialog, NoticeDialog } from './multi-session/dialogs/Dialogs';
 import {
   NEW_CONVERSATION_ID,
   createConversationTitle,
@@ -83,7 +84,7 @@ import {
   resetNewConversationRuntime,
 } from './multi-session/state/newConversationLifecycle';
 import { toDisplaySessionTitle } from './utils/documentMessage';
-import { createConversationSession } from './multi-session/state/createConversationSession';
+import { createConversationSession, isWorkspaceQuotaError } from './multi-session/state/createConversationSession';
 import { useTranslation } from 'react-i18next';
 import {
   normalizeA2UIEnabled,
@@ -341,7 +342,10 @@ function AppContent() {
   const enterpriseMode = isEnterprise();
   const cronJobPullSyncEnabled = enterpriseMode && getWebTransport() === 'http';
   useCronJobSync(cronJobPullSyncEnabled);
-  const enterpriseBlockedNav = new Set<MainNavKey>(ENTERPRISE_HIDDEN_NAV_ITEMS);
+  const enterpriseBlockedNav = useMemo(
+    () => new Set<MainNavKey>(enterpriseMode ? ENTERPRISE_HIDDEN_NAV_ITEMS : (['approvals'] as const)),
+    [enterpriseMode],
+  );
   const [activeNav, setActiveNav] = useState<MainNavKey>(() => {
     let stored: string | null = null;
     try {
@@ -350,7 +354,7 @@ function AppContent() {
       // Storage may be unavailable in private/locked-down browser contexts.
     }
     return parseStoredMainNav(stored, {
-      blocked: enterpriseMode ? ENTERPRISE_HIDDEN_NAV_ITEMS : [],
+      blocked: enterpriseMode ? ENTERPRISE_HIDDEN_NAV_ITEMS : ['approvals'],
       updaterEnabled: FEATURE_APP_UPDATER_UI,
     });
   });
@@ -380,6 +384,7 @@ function AppContent() {
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
+  const [createErrorNotice, setCreateErrorNotice] = useState<{ title: string; message?: string } | null>(null);
   const [composerFocusNonce, setComposerFocusNonce] = useState(0);
   const [missingSessionId, setMissingSessionId] = useState<string | null>(null);
   const startupUpdateCheckRef = useRef(false);
@@ -430,7 +435,7 @@ function AppContent() {
   useEffect(() => {
     const handler = (e: Event) => {
       const nav = (e as CustomEvent<MainNavKey>).detail;
-      if (!nav || (enterpriseMode && enterpriseBlockedNav.has(nav))) return;
+      if (!nav || enterpriseBlockedNav.has(nav)) return;
       setActiveNav(nav);
       if (nav === 'skills') setHasVisitedSkills(true);
       if (nav === 'channels') setHasVisitedChannels(true);
@@ -1905,7 +1910,13 @@ function AppContent() {
         useChatStore.getState().setThinking(NEW_CONVERSATION_ID, false);
         useChatStore.getState().setInputValue(NEW_CONVERSATION_ID, content);
         console.error('Failed to create conversation:', error);
-        window.alert(t('multiSession.errors.create'));
+        const quotaHit = isWorkspaceQuotaError(error);
+        setCreateErrorNotice(quotaHit
+          ? {
+            title: t('multiSession.errors.quotaExceededTitle'),
+            message: t('multiSession.errors.quotaExceeded'),
+          }
+          : { title: t('multiSession.errors.create') });
       } finally {
         creatingSessionRef.current = false;
       }
@@ -2365,7 +2376,7 @@ function AppContent() {
   }, [deleteTarget, enterNewConversation, request, t]);
 
   const handleNavigate = useCallback((nav: MainNavKey) => {
-    if (enterpriseMode && enterpriseBlockedNav.has(nav)) return;
+    if (enterpriseBlockedNav.has(nav)) return;
     setActiveNav(nav);
     if (modelSetupGuideStep === 1 && nav === 'configpanel') {
       setModelSetupGuideStep(2);
@@ -2373,7 +2384,7 @@ function AppContent() {
     if (nav === 'skills') setHasVisitedSkills(true);
     if (nav === 'channels') setHasVisitedChannels(true);
     if (nav === 'personalContext') setHasVisitedPersonalContext(true);
-  }, [enterpriseMode, modelSetupGuideStep]);
+  }, [enterpriseBlockedNav, modelSetupGuideStep]);
 
   const skipModelSetupGuide = useCallback(() => {
     setModelSetupGuideStep(null);
@@ -2498,7 +2509,7 @@ function AppContent() {
         isConnected={isConnected}
         onNewSession={handleNewSession}
         showNewSession={false}
-        hiddenNavItems={enterpriseMode ? ['sessions', 'history', ...ENTERPRISE_HIDDEN_NAV_ITEMS] : ['sessions', 'history']}
+        hiddenNavItems={enterpriseMode ? ['sessions', 'history', ...ENTERPRISE_HIDDEN_NAV_ITEMS] : ['sessions', 'history', 'approvals']}
         onMorePanelOpenChange={setSidebarMorePanelOpen}
       />
 
@@ -2632,7 +2643,12 @@ function AppContent() {
         )}
         {activeNav === 'agents' && (
           <div className="app-section">
-            <AgentPanel sessionId={sessionId} />
+            <WorkspacePanel sessionId={sessionId} />
+          </div>
+        )}
+        {activeNav === 'approvals' && (
+          <div className="app-section">
+            <ApprovalsPanel />
           </div>
         )}
         {activeNav === 'teams' && (
@@ -2767,6 +2783,14 @@ function AppContent() {
           error={dialogError}
           onCancel={() => setDeleteTarget(null)}
           onDelete={() => { void handleDeleteConversation(); }}
+        />
+      )}
+
+      {createErrorNotice && (
+        <NoticeDialog
+          title={createErrorNotice.title}
+          message={createErrorNotice.message}
+          onClose={() => setCreateErrorNotice(null)}
         />
       )}
 
