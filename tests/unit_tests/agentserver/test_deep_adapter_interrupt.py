@@ -373,7 +373,7 @@ async def test_supplement_keeps_unrelated_interrupt_state(
 
     cleared = await getattr(
         adapter,
-        "_clear_pending_ask_user_interrupt_for_supplement",
+        "_drop_pending_pure_ask_user_round",
     )(session_id)
 
     assert cleared is False
@@ -399,7 +399,7 @@ async def test_supplement_keeps_ask_user_state_when_context_cannot_be_rolled_bac
 
     cleared = await getattr(
         adapter,
-        "_clear_pending_ask_user_interrupt_for_supplement",
+        "_drop_pending_pure_ask_user_round",
     )("tui_sess_1")
 
     assert cleared is False
