@@ -3521,7 +3521,10 @@ class JiuWenSwarmDeepAdapter:
                 )
             await context_engine.save_contexts(loop_session)
         except Exception:
-            logger.debug(
+            # warning（非 debug）：drop 失败时 Bug2 会原样复发（下条消息被当 resume
+            # 重生成），线上 info 级别须留异常栈可查；对齐 _clear_pending_skill_turbo_hitl
+            # 清理失败的 warning 级别（见本类同结构 except）。
+            logger.warning(
                 "[JiuWenSwarmDeepAdapter] interrupt(cancel/supplement): failed to inspect "
                 "pending pure ask_user round session=%s",
                 target_sid,

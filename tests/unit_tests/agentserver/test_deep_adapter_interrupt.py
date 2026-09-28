@@ -350,6 +350,62 @@ async def test_interaction_supplement_clears_pending_ask_user_state() -> None:
     assert response.payload["new_input"] == "再执行一次"
 
 
+@pytest.mark.asyncio
+async def test_interaction_cancel_clears_pending_ask_user_state() -> None:
+    """cancel 同样必须丢弃暂停的纯 ask_user 轮，否则下条消息被当 resume 重生成（Bug2）。
+
+    与 supplement 同构（_process_interaction_interrupt 的 cancel 分支），覆盖
+    should_drop_ask_user 的 cancel 触发：选 cancel 后残留 ask_user INTERRUPTION_KEY
+    必被清，避免现有 4 个 cancel 测试因 loop_session 未匹配而在守卫处短路、漏掉
+    本 PR 唯一行为变更。
+    """
+    loop_session = MagicMock(spec=["get_session_id", "get_state", "update_state"])
+    loop_session.get_session_id.return_value = "tui_sess_1"
+    interruption_state = _interruption_state("ask_user")
+    loop_session.get_state.return_value = interruption_state
+    context = MagicMock()
+    context.get_messages.return_value = [
+        SimpleNamespace(tool_calls=[]),
+        interruption_state.ai_message,
+    ]
+    context_engine = MagicMock()
+    context_engine.get_context.return_value = context
+    context_engine.save_contexts = AsyncMock()
+
+    instance = MagicMock()
+    instance._interaction_started = True
+    instance._loop_session = loop_session
+    instance.card = SimpleNamespace(id="card-cancel-1")
+    instance.react_agent = SimpleNamespace(context_engine=context_engine)
+    instance.goal_manager = None  # 跳过 goal pause 分支，聚焦 drop
+    instance.cancel_round = AsyncMock(return_value=False)
+
+    rail = MagicMock()
+    rail.get_cancelled_tool_results.return_value = []
+    adapter = _make_adapter(
+        _active_session_ids={},
+        _stream_event_rail=rail,
+        _instance=instance,
+    )
+
+    isolated_session = MagicMock()
+    isolated_session.pre_run = AsyncMock()
+    isolated_session.post_run = AsyncMock()
+    with patch(
+        "openjiuwen.core.session.agent.create_agent_session",
+        return_value=isolated_session,
+    ):
+        response = await adapter.process_interrupt(_build_cancel_request("tui_sess_1"))
+
+    # drop 的三处直接效果（与 supplement 同构）：
+    all_calls = loop_session.update_state.call_args_list
+    assert call({INTERRUPTION_KEY: None}) in all_calls
+    context.pop_messages.assert_called_once_with(1, with_history=True)
+    context_engine.save_contexts.assert_awaited_once_with(loop_session)
+    assert response.payload["intent"] == "cancel"
+    assert response.payload["success"] is True
+
+
 @pytest.mark.parametrize(
     ("session_id", "tool_names"),
     [
