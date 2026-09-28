@@ -167,3 +167,22 @@ def test_gate_defaults_to_true_when_config_unavailable(
 
     monkeypatch.setattr("jiuwenswarm.common.config.get_config", _raise)
     assert app_agentserver._should_apply_sse_invoke_patch() is True  # pylint: disable=protected-access
+
+
+def test_runtime_refresh_applies_patch_after_xiaoyi_claw_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """运行时启用 xiaoyi_claw 后无需重启即可补打 SSE 响应组装补丁。"""
+    config = {"channels": {"xiaoyi": {"apps": [{"mode": "xiaoyi_channel"}]}}}
+    calls: list[bool] = []
+    _stub_config(monkeypatch, config)
+    monkeypatch.setattr(
+        app_agentserver,
+        "apply_openai_response_assembly_patch",
+        lambda: calls.append(True),
+    )
+
+    assert app_agentserver.refresh_openai_response_assembly_patch() is False
+    config["channels"]["xiaoyi"]["apps"][0]["mode"] = "xiaoyi_claw"
+    assert app_agentserver.refresh_openai_response_assembly_patch() is True
+    assert calls == [True]

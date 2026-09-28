@@ -2934,6 +2934,7 @@ async def _consume_stream_with_query(
                 session_id,
                 {
                     "event_type": "chat.error",
+                    "code": "team_stream_error",
                     "error": "Team stream ended with no output (possible pool/DB inconsistency or internal error)",
                     "session_id": session_id,
                 },
@@ -2967,6 +2968,7 @@ async def _consume_stream_with_query(
             session_id,
             {
                 "event_type": "chat.error",
+                "code": "team_stream_error",
                 "error": str(exc),
                 "session_id": session_id,
             },

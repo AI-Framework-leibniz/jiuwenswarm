@@ -192,8 +192,19 @@ def _should_apply_sse_invoke_patch() -> bool:
     return "xiaoyi_claw" in modes
 
 
-if _should_apply_sse_invoke_patch():
+def refresh_openai_response_assembly_patch() -> bool:
+    """Apply the SSE response assembly patch when the current config needs it.
+
+    The patch is idempotent, so this can be called both at process startup and
+    after a runtime config reload that enables ``xiaoyi_claw``.
+    """
+    if not _should_apply_sse_invoke_patch():
+        return False
     apply_openai_response_assembly_patch()
+    return True
+
+
+refresh_openai_response_assembly_patch()
 
 # [PERF 实验] 企业版 + symphony 关闭时短路 evolution rail 轨迹 drain
 from jiuwenswarm.perf.evolution_rail_short_circuit import (

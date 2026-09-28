@@ -243,13 +243,21 @@ async def test_reload_agents_config_resolves_config_once_when_config_none(monkey
 
 @pytest.mark.asyncio
 async def test_agent_reload_config_handler_passes_explicit_scope(monkeypatch):
+    from jiuwenswarm.server import app_agentserver
+
     server = agent_ws_server_module.AgentWebSocketServer()
     calls = []
+    refresh_sse_patch = MagicMock()
 
     async def fake_reload(config, env, **kwargs):
         calls.append((config, env, kwargs))
 
     monkeypatch.setattr(server._agent_manager, "reload_agents_config", fake_reload)
+    monkeypatch.setattr(
+        app_agentserver,
+        "refresh_openai_response_assembly_patch",
+        refresh_sse_patch,
+    )
     patch_handler_name(monkeypatch, "encode_agent_response_for_wire", lambda resp, response_id: {
             "response_id": response_id,
             "ok": resp.ok,
@@ -281,6 +289,7 @@ async def test_agent_reload_config_handler_passes_explicit_scope(monkeypatch):
             },
         )
     ]
+    refresh_sse_patch.assert_called_once_with()
 
 
 @pytest.mark.asyncio
