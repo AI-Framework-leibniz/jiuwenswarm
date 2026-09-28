@@ -31,7 +31,10 @@ from openjiuwen.agent_teams.rails.team_context import (
     get_team_backend,
 )
 
+from openjiuwen.harness.rails.personal_context import PersonalContextRail
+
 from jiuwenswarm.agents.harness.common.plugins.rail_manager import get_rail_manager
+from jiuwenswarm.common.utils import get_user_workspace_dir
 from jiuwenswarm.server.runtime.runtime_scope import RuntimeScopeKey
 from jiuwenswarm.agents.harness.common.rails.runtime_prompt_rail import (
     RuntimePromptRail,
@@ -57,13 +60,18 @@ from jiuwenswarm.agents.harness.team.rails.team_shared_skill_link_refresh_rail i
 from jiuwenswarm.agents.harness.team.rails.team_workspace_report_path_rail import (
     TeamWorkspaceReportPathRail,
 )
+from jiuwenswarm.agents.harness.team.rails.request_scoped_mcp_tools_rail import (
+    RequestScopedMcpToolsRail,
+)
 from jiuwenswarm.agents.harness.team.team_runtime_inheritance import (
     _build_context_processor_rail,
 )
+
 from jiuwenswarm.agents.swarm.context import SwarmBuildContext
 
 logger = logging.getLogger(__name__)
 
+PERSONAL_CONTEXT = "swarm.personal_context"
 RUNTIME_PROMPT = "swarm.runtime_prompt"
 TEAM_SKILL_STORAGE_POLICY = "swarm.team_skill_storage_policy"
 TEAM_SHARED_SKILL_LINK_REFRESH = "swarm.team_shared_skill_link_refresh"
@@ -75,6 +83,28 @@ SYMPHONY_ORCHESTRATION_PROMPT = "swarm.symphony_orchestration_prompt"
 A2A_OUTBOUND_TOOLKIT = "swarm.a2a_outbound_toolkit"
 TEAM_PERMISSION_POLICY = "swarm.team_permission_policy"
 DISABLED_TOOLS = "swarm.disabled_tools"
+REQUEST_SCOPED_MCP_TOOLS = "swarm.request_scoped_mcp_tools"
+
+
+@harness_element(
+    kind=ElementKind.RAIL,
+    name=PERSONAL_CONTEXT,
+    description="Personal context shared with work/code, gated by the fixed-home Agent-use switch on each model call.",
+)
+def _build_personal_context_rail(
+    params: dict[str, Any],
+    context: SwarmBuildContext,
+) -> PersonalContextRail | None:
+    """Mount even when disabled so live members observe subsequent switch changes."""
+    del params, context
+    try:
+        return PersonalContextRail(get_user_workspace_dir() / ".personal_context")
+    except Exception as exc:
+        logger.warning(
+            "[swarm.personal_context] optional Rail construction failed (%s)",
+            type(exc).__name__,
+        )
+        return None
 
 
 def _workspace_root(ctx: SwarmBuildContext) -> str | None:
@@ -100,6 +130,33 @@ def _runtime_scope_from_context(ctx: SwarmBuildContext) -> RuntimeScopeKey:
             getattr(ctx, "session_id", None),
         )
     return RuntimeScopeKey.from_ids(session_id=getattr(ctx, "session_id", None))
+
+
+class RequestScopedMcpToolsInput(ConstructionInput):
+    """Stable session key used to resolve the current in-process registration."""
+
+    session_id: str = context_field(
+        attr="session_id",
+        default="",
+        description="Originating Team session id.",
+    )
+
+
+@harness_element(
+    kind=ElementKind.RAIL,
+    name=REQUEST_SCOPED_MCP_TOOLS,
+    description="Mounts the current request's MCP tools on one in-process Team member.",
+    input_model=RequestScopedMcpToolsInput,
+)
+def _build_request_scoped_mcp_tools_rail(
+    params: dict[str, Any],
+    context: SwarmBuildContext,
+) -> RequestScopedMcpToolsRail | None:
+    inp = RequestScopedMcpToolsInput.resolve(params, context)
+    session_id = str(inp.session_id or "").strip()
+    if not session_id:
+        return None
+    return RequestScopedMcpToolsRail(session_id)
 
 
 class SkillRetrievalPromptInput(ConstructionInput):

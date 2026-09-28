@@ -26,6 +26,7 @@ from jiuwenswarm.common.config import (
     update_skill_retrieval_in_config,
     update_setup_guide_enabled_in_config,
     update_evolution_enabled_in_config,
+    update_ttse_enabled_in_config,
     update_xiaoyi_runtime_in_config,
 )
 
@@ -171,6 +172,19 @@ class TestConfigFunctions:
         raw = yaml.safe_load(temp_config_file.read_text(encoding="utf-8"))
         assert raw["react"]["evolution"]["enabled"] is False
         assert get_evolution_enabled(raw) is False
+
+    @staticmethod
+    def test_update_ttse_enabled_in_config(
+        monkeypatch: pytest.MonkeyPatch,
+        temp_config_file: Path,
+    ):
+        monkeypatch.setattr("jiuwenswarm.common.config.get_config_file", lambda: temp_config_file)
+
+        update_ttse_enabled_in_config(False)
+
+        raw = yaml.safe_load(temp_config_file.read_text(encoding="utf-8"))
+        assert raw["react"]["ttse"]["enabled"] is False
+        assert get_ttse_enabled(raw) is False
 
     @pytest.mark.parametrize(
         ("config", "expected"),
@@ -538,6 +552,43 @@ symphony:
         assert migrated["symphony"]["fingerprint"]["extraction"]["workers"] == 3
         assert migrated["symphony"]["fingerprint"]["extraction"]["batch_size"] == 1
         assert migrated["symphony"]["fingerprint"]["normalization"]["workers"] == 1
+
+    @staticmethod
+    def test_migrate_config_preserves_permissions_agents_table(tmp_path: Path):
+        template_path = tmp_path / "template.yaml"
+        user_config_path = tmp_path / "config.yaml"
+        template_path.write_text(
+            """
+permissions:
+  enabled: false
+  schema: tiered_policy
+  tools:
+    bash: allow
+  agents: {}
+""",
+            encoding="utf-8",
+        )
+        user_config_path.write_text(
+            """
+permissions:
+  enabled: true
+  tools:
+    bash: ask
+  agents:
+    default:
+      enabled: true
+      tools:
+        bash: deny
+""",
+            encoding="utf-8",
+        )
+
+        assert migrate_config_from_template(template_path, user_config_path) is True
+
+        migrated = yaml.safe_load(user_config_path.read_text(encoding="utf-8"))
+        assert migrated["permissions"]["enabled"] is True
+        assert migrated["permissions"]["tools"]["bash"] == "ask"
+        assert migrated["permissions"]["agents"]["default"]["tools"]["bash"] == "deny"
 
     @staticmethod
     def test_migrate_config_preserves_legacy_evolution_settings(

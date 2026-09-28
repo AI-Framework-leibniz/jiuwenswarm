@@ -46,6 +46,7 @@ from jiuwenswarm.server.runtime.skill_turbo.rails import (
 )
 from jiuwenswarm.server.runtime.skill_turbo.node_artifact_store import (
     clear_node_artifacts,
+    load_node_artifacts,
     save_node_artifacts,
 )
 from jiuwenswarm.server.runtime.skill_turbo.permission_bridge import (
@@ -62,7 +63,10 @@ from jiuwenswarm.server.runtime.skill_turbo.markdown_stream import (
     markdown_stream_incoming,
     terminate_dangling_markdown_fence,
 )
-from jiuwenswarm.server.runtime.skill_turbo.fallback_handler import FallbackContractError
+from jiuwenswarm.server.runtime.skill_turbo.fallback_handler import (
+    FallbackCall,
+    FallbackContractError,
+)
 from jiuwenswarm.server.runtime.skill_turbo.interactive_ask import (
     resolve_interactive_ask_from_inputs,
 )
@@ -465,13 +469,6 @@ class SkillTurboExecutor:
         self._stream_event_rail = JiuSwarmStreamEventRail()
         self._artifact_rail = SkillTurboArtifactRail(self)
 
-        # 复用 DeepAgent 已有的 PermissionInterruptRail（基于权限引擎做 ALLOW/DENY/ASK）。
-        # ASK 决策会抛出 AbortError(cause=ToolInterruptException(request, tool_call))，
-        # 由 _run_rail_hook → use_tool 透传出去，最终被 adapter 转成 HITL 三件套 chunk。
-        permission_rail = self._build_permission_rail()
-        # 保存引用：replay-skip 路径需跳过权限 rail，但保留事件发射类 rail
-        self._permission_rail = permission_rail
-
         # 结构化 ask_user rail：拦截 skill_code 的 call_tool("ask_user", questions=...)，
         # 首次调用抛 AbortError 触发 HITL（前端弹 ask_user_question 卡片），
         # resume 时把用户作答按前端 answers 结构回填给 skill_code。
@@ -482,11 +479,11 @@ class SkillTurboExecutor:
         self._llm_retry_rail = self._build_llm_retry_rail()
 
         # Rail列表（按优先级排序）
+        # 审批职责已收口外层 skill_acceleration_exec 工具（config: skill_turbo: ask
+        # 下 DeepAgent 层一次性授权内部工具），内层不再挂权限 rail。
         self._rails = [self._stream_event_rail]
         if self._ask_user_rail is not None:
             self._rails.append(self._ask_user_rail)
-        if permission_rail is not None:
-            self._rails.append(permission_rail)
         if self._llm_retry_rail is not None:
             self._rails.append(self._llm_retry_rail)
         self._rails.append(self._artifact_rail)
@@ -586,13 +583,6 @@ class SkillTurboExecutor:
         skill_name = self._env.skill_name
         if skill_name and "skill_name" not in merged:
             merged["skill_name"] = skill_name
-        # [TEMP-EXTERNAL-SKILL] 注入 skill_checksum（SHA256 校验值）
-        skill_checksum = self._env.skill_checksum
-        if skill_checksum and "skill_checksum" not in merged:
-            merged["skill_checksum"] = skill_checksum
-        # [TEMP-EXTERNAL-SKILL] 注入 skill_checksum_ok（框架层预计算的校验结果）
-        if "skill_checksum_ok" not in merged:
-            merged["skill_checksum_ok"] = self._env.skill_checksum_ok
         return merged
 
     def _build_tool_loader_context(
@@ -723,6 +713,12 @@ class SkillTurboExecutor:
         # HITL resume 重放时保留产物（执行跳过主要靠 resume inputs；清盘会误伤可复用记录）。
         if not self._resume_replay:
             await self._clear_stale_node_artifacts()
+        else:
+            # P2-2：resume 重放从 session 继承同 plan_code 的已完成节点产物。
+            # 新 executor 的 holder 为空，completed 阶段又被 _should_skip_subplan_execute
+            # 跳过不再采集——若不继承，finally 落盘会用「空底+新增」覆盖 session，
+            # 中断前已完成阶段的产物就此丢失。
+            await self._inherit_node_artifacts_for_replay(plan_code)
 
         logger.info(
             "[SkillTurboExecutor] execute_plan_stream start plan_code_len=%s input_keys=%s resume_replay=%s",
@@ -932,11 +928,14 @@ class SkillTurboExecutor:
     def _build_permission_rail(self) -> Any | None:
         """构建 PermissionInterruptRail；权限被禁用或构建失败时返回 None。
 
-        复用 DeepAgent 的 ``build_permission_rail`` 工厂，配置取自
-        ``environment.config['permissions']``，model 句柄取 ``model_client``。
+        复用 DeepAgent 的 ``build_permission_rail`` 工厂。专属 body 取自
+        ``environment.config['permissions']``（Adapter 注入的 yaml
+        ``agents[id]`` / 企业模板）；未注入则回落生效全局段。
+        ``permissions_persist_target_agent_id`` 在 rail 构建时钉住落盘目标。
         """
         try:
             from jiuwenswarm.agents.harness.common.rails.interrupt.interrupt_helpers import (
+                PermissionRailBuildOptions,
                 build_permission_rail,
             )
         except Exception as exc:
@@ -960,8 +959,24 @@ class SkillTurboExecutor:
             model_name = None
             logger.debug("[SkillTurboExecutor] read model_name failed", exc_info=True)
 
+        perm_body = cfg.get("permissions") if isinstance(cfg.get("permissions"), dict) else None
+        persist_target = cfg.get("permissions_persist_target_agent_id")
+        persist_target_id = (
+            str(persist_target).strip() if persist_target is not None and str(persist_target).strip() else None
+        )
+
         try:
-            return build_permission_rail(cfg, llm=model, model_name=model_name)
+            return build_permission_rail(
+                cfg,
+                PermissionRailBuildOptions(
+                    llm=model,
+                    model_name=model_name,
+                    permission_config=perm_body,
+                    persist_target_agent_id_provider=(
+                        (lambda: persist_target_id) if persist_target_id else None
+                    ),
+                ),
+            )
         except Exception as exc:
             logger.warning(
                 "[SkillTurboExecutor] build_permission_rail failed: %s", exc
@@ -1066,22 +1081,14 @@ class SkillTurboExecutor:
         self,
         hook_name: str,
         ctx: AgentCallbackContext,
-        *,
-        skip_rails: set[Any] | None = None,
     ) -> None:
         """按 Rail 优先级执行 hook。
 
         关键：``AbortError``（PermissionInterruptRail HITL 中断）必须向上抛出，
         否则护栏会被悄悄吞掉，前端永远收不到审批请求。
         其它普通 ``Exception`` 仍按"单 Rail 失败不影响主链"打 warning 后继续。
-
-        ``skip_rails``：需跳过的 rail 实例集合。replay-skip 路径用此参数
-        跳过 ``PermissionInterruptRail``，但仍执行事件发射类 rail 的 ``before_tool_call``，
-        以补发 ``chat.tool_call`` / ``chat.tool_update`` 事件。
         """
         for rail in self._rails:
-            if skip_rails and rail in skip_rails:
-                continue
             hook = getattr(rail, hook_name, None)
             if hook is None:
                 continue
@@ -1315,6 +1322,80 @@ class SkillTurboExecutor:
                         exc_info=True,
                     )
 
+    async def _inherit_node_artifacts_for_replay(self, plan_code: str) -> None:
+        """HITL resume 重放前，从 session 继承同 plan_code 的已完成节点产物（P2-2）。
+
+        每次请求新建 Executor，holder 为空；重放时 completed 阶段被
+        ``_should_skip_subplan_execute`` 跳过不再采集。若不继承，finally 的
+        ``_persist_node_artifacts`` 会用「空底+新增」覆盖 session state，
+        中断前已完成阶段的产物就此丢失。继承后：
+        - 重放阶段新产物按 plan_name 覆盖继承条目（自然收敛）；
+        - finally 落盘写出的是「继承 ∪ 新增」的完整集合。
+
+        仅当持久化记录的 ``plan_code_hash`` 与当前重放的 plan_code 哈希一致时
+        才继承；旧记录无哈希字段时视为匹配（fail-open）。哈希不一致说明产物
+        属于另一个 plan（如 planner 重新生成），不继承。
+
+        与 ``_clear_stale_node_artifacts`` 同范式：用独立 session 读写，
+        post_run 只关闭临时 session 的 stream emitter，不影响主 session。
+        """
+        session = _session_var.get()
+        if session is None:
+            return
+        sid = getattr(session, "session_id", None) or getattr(session, "_session_id", None)
+        card = self._env.card
+        load_session = None
+        try:
+            load_session = create_agent_session(
+                session_id=sid, card=card
+            ) if sid else create_agent_session(card=card)
+            # 必须与 _setup_execution_context 一致，使用 __skill_turbo agent_id 隔离
+            # checkpointer key，否则读不到 {card.id}__skill_turbo key 下的产物记录。
+            set_skill_turbo_id(load_session, card)
+            await load_session.pre_run(inputs=None)
+            state = await load_node_artifacts(load_session)
+            if not state:
+                return
+            nodes = state.get("nodes") or {}
+            if not isinstance(nodes, dict) or not nodes:
+                return
+            persisted_hash = str(state.get("plan_code_hash") or "")
+            current_hash = self._hash_code(plan_code)
+            if persisted_hash and persisted_hash != current_hash:
+                logger.warning(
+                    "[SkillTurboExecutor] skip inheriting node artifacts: "
+                    "plan_code_hash mismatch persisted=%s current=%s nodes=%d",
+                    persisted_hash,
+                    current_hash,
+                    len(nodes),
+                )
+                return
+            for plan_name, entry in nodes.items():
+                if plan_name:
+                    self._node_artifacts_holder[plan_name] = entry
+            logger.info(
+                "[SkillTurboExecutor] inherited node artifacts for replay: "
+                "plan_code_hash=%s inherited_nodes=%d",
+                current_hash,
+                len(nodes),
+            )
+        except Exception:
+            logger.warning(
+                "[SkillTurboExecutor] inherit node artifacts for replay failed "
+                "(fail-open, holder stays empty)",
+                exc_info=True,
+            )
+        finally:
+            # post_run 必须执行以关闭 stream emitter，即使加载抛异常也不能漏
+            if load_session is not None:
+                try:
+                    await load_session.post_run()
+                except Exception:
+                    logger.debug(
+                        "[SkillTurboExecutor] inherit load_session post_run failed",
+                        exc_info=True,
+                    )
+
     async def _persist_node_artifacts(
         self, session: Any, *, skip_post_run: bool = False
     ) -> None:
@@ -1331,12 +1412,18 @@ class SkillTurboExecutor:
         """
         if not self._node_artifacts_holder:
             return
-        skill = self._env.skill_name or ""
+        # 产物溯源技能名：优先取 merge 后的执行 inputs，回退 env 构造期默认值（单 skill 场景两者一致）。
+        skill = str(
+            self._execution_inputs.get("skill_name")
+            or self._env.skill_name
+            or ""
+        )
         try:
             await save_node_artifacts(
                 session,
                 skill=skill,
                 nodes=dict(self._node_artifacts_holder),
+                plan_code_hash=self._hash_code(self._current_plan_code or ""),
                 skip_post_run=skip_post_run,
             )
         except Exception as exc:
@@ -1707,20 +1794,11 @@ class SkillTurboExecutor:
             )
 
             # skill_turbo 外层统一审批：审批已在 deepagent 层对 skill_turbo 工具
-            # 整体完成（config: skill_turbo: ask），内部工具调用不再逐个审批，
-            # 始终跳过 PermissionInterruptRail，直接放行。
-            # 仍执行事件发射类 rail（stream_event_rail 等）的 before_tool_call，
+            # 整体完成（config: skill_turbo: ask），内层不再逐个审批。
+            # 事件发射类 rail（stream_event_rail 等）的 before_tool_call 仍执行，
             # 以补发 chat.tool_call / chat.tool_update 事件，避免前端工具结果
             # 凭空出现、缺调用上下文。
-            await self._run_rail_hook(
-                "before_tool_call",
-                ctx,
-                skip_rails=(
-                    {self._permission_rail}
-                    if self._permission_rail is not None
-                    else None
-                ),
-            )
+            await self._run_rail_hook("before_tool_call", ctx)
 
             # rail 通过 _skip_tool 标记 reject，已经在 ctx.inputs.tool_result 写入结果
             if ctx.extra.get("_skip_tool"):
@@ -1736,7 +1814,7 @@ class SkillTurboExecutor:
             # rail approve（含 resume approve）：清掉断点 ctx，正常执行
             if resume_input is not None:
                 try:
-                    clear_resume_ctx(session)
+                    await clear_resume_ctx(session)
                 except Exception:
                     logger.debug(
                         "[SkillTurboExecutor] clear_resume_ctx after approve failed", exc_info=True
@@ -2338,11 +2416,14 @@ class SkillTurboExecutor:
             self._fallback_count,
         )
         return await handler.fallback(
-            node_name=node.plan_name,
-            instruction=node.instruction or "",
-            inputs=inputs,
-            error=error,
-            parent_session=_session_var.get(),
+            FallbackCall(
+                node_name=node.plan_name,
+                instruction=node.instruction or "",
+                inputs=inputs,
+                error=error,
+                parent_session=_session_var.get(),
+                result_validator=node.validate_fallback_success,
+            )
         )
 
     async def fallback_stream(
@@ -2385,11 +2466,14 @@ class SkillTurboExecutor:
             self._fallback_count,
         )
         async for chunk in handler.fallback_stream(
-            node_name=node.plan_name,
-            instruction=node.instruction or "",
-            inputs=inputs,
-            error=error,
-            parent_session=_session_var.get(),
+            FallbackCall(
+                node_name=node.plan_name,
+                instruction=node.instruction or "",
+                inputs=inputs,
+                error=error,
+                parent_session=_session_var.get(),
+                result_validator=node.validate_fallback_success,
+            )
         ):
             yield chunk
 
@@ -3545,6 +3629,13 @@ class SkillTurboExecutor:
 
     def _load_plan_namespace(self, plan_code: str) -> dict[str, Any]:
         self._ensure_skill_code_import_path()
+        # 外部动态包自愈：resume 重放 / 包注册表缺失时按 plan_code 重新发现注册
+        # （幂等；未命中则交由 import 自然抛错走降级链路）
+        from jiuwenswarm.server.runtime.skill_turbo.turbo_package_loader import (
+            ensure_packages_for_plan_code,
+        )
+
+        ensure_packages_for_plan_code(plan_code)
         namespace = self._build_namespace()
         try:
             exec(plan_code, namespace)  # noqa: S102

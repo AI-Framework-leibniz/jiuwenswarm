@@ -25,7 +25,10 @@ from jiuwenswarm.agents.harness.common.tools.deepresearch_plugin.document_rewrit
 
 def _write_document(root: Path, body: str) -> tuple[Path, dict]:
     report = root / "report-v1.md"
-    report.write_text(body, encoding="utf-8")
+    # write_bytes, not write_text: content_sha256 is computed over body's
+    # exact UTF-8 bytes, and text mode would translate \n -> \r\n on
+    # Windows, breaking the byte-exact hash check in prepare_rewrite.
+    report.write_bytes(body.encode("utf-8"))
     authoritative_citation = {
         "id": 3,
         "reference_index": 1,
@@ -2146,7 +2149,14 @@ def test_context_store_is_bounded_and_evicts_earliest_expiry(
     with rewrite_module._CONTEXT_LOCK:
         rewrite_module._CONTEXTS.clear()
 
-    tokens = [_prepare(tmp_path, report, "text")["context_token"] for _ in range(5)]
+    # 连续 _prepare 可能落在同一个单调时钟 tick，expires_at 相同时淘汰会退化为按 token 字符串比较；
+    # 显式让每个 token 的过期时间严格递增，使"最早过期"没有歧义。
+    tokens = []
+    for _ in range(5):
+        token = _prepare(tmp_path, report, "text")["context_token"]
+        with rewrite_module._CONTEXT_LOCK:
+            rewrite_module._CONTEXTS[token].expires_at = rewrite_module.time.monotonic() + len(tokens)
+        tokens.append(token)
 
     with rewrite_module._CONTEXT_LOCK:
         assert len(rewrite_module._CONTEXTS) == 3
@@ -2175,7 +2185,14 @@ def test_context_is_compact_under_large_citation_cache_saturation(
     with rewrite_module._CONTEXT_LOCK:
         rewrite_module._CONTEXTS.clear()
 
-    tokens = [_prepare(tmp_path, report, "claim")["context_token"] for _ in range(5)]
+    # 同 test_context_store_is_bounded_and_evicts_earliest_expiry：
+    # 让每个 token 的过期时间严格递增，避免同一时钟 tick 下淘汰顺序不确定。
+    tokens = []
+    for _ in range(5):
+        token = _prepare(tmp_path, report, "claim")["context_token"]
+        with rewrite_module._CONTEXT_LOCK:
+            rewrite_module._CONTEXTS[token].expires_at = rewrite_module.time.monotonic() + len(tokens)
+        tokens.append(token)
 
     with rewrite_module._CONTEXT_LOCK:
         assert set(rewrite_module._CONTEXTS) == set(tokens[-3:])
@@ -2501,6 +2518,10 @@ def test_commit_retries_markdown_publication_collision_without_overwrite(
         assert rewrite_module._DOCUMENT_LOCKS == {}
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="concurrent sidecar swap requires POSIX unlink-while-open semantics",
+)
 def test_commit_publication_failure_preserves_concurrent_content_and_parent(
     tmp_path, monkeypatch
 ):
@@ -2572,6 +2593,10 @@ def test_commit_keyboard_interrupt_cleans_owned_provenance_and_reraises(
         assert rewrite_module._DOCUMENT_LOCKS == {}
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="concurrent sidecar swap requires POSIX unlink-while-open semantics",
+)
 def test_commit_keyboard_interrupt_preserves_replaced_provenance(tmp_path, monkeypatch):
     report, _ = _write_document(tmp_path, "original\n")
     prepared = _prepare(tmp_path, report, "original")
@@ -2710,7 +2735,12 @@ def _replace_with_unsafe_leaf(
     path.unlink()
     if kind == "symlink":
         outside.write_bytes(original)
-        path.symlink_to(outside)
+        try:
+            path.symlink_to(outside)
+        except OSError:
+            # Creating symlinks needs privilege on Windows; the rejection
+            # semantics are covered where symlinks are creatable.
+            pytest.skip("symlink creation requires privilege on this platform")
     elif kind == "hardlink":
         outside.write_bytes(original)
         os.link(outside, path)
@@ -2766,7 +2796,10 @@ def test_prepare_rejects_initial_symlink_workspace_root(tmp_path):
     outside.mkdir()
     outside_report, _ = _write_document(outside, "original\n")
     workspace = tmp_path / "workspace"
-    workspace.symlink_to(outside, target_is_directory=True)
+    try:
+        workspace.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation requires privilege on this platform")
     report = workspace / outside_report.name
 
     with pytest.raises(RewriteError) as caught:
@@ -2808,7 +2841,10 @@ def test_prepare_html_export_rejects_initial_symlink_workspace_root(tmp_path):
     _, result = _committed_child(outside)
     outside_child = Path(result["report_path"])
     workspace = tmp_path / "workspace"
-    workspace.symlink_to(outside, target_is_directory=True)
+    try:
+        workspace.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation requires privilege on this platform")
 
     with pytest.raises(RewriteError) as caught:
         prepare_html_export(

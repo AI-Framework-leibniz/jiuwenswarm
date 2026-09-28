@@ -148,6 +148,13 @@ from jiuwenswarm.llm_sse_patch import apply_openai_sse_invoke_patch
 
 apply_openai_sse_invoke_patch()
 
+# [PERF 实验] 企业版 + symphony 关闭时短路 evolution rail 轨迹 drain
+from jiuwenswarm.perf.evolution_rail_short_circuit import (
+    apply_evolution_rail_short_circuit,
+)
+
+apply_evolution_rail_short_circuit()
+
 from jiuwenswarm.common.openjiuwen_rail_compat import install_evolution_rail_kwargs_compat
 from jiuwenswarm.openjiuwen_skip_tool_patch import apply_skip_tool_tool_message_patch
 from jiuwenswarm.openjiuwen_streaming_tool_patch import apply_streaming_tool_wait_timeout_patch
@@ -266,6 +273,16 @@ async def _run_with_telemetry(host: str, port: int, telemetry_lifecycle) -> None
     )
     telemetry_lifecycle.bind_extension_manager(extension_manager)
     await extension_manager.load_all_extensions()
+    from jiuwenswarm.common.config import clear_config_cache
+    from jiuwenswarm.common.path_provider import PathCategory, get_path_provider
+    from jiuwenswarm.common.utils import _dispatch_path, setup_logger
+
+    clear_config_cache()
+    logs_override = _dispatch_path(PathCategory.LOGS)
+    rebuild_logger = get_path_provider() is not None and logs_override is not None
+    if rebuild_logger:
+        setup_logger()
+        bootstrap_openjiuwen_logging()
     logger.info("[AgentServer] 扩展加载完成，共 %d 个", len(extension_manager.list_extensions()))
     await telemetry_lifecycle.start(
         process_role="agentserver",

@@ -126,6 +126,28 @@ def _team_hide_teammate_enabled() -> bool:
     """Return whether non-leader teammate frames should be filtered out in team mode."""
     return os.environ.get(_HIDE_TEAMMATE_ENV_KEY, "").strip().lower() == "true"
 
+
+def _parse_team_stream_chunk(chunk: Any, *, _has_streamed_content: bool = False) -> dict[str, Any] | None:
+    """Team stream parser: keep formatting-only deltas (newlines) for Markdown tables.
+
+    Only forward kwargs that the current ``parse_stream_chunk`` callable accepts so
+    unit tests that monkeypatch a one-arg stub keep working.
+    """
+    kwargs: dict[str, Any] = {}
+    try:
+        params = inspect.signature(parse_stream_chunk).parameters
+    except (TypeError, ValueError):
+        params = {}
+    accepts_var_kw = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+    if accepts_var_kw or "_has_streamed_content" in params:
+        kwargs["_has_streamed_content"] = _has_streamed_content
+    if accepts_var_kw or "preserve_whitespace" in params:
+        kwargs["preserve_whitespace"] = True
+    return parse_stream_chunk(chunk, **kwargs)
+
+
 _INTERACT_REASON_ERROR_MAP: dict[str, str] = {
     "not_active": "Team is initializing, please try again later",
     "session_mismatch": "Session state mismatch, please refresh and retry",
@@ -1262,6 +1284,60 @@ _TEAM_TASK_TERMINAL_STATUSES = frozenset({"completed", "cancelled"})
 _TEAM_MEMBER_UNSTARTED_STATUS = "unstarted"
 
 
+_POOL_RELEASE_TIMEOUT_S = 90.0
+_POOL_RELEASE_POLL_S = 0.2
+
+
+def _pool_entry_running(info: Any, team_name: str, session_id: str) -> bool:
+    """True when this session's team is still RUNNING in the runner pool."""
+    if getattr(info, "team_name", None) != team_name:
+        return False
+    if getattr(info, "current_session_id", None) != session_id:
+        return False
+    state = getattr(info, "state", None)
+    return getattr(state, "value", state) == "running"
+
+
+async def _await_runner_pool_release(team_name: str, session_id: str) -> None:
+    """Wait out an in-flight team.session.reset before opening a new stream.
+
+    Reset clears the local stream marker immediately, then spends a long time
+    in stop_coordination. A chat.send in that window used to activate against
+    the still-pooled team, get reject_running, and end with no output.
+    A paused entry is left alone so the next stream can resume it.
+    """
+    deadline = time.monotonic() + _POOL_RELEASE_TIMEOUT_S
+    while True:
+        try:
+            infos = await Runner.list_active_teams()
+        except Exception as exc:
+            logger.warning(
+                "[TeamHelpers] list active teams failed before stream: session_id=%s error=%s",
+                session_id,
+                exc,
+            )
+            return
+        if not any(_pool_entry_running(info, team_name, session_id) for info in infos):
+            return
+        if time.monotonic() >= deadline:
+            logger.warning(
+                "[TeamHelpers] runner pool still running before first stream; stopping: "
+                "session_id=%s team_name=%s",
+                session_id,
+                team_name,
+            )
+            try:
+                await Runner.stop_agent_team(team_name=team_name, session_id=session_id)
+            except Exception as exc:
+                logger.warning(
+                    "[TeamHelpers] stop stuck runner pool failed: session_id=%s error=%s",
+                    session_id,
+                    exc,
+                )
+            return
+        await asyncio.sleep(_POOL_RELEASE_POLL_S)
+
+
 def _run_agent_team_streaming(**kwargs: Any) -> AsyncIterator[Any]:
     # The public Runner facade re-yields the core generator and does not
     # propagate aclose(). Keep the core handle so early round termination runs
@@ -1979,13 +2055,17 @@ async def process_team_message_stream(
                 request.params.get("supports_user_interaction") is not False,
             )
         resolved_mode = str(request_metadata.get("mode") or "").strip()
-        # Page-selected model name (from chat page model selector). Used as a
-        # fallback for team members whose ``modes.team.agents.*.model`` is not
-        # explicitly configured, so cluster mode honors the page model when no
-        # per-agent model is set in config.yaml.
+        # Relay-provided model_ref is authoritative for a uniform selection or
+        # a member-level auto assignment. A name-only request remains a
+        # compatibility fallback for members without explicit model config.
         params_obj = getattr(request, "params", None)
         requested_model_name = (
             str(params_obj.get("model_name") or "").strip()
+            if isinstance(params_obj, dict)
+            else ""
+        ) or None
+        requested_model_ref = (
+            str(params_obj.get("model_ref") or "").strip()
             if isinstance(params_obj, dict)
             else ""
         ) or None
@@ -2004,6 +2084,7 @@ async def process_team_message_stream(
             channel_id=channel_id,
             request_metadata=request_metadata,
             requested_model_name=requested_model_name,
+            requested_model_ref=requested_model_ref,
             **runtime_context,
         )
         _persist_team_file_monitor_roots(session_id, team_spec)
@@ -2577,6 +2658,7 @@ async def _consume_stream_with_query(
             _safe_query_preview(initial_query),
         )
         runner_entered_at = time.monotonic()
+        await _await_runner_pool_release(str(getattr(team_spec, "team_name", "") or ""), session_id)
         team_stream = _run_agent_team_streaming(
             agent_team=team_spec,
             inputs={"query": initial_query},
@@ -2643,7 +2725,7 @@ async def _consume_stream_with_query(
             # _is_leader_output returns True.
             if _team_hide_teammate_enabled() and not is_leader:
                 continue
-            parsed = parse_stream_chunk(chunk)
+            parsed = _parse_team_stream_chunk(chunk)
             if parsed is not None:
                 # Time to first token: the first frame actually produced by a
                 # model (reasoning counts — on a thinking model it comes first).
@@ -3364,7 +3446,7 @@ async def _watch_team_evolution_and_push(
                 channel_id,
                 session_id,
                 events,
-                parse_stream_chunk=parse_stream_chunk,
+                parse_stream_chunk=_parse_team_stream_chunk,
                 broadcast_event=_broadcast_event,
             )
 

@@ -47,10 +47,12 @@ from jiuwenswarm.common.config import (
     get_config_raw,
     get_default_models,
     get_evolution_enabled,
+    get_ttse_enabled,
     resolve_legacy_team_model_ref,
     replace_teams_in_config,
     update_default_models_in_config,
     update_evolution_enabled_in_config,
+    update_ttse_enabled_in_config,
     update_context_engine_enabled_in_config,
     update_default_model_provider_in_config,
     update_kv_cache_affinity_enabled_in_config,
@@ -639,6 +641,8 @@ _FORWARD_REQ_METHODS = frozenset({
     "command.goal",
     "chat.send",
     "chat.interrupt",
+    "chat.steer",
+    "chat.steer.status",
     "chat.resume",
     "chat.user_answer",
     "history.get",
@@ -697,6 +701,31 @@ _FORWARD_REQ_METHODS = frozenset({
     "symphony.score_status",
     "symphony.graph",
     "symphony.plan",
+    "personal_context.runtime.status",
+    "personal_context.runtime.start_collection",
+    "personal_context.runtime.stop_collection",
+    "personal_context.runtime.start_agent_use",
+    "personal_context.runtime.stop_agent_use",
+    "personal_context.runtime.get_config",
+    "personal_context.runtime.patch_config",
+    "personal_context.runtime.select_model",
+    "personal_context.fetch.list_services",
+    "personal_context.fetch.create_service",
+    "personal_context.fetch.delete_service",
+    "personal_context.fetch.patch_service",
+    "personal_context.fetch.start_service",
+    "personal_context.fetch.stop_service",
+    "personal_context.fetch.run_all",
+    "personal_context.fetch.run_one",
+    "personal_context.fetch.stop_run",
+    "personal_context.fetch.get_run_status",
+    "personal_context.fetch.get_authorization_status",
+    "personal_context.fetch.authorize_provider",
+    "personal_context.context.stream_graph",
+    "personal_context.context.stream_tree",
+    "personal_context.context.search_pages",
+    "personal_context.context.get_node",
+    "personal_context.context.get_source",
     "plugins.list",
     "plugins.install",
     "plugins.uninstall",
@@ -746,6 +775,8 @@ _FORWARD_REQ_METHODS = frozenset({
 })
 
 _FORWARD_NO_LOCAL_HANDLER_METHODS = frozenset({
+    "chat.steer",
+    "chat.steer.status",
     "initialize",
     "session.create",
     "session.switch",
@@ -814,6 +845,31 @@ _FORWARD_NO_LOCAL_HANDLER_METHODS = frozenset({
     "symphony.score_status",
     "symphony.graph",
     "symphony.plan",
+    "personal_context.runtime.status",
+    "personal_context.runtime.start_collection",
+    "personal_context.runtime.stop_collection",
+    "personal_context.runtime.start_agent_use",
+    "personal_context.runtime.stop_agent_use",
+    "personal_context.runtime.get_config",
+    "personal_context.runtime.patch_config",
+    "personal_context.runtime.select_model",
+    "personal_context.fetch.list_services",
+    "personal_context.fetch.create_service",
+    "personal_context.fetch.delete_service",
+    "personal_context.fetch.patch_service",
+    "personal_context.fetch.start_service",
+    "personal_context.fetch.stop_service",
+    "personal_context.fetch.run_all",
+    "personal_context.fetch.run_one",
+    "personal_context.fetch.stop_run",
+    "personal_context.fetch.get_run_status",
+    "personal_context.fetch.get_authorization_status",
+    "personal_context.fetch.authorize_provider",
+    "personal_context.context.stream_graph",
+    "personal_context.context.stream_tree",
+    "personal_context.context.search_pages",
+    "personal_context.context.get_node",
+    "personal_context.context.get_source",
     "plugins.list",
     "plugins.install",
     "plugins.uninstall",
@@ -904,6 +960,7 @@ CONFIG_KEYS = tuple(_CONFIG_SET_ENV_MAP.keys())
 # 来自 config.yaml 的配置项（前端 param 名 -> config.yaml 路径）
 _CONFIG_YAML_KEYS = frozenset({
     "evolution_enabled",
+    "ttse_enabled",
     "context_engine_enabled",
     "kv_cache_release_enabled",
     "kv_cache_affinity_enabled",
@@ -2273,6 +2330,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             # skill_create: tip 优先，fallback to config.yaml
             evolution_cfg = (raw.get("react") or {}).get("evolution") or {}
             payload["evolution_enabled"] = "true" if get_evolution_enabled(raw) else "false"
+            payload["ttse_enabled"] = "true" if get_ttse_enabled(raw) else "false"
             skill_create_env = read_env_if_set("SKILL_CREATE")
             if skill_create_env is not None:
                 payload["skill_create"] = "true" if skill_create_env.lower() in ("true", "1", "yes") else "false"
@@ -2310,6 +2368,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             payload.setdefault("setup_guide_enabled", "true")
             payload.setdefault("trajectory_ui_enabled", "false")
             payload.setdefault("evolution_enabled", "true")
+            payload.setdefault("ttse_enabled", "true")
             payload.setdefault("skill_create", "false")
             payload.setdefault("memory_forbidden_enabled", "false")
             payload.setdefault("memory_forbidden_description", "")
@@ -2497,6 +2556,8 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             try:
                 if param_key == "evolution_enabled":
                     update_evolution_enabled_in_config(parsed)
+                elif param_key == "ttse_enabled":
+                    update_ttse_enabled_in_config(parsed)
                 elif param_key == "context_engine_enabled":
                     update_context_engine_enabled_in_config(parsed)
                 elif param_key == "kv_cache_release_enabled":
@@ -7518,7 +7579,9 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
     channel.register_method("permissions.owner_scopes.get", _permissions_owner_scopes_get)
     channel.register_method("permissions.owner_scopes.set", _permissions_owner_scopes_set)
 
-    async def _forward_permissions_to_agent(ws, req_id, params, session_id, *, req_method):
+    async def _forward_permissions_to_agent(
+        ws, req_id, params, session_id, *, req_method, user_id=None
+    ):
         """permissions.*：优先经 E2A 转发到 AgentServer；Agent 未就绪时本地执行（与 config_rpc 同源）。"""
         from jiuwenswarm.common.e2a.gateway_normalize import e2a_from_agent_fields
         from jiuwenswarm.common.schema.agent import AgentRequest
@@ -7527,6 +7590,8 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
         if not isinstance(req_method, ReqMethod):
             await channel.send_response(ws, req_id, ok=False, error="invalid req_method", code="INTERNAL_ERROR")
             return
+
+        authenticated_user_id = str(user_id or "").strip() or None
 
         synthetic = AgentRequest(
             request_id=str(req_id) if req_id else "",
@@ -7574,6 +7639,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             session_id=session_id,
             req_method=req_method,
             params=dict(params) if isinstance(params, dict) else {},
+            user_id=authenticated_user_id,
         )
         try:
             resp = await ac.send_request(env)
@@ -7597,8 +7663,10 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
     from jiuwenswarm.common.schema.message import ReqMethod as _PermReq
 
     def _register_perm(method_name: str, rm: Any) -> None:
-        async def _handler(ws, req_id, params, session_id):
-            await _forward_permissions_to_agent(ws, req_id, params, session_id, req_method=rm)
+        async def _handler(ws, req_id, params, session_id, user_id=None):
+            await _forward_permissions_to_agent(
+                ws, req_id, params, session_id, req_method=rm, user_id=user_id
+            )
 
         channel.register_method(method_name, _handler)
 
@@ -7636,7 +7704,9 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
     channel.register_method("memory.forbidden.get", _memory_forbidden_get)
     channel.register_method("memory.forbidden.set", _memory_forbidden_set)
 
-    async def _forward_harness_to_agent(ws, req_id, params, session_id, *, req_method):
+    async def _forward_harness_to_agent(
+        ws, req_id, params, session_id, *, req_method, user_id=None
+    ):
         """harness.*：优先经 E2A 转发到 AgentServer；Agent 未就绪时本地执行（无 agent 实例）。"""
         from jiuwenswarm.common.e2a.gateway_normalize import e2a_from_agent_fields
         from jiuwenswarm.common.schema.message import ReqMethod
@@ -7644,6 +7714,8 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
         if not isinstance(req_method, ReqMethod):
             await channel.send_response(ws, req_id, ok=False, error="invalid req_method", code="INTERNAL_ERROR")
             return
+
+        authenticated_user_id = str(user_id or "").strip() or None
 
         ac = _resolve(agent_client)
         if ac is None or not getattr(ac, "server_ready", False):
@@ -7703,6 +7775,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             session_id=session_id,
             req_method=req_method,
             params=dict(params) if isinstance(params, dict) else {},
+            user_id=authenticated_user_id,
         )
         try:
             resp = await ac.send_request(env)
@@ -7726,8 +7799,10 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
     from jiuwenswarm.common.schema.message import ReqMethod as _HarnessReq
 
     def _register_harness(method_name: str, rm: Any) -> None:
-        async def _handler(ws, req_id, params, session_id):
-            await _forward_harness_to_agent(ws, req_id, params, session_id, req_method=rm)
+        async def _handler(ws, req_id, params, session_id, user_id=None):
+            await _forward_harness_to_agent(
+                ws, req_id, params, session_id, req_method=rm, user_id=user_id
+            )
 
         channel.register_method(method_name, _handler)
 

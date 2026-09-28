@@ -1,6 +1,11 @@
 # 配置架构版本（用户 override 首次写入 version 时从本模板拷贝；迁移脚本可比对）
 version: 1.0
 
+# Agent 配置来源：yaml 仅本地配置；enterprise 合并 Gateway DB。
+# 环境变量 JIUWENSWARM_CONFIG_SOURCE 优先。进程级默认仍读取 YAML。
+config:
+  source: yaml
+
 # 前端显示语言：zh（中文）/ en（英文），与 Web 界面语言切换同步
 preferred_language: zh
 
@@ -557,6 +562,9 @@ react:
   # OfficeClaw sync writes real values here (e.g. hwocr HWOCR_AK/HWOCR_SK). Empty {} is a
   # YAML placeholder only; runtime coalesce keeps catalog-injected credentials on reload.
   skill_envs: {}
+  # active_skill 过期兜底：连续 N 轮用户 invoke 无该技能 skill_tool 调用后
+  # 自动清空（HITL 恢复轮不计入）。默认 5；<=0 禁用兜底。
+  # skill_stale_invoke_limit: 5
   # Todo 周期 progress 提醒（deep/chat 主会话 + team 非 leader 成员）
   # Code 模式不读此开关（强制 False，走 attachment task_reminder）
   # enable_progress_repeat: 仅 true|false（可用环境变量 TODO_PROGRESS_REPEAT）
@@ -731,6 +739,8 @@ react:
     dream_interval: 50      # 每 N 次非 follow-up 任务迭代尝试一次 dream
     dream_min_hours: 24.0   # 距上次成功 dream 的最短间隔（小时）
     dream_ttl_days: 90      # 超过该天数未注入展示则剪枝
+    consult_top_k: 8        # ttse_consult 每轨（FACT/TIP）返回条数，改配置即可调
+    consult_retrieve_mode: hybrid  # hybrid | embed | bm25；池子不够仍 dump；embed/hybrid 向量不通时 BM25 兜底
     # 语义检索 / dedup；变量名与 secret_registry embed.* 一致。三段解析非空时混合召回，否则 BM25 兜底
     embedding:
       api_key: ${EMBED_API_KEY}
@@ -796,6 +806,7 @@ redis:
   host: ${REDIS_HOST:-localhost}
   port: ${REDIS_PORT:-6379}
   password: ${REDIS_PASSWORD:-}
+  username: ${REDIS_USER:-}
   db: ${REDIS_DB:-0}
   # Session 数据过期时间（秒）
   session_ttl: ${REDIS_SESSION_TTL:-604800}
@@ -1125,6 +1136,18 @@ channels:
 # 内置参数规则 > 用户 rules；整工具存在则不用 defaults；详见 tiered_policy 模块说明。
 #
 # 三种动作: allow / ask / deny
+#
+# 标准版保留键 agents：按 agent_id 精确分桶的完整 permissions body（不是工具名）。
+# 命中 permissions.agents[id] 时该 Agent 整段替换使用该 body，不与全局字段合并；
+# 未命中使用下方全局段。Gateway/UI 读写全局时会剥离并保留 agents 表。
+# 企业版忽略 yaml agents，只用 Agent template_ref.permissions。
+# 示例（Excel 插件 Agent office-excel 专属策略）：
+#   agents:
+#     office-excel:
+#       enabled: true
+#       schema: tiered_policy
+#       permission_mode: normal
+#       tools: { bash: ask }
 permissions:
   enabled: false
   schema: tiered_policy
@@ -1626,7 +1649,8 @@ modes:
 # ── flash 轻量模式开关 ──────────────────────────────────────────
 # flash 是独立 mode（单轮 ReAct、裁剪 rail 白名单、关闭 task loop 与技能自
 # 演进）。行为定义（rail 白名单 / react 覆盖）硬编码在 JiuwenSwarmFlashAdapter
-# 类常量，不在此配置——这里只控制「是否对普通 agent 对话注入 flash」。
+# 类常量，不在此配置。enabled 控制「是否对普通 agent 对话注入 flash」；
+# skill_selection 仅配置 Flash 内可选的已安装技能检索模块。
 # 触发点在 mode 解析层（resolve_agent_request_mode）：置 true 时，所有归一到
 # agent 的对话请求被改写为 flash mode（无需前端发 mode=flash，配置即触发）；
 # code / team 路径不受影响。置 false（默认）时维持原 agent 行为。
@@ -1634,3 +1658,16 @@ modes:
 #   enabled: true        — 普通对话注入 flash，走 FlashAdapter facade。
 flash:
   enabled: false
+  # 必须在模板声明：启动清理及配置合并会删除模板中不存在的字段。
+  # 模块可独立删除；这些默认值不启用功能，也不影响其他 Agent mode。
+  skill_selection:
+    enabled: false
+    catalog_check_interval_s: 5.0
+    candidate_k: 5
+    text_max_chars: 2000
+    max_query_chars: 1200
+    query_timeout_s: 10.0
+    startup_timeout_s: 60.0
+    k1: 0.9
+    b: 0.4
+    name_weight: 0.5

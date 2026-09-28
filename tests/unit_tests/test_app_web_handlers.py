@@ -737,6 +737,58 @@ async def test_config_set_persists_evolution_enabled(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_config_set_persists_ttse_enabled(monkeypatch):
+    channel = FakeWebChannel()
+    persisted: list[bool] = []
+    reload_options_seen: list[dict] = []
+
+    monkeypatch.setattr(
+        app_web_handlers,
+        "get_config_raw",
+        lambda: {"react": {"ttse": {"enabled": True}}},
+    )
+    monkeypatch.setattr(
+        app_web_handlers,
+        "get_config",
+        lambda: {"react": {"ttse": {"enabled": False}}},
+    )
+    monkeypatch.setattr(
+        app_web_handlers,
+        "update_ttse_enabled_in_config",
+        lambda enabled: persisted.append(enabled),
+    )
+
+    async def on_config_saved(updated_keys, *, env_updates, config_payload, reload_options):
+        del updated_keys, env_updates, config_payload
+        reload_options_seen.append(dict(reload_options))
+        return True
+
+    _register_web_handlers(
+        WebHandlersBindParams(
+            channel=channel,
+            on_config_saved=on_config_saved,
+        )
+    )
+
+    await channel.methods["config.set"](
+        object(),
+        "req-ttse-enabled",
+        {"ttse_enabled": "false"},
+        "sess-ttse-enabled",
+    )
+
+    assert persisted == [False]
+    assert reload_options_seen == [{
+        "target_channel_id": "web",
+        "reload_scopes": ["agent_runtime"],
+    }]
+    assert channel.responses[-1]["payload"] == {
+        "updated": ["ttse_enabled"],
+        "applied_without_restart": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_models_replace_all_applies_scoped_reload_before_responding(monkeypatch):
     channel = FakeWebChannel()
     reload_started = asyncio.Event()
@@ -1262,6 +1314,50 @@ def test_web_does_not_expose_symphony_evolution_rpc_methods():
     assert "symphony.evolution_status" not in app_web_handlers._FORWARD_REQ_METHODS
     assert "symphony.evolution_record_outcome" not in app_web_handlers._FORWARD_REQ_METHODS
     assert "symphony.evolution_rebuild" not in app_web_handlers._FORWARD_REQ_METHODS
+
+
+def test_web_forwards_only_canonical_personal_context_rpc_methods():
+    methods = {
+        "personal_context.runtime.status",
+        "personal_context.runtime.start_collection",
+        "personal_context.runtime.stop_collection",
+        "personal_context.runtime.start_agent_use",
+        "personal_context.runtime.stop_agent_use",
+        "personal_context.runtime.get_config",
+        "personal_context.runtime.patch_config",
+        "personal_context.runtime.select_model",
+        "personal_context.fetch.list_services",
+        "personal_context.fetch.create_service",
+        "personal_context.fetch.delete_service",
+        "personal_context.fetch.patch_service",
+        "personal_context.fetch.start_service",
+        "personal_context.fetch.stop_service",
+        "personal_context.fetch.stop_run",
+        "personal_context.fetch.run_all",
+        "personal_context.fetch.run_one",
+        "personal_context.fetch.get_run_status",
+        "personal_context.fetch.get_authorization_status",
+        "personal_context.fetch.authorize_provider",
+        "personal_context.context.stream_graph",
+        "personal_context.context.stream_tree",
+        "personal_context.context.search_pages",
+        "personal_context.context.get_node",
+        "personal_context.context.get_source",
+    }
+    forwarded = {
+        method
+        for method in app_web_handlers._FORWARD_REQ_METHODS
+        if method.startswith("personal_context.")
+    }
+    no_local = {
+        method
+        for method in app_web_handlers._FORWARD_NO_LOCAL_HANDLER_METHODS
+        if method.startswith("personal_context.")
+    }
+
+    assert forwarded == methods
+    assert no_local == methods
+    assert len(methods) == 25
 
 
 # =====================================================================
