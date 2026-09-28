@@ -125,7 +125,7 @@ class UserProfileFetcher:
         # pc 端 appapi 用 X-Chat-User-Id 头传递用户身份；cloud 端 internal 用 path actor_id。
         if not self._is_cloud():
             headers["X-Chat-User-Id"] = self._config.user_id
-            headers["Authorization"] = f"Bearer {self._config.api_key}"
+            headers["Authorization"] = f"OfficeAceToken {self._config.api_key}"
 
         url = self._build_url()
         last_err: Optional[str] = None
