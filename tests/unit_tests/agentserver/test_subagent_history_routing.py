@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 from jiuwenswarm.common.schema.message import EventType
 from jiuwenswarm.gateway.channel_manager.web.web_ws_transport import (
     _WEB_FULL_PAYLOAD_EVENT_TYPES,
@@ -108,6 +111,66 @@ def test_empty_subagent_activity_is_persistable(tmp_path, monkeypatch) -> None:
     rows = session_history.load_history_records("parent1", subagent_id="sa-1")
     assert len(rows) == 1
     assert rows[0]["event_type"] == "chat.subagent_activity"
+
+
+def test_parent_history_does_not_wait_on_blocked_child_writer(tmp_path, monkeypatch) -> None:
+    """Parent load and rewind must not join the child writer."""
+    monkeypatch.setattr(session_history, "get_agent_sessions_dir", lambda: tmp_path)
+    session_history.append_history_record(
+        session_id="parent1",
+        request_id="r-parent",
+        channel_id="web",
+        role="user",
+        content="hello",
+        timestamp=1.0,
+    )
+    session_history.flush_session_history("parent1")
+
+    release = threading.Event()
+    started = threading.Event()
+    original = session_history._write_subagent_items_sync
+
+    def _block_child_write(session_id, subagent_id, items, sessions_root):
+        started.set()
+        assert release.wait(2)
+        original(session_id, subagent_id, items, sessions_root)
+
+    monkeypatch.setattr(session_history, "_write_subagent_items_sync", _block_child_write)
+    session_history._batch_write_subagent_items(
+        "parent1",
+        "sa-1",
+        [{"content": "queued-child", "role": "assistant"}],
+        None,
+    )
+    assert started.wait(2)
+
+    truncate_thread: threading.Thread | None = None
+    try:
+        started_at = time.monotonic()
+        parent_rows = session_history.load_history_records("parent1")
+        assert time.monotonic() - started_at < 0.5
+        assert [row.get("content") for row in parent_rows] == ["hello"]
+
+        result: dict = {}
+
+        def _truncate() -> None:
+            result.update(session_history.truncate_history_records(
+                session_id="parent1",
+                cut_index=1,
+            ))
+
+        truncate_thread = threading.Thread(target=_truncate)
+        truncate_thread.start()
+        truncate_thread.join(1.0)
+        assert not truncate_thread.is_alive()
+        assert result["remaining_records"] == 1
+    finally:
+        release.set()
+        if truncate_thread is not None:
+            truncate_thread.join(2)
+
+    child_rows = session_history.load_history_records("parent1", subagent_id="sa-1")
+    assert any(row.get("content") == "queued-child" for row in child_rows)
 
 
 def test_web_allowlist_includes_subagent_activity() -> None:

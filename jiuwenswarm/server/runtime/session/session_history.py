@@ -28,6 +28,7 @@ _SUBAGENT_WRITE_QUEUE: queue.Queue[
 ] = queue.Queue(maxsize=20000)
 _SUBAGENT_WORKER_STARTED = False
 _SUBAGENT_WORKER_LOCK = threading.Lock()
+_SUBAGENT_SHUTDOWN_FLUSH_TIMEOUT_S = 5.0
 _LEGACY_HISTORY_FILENAME = "history.json"
 _JSONL_HISTORY_FILENAME = "history.jsonl"
 _LEGACY_HISTORY_ENV = "JIUWENSWARM_USE_LEGACY_HISTORY_JSON"
@@ -623,7 +624,10 @@ def load_history_records(
     *,
     subagent_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    _flush_subagent_history_writes()
+    # Parent reads must not join the child writer. truncate holds _FILE_LOCK
+    # around the parent read, and that writer needs the same lock.
+    if subagent_id:
+        _flush_subagent_history_writes()
     return _read_history(
         get_read_history_path(
             session_id,
@@ -949,10 +953,20 @@ def _ensure_subagent_history_worker_started() -> None:
         _SUBAGENT_WORKER_STARTED = True
 
 
-def _flush_subagent_history_writes() -> None:
+def _flush_subagent_history_writes(*, timeout: float | None = None) -> None:
+    """Wait for queued child-history writes.
+
+    A full wait is for child reads, and it must run outside ``_FILE_LOCK``.
+    Shutdown passes ``timeout`` so a stuck writer cannot hold process exit.
+    """
     if not _SUBAGENT_WORKER_STARTED:
         return
-    _SUBAGENT_WRITE_QUEUE.join()
+    if timeout is None:
+        _SUBAGENT_WRITE_QUEUE.join()
+        return
+    deadline = time.monotonic() + timeout
+    while _SUBAGENT_WRITE_QUEUE.unfinished_tasks > 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
 
 
 def _ensure_worker_started() -> None:
@@ -1209,7 +1223,7 @@ def shutdown() -> None:
         logger.warning("history shutdown flush 失败: %s", exc)
     try:
         _force_flush_all_pending()
-        _flush_subagent_history_writes()
+        _flush_subagent_history_writes(timeout=_SUBAGENT_SHUTDOWN_FLUSH_TIMEOUT_S)
     except Exception as exc:  # noqa: BLE001
         logger.warning("history shutdown 强制暂留落盘失败: %s", exc)
     deadline = time.monotonic() + 5.0
@@ -1463,7 +1477,8 @@ def append_compact_history_records(
 def truncate_history_records(*, session_id: str, cut_index: int) -> dict[str, Any]:
     """截断会话历史到指定位置（线程安全）。
 
-    先等待异步写入队列刷盘，再持锁截断当前激活的历史文件。
+    先等父会话写队列落盘，再持锁读取并重写父历史。
+    持锁期间不 join 子会话写队列，避免和子 writer 抢 ``_FILE_LOCK``。
     返回截断结果 dict，包含 remaining / removed 计数。
     """
     sid = (session_id or "default").strip() or "default"
@@ -1473,7 +1488,7 @@ def truncate_history_records(*, session_id: str, cut_index: int) -> dict[str, An
     with _FILE_LOCK:
         if not fpath.exists():
             return {"remaining_records": 0, "removed_records": 0}
-        history = load_history_records(sid)
+        history = _read_history(fpath)
         if not isinstance(history, list):
             return {"remaining_records": 0, "removed_records": 0}
         total = len(history)

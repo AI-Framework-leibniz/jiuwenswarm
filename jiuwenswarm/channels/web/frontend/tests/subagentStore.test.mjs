@@ -469,6 +469,22 @@ test('a successful parent cancel settles only still-running subagents locally', 
   assert.equal(cancelled.subagentsById['idle-agent'].turn_outcome, 'completed');
 });
 
+test('live activities keep the same tail cap as persisted storage', () => {
+  let runtime = createEmptySubagentRuntime(sessionId);
+  runtime = applySubagentUpdated(runtime, event(1));
+  for (let sequence = 0; sequence < 501; sequence += 1) {
+    runtime = applySubagentActivity(runtime, {
+      event_type: 'chat.subagent_activity',
+      session_id: sessionId,
+      activity: activity(`activity-${sequence}`, sequence),
+    });
+  }
+  const kept = selectSubagentActivities(runtime, 'agent-a');
+  assert.equal(kept.length, 500);
+  assert.equal(kept[0].activity_id, 'activity-1');
+  assert.equal(kept[kept.length - 1].activity_id, 'activity-500');
+});
+
 test('live activities deduplicate by derived id and remain sequence ordered', () => {
   let runtime = createEmptySubagentRuntime(sessionId);
   runtime = applySubagentUpdated(runtime, event(1));

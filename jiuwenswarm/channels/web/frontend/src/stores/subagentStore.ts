@@ -423,7 +423,7 @@ function replaceActivity(runtime: SubagentRuntime, incoming: SubagentActivity): 
   const existingById = runtime.activitiesBySubagentId[incoming.subagent_id] ?? {};
   if (existingById[incoming.activity_id]) return runtime;
 
-  return {
+  return capActivities({
     ...runtime,
     activitiesBySubagentId: {
       ...runtime.activitiesBySubagentId,
@@ -435,7 +435,31 @@ function replaceActivity(runtime: SubagentRuntime, incoming: SubagentActivity): 
     cacheOnlySubagentIds: Object.fromEntries(
       Object.entries(runtime.cacheOnlySubagentIds).filter(([subagentId]) => subagentId !== incoming.subagent_id),
     ),
-  };
+  });
+}
+
+function capActivities(runtime: SubagentRuntime): SubagentRuntime {
+  const entries: Array<{ subagentId: string; activity: SubagentActivity }> = [];
+  for (const [subagentId, items] of Object.entries(runtime.activitiesBySubagentId)) {
+    for (const activity of Object.values(items)) {
+      entries.push({ subagentId, activity });
+    }
+  }
+  if (entries.length <= MAX_PERSISTED_ACTIVITIES) return runtime;
+  const keep = new Set(
+    entries
+      .sort((left, right) => compareBySequence(left.activity, right.activity))
+      .slice(-MAX_PERSISTED_ACTIVITIES)
+      .map(item => `${item.subagentId}\0${item.activity.activity_id}`),
+  );
+  const activitiesBySubagentId: Record<string, Record<string, SubagentActivity>> = {};
+  for (const item of entries) {
+    if (!keep.has(`${item.subagentId}\0${item.activity.activity_id}`)) continue;
+    const bucket = activitiesBySubagentId[item.subagentId] ?? {};
+    bucket[item.activity.activity_id] = item.activity;
+    activitiesBySubagentId[item.subagentId] = bucket;
+  }
+  return { ...runtime, activitiesBySubagentId };
 }
 
 function replaceResult(runtime: SubagentRuntime, incoming: SubagentResult): SubagentRuntime {

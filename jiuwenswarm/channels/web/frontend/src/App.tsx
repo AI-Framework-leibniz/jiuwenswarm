@@ -2327,6 +2327,7 @@ function AppContent() {
       useTodoStore.getState().removeRuntime(deletedSessionId);
       useHarnessStore.getState().removeRuntime(deletedSessionId);
       useGoalStore.getState().removeRuntime(deletedSessionId);
+      useSubagentStore.getState().removeRuntime(deletedSessionId);
     }
 
     if (routeSessionId && deletedSessionIds.has(routeSessionId)) {
@@ -2356,6 +2357,7 @@ function AppContent() {
       useTodoStore.getState().removeRuntime(deleteTarget.session_id);
       useHarnessStore.getState().removeRuntime(deleteTarget.session_id);
       useGoalStore.getState().removeRuntime(deleteTarget.session_id);
+      useSubagentStore.getState().removeRuntime(deleteTarget.session_id);
       const deletingCurrent = sessionIdRef.current === deleteTarget.session_id;
       setDeleteTarget(null);
       await useWorkspaceStore.getState().refreshSessionWorkspace(deletedSession);
