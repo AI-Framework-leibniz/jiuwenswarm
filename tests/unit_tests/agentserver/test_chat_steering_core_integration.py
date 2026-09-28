@@ -8,6 +8,7 @@ normal single-agent streaming, steering dispatch, binding and Core are real.
 from __future__ import annotations
 
 import asyncio
+import inspect
 from importlib.util import find_spec
 import uuid
 from types import SimpleNamespace
@@ -172,8 +173,26 @@ async def test_chat_pipeline_steers_real_core_during_tool_without_replacing_orig
     )
     sid = "jiuwen-steer-" + uuid.uuid4().hex
     main_task = None
+    tool_entered_task = None
     try:
         await core.start(session=Session(session_id=sid))
+        # This test exercises the real Core loop and steering path, not context
+        # callback delivery.  Earlier tests in the full suite may leave process-
+        # global CONTEXT_RETRIEVED callbacks registered; invoking those callbacks
+        # can block context creation for 30 seconds and make the 10-second tool
+        # entry assertion fail before the tool is scheduled.  Bypass only the
+        # event decorator while retaining the real ContextEngine implementation.
+        context_engine = core._react_agent.context_engine
+        raw_create_context = inspect.unwrap(type(context_engine).create_context)
+
+        async def create_context_without_global_callbacks(*args, **kwargs):
+            return await raw_create_context(context_engine, *args, **kwargs)
+
+        monkeypatch.setattr(
+            context_engine,
+            "create_context",
+            create_context_without_global_callbacks,
+        )
         adapter = JiuWenSwarmDeepAdapter()
         adapter.mark_as_session_scoped(sid)
         adapter._instance = core
@@ -238,7 +257,15 @@ async def test_chat_pipeline_steers_real_core_during_tool_without_replacing_orig
         main_task = asyncio.create_task(
             pipeline.dispatch_parsed_request(original_context, original)
         )
-        await asyncio.wait_for(tool.entered.wait(), 10)
+        tool_entered_task = asyncio.create_task(tool.entered.wait())
+        done, _ = await asyncio.wait(
+            {main_task, tool_entered_task},
+            timeout=10,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if main_task in done:
+            await main_task
+        assert tool_entered_task in done, "Core did not enter the tool within 10 seconds"
         active_task = core.active_round.task_id
         owner = core._interaction_output.current_lease()
 
@@ -357,6 +384,9 @@ async def test_chat_pipeline_steers_real_core_during_tool_without_replacing_orig
         assert late.payload["reason"] == "RUN_NOT_ACTIVE"
     finally:
         tool.release.set()
+        if tool_entered_task is not None and not tool_entered_task.done():
+            tool_entered_task.cancel()
+            await asyncio.gather(tool_entered_task, return_exceptions=True)
         if main_task is not None and not main_task.done():
             main_task.cancel()
             await asyncio.gather(main_task, return_exceptions=True)
