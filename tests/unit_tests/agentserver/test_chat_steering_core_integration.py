@@ -56,6 +56,14 @@ class _FastTokenCounter(TokenCounter):
         return len(tools)
 
 
+@pytest.fixture(autouse=True)
+def _use_fast_token_counter(monkeypatch):
+    """Keep Core integration tests independent of tiktoken cache warm-up."""
+    from openjiuwen.core.context_engine.token import tiktoken_counter
+
+    monkeypatch.setattr(tiktoken_counter, "TiktokenCounter", _FastTokenCounter)
+
+
 class _BlockingTool(Tool):
     def __init__(self):
         super().__init__(ToolCard(name="blocked_tool", description="Wait for test"))
@@ -189,17 +197,6 @@ async def test_chat_pipeline_steers_real_core_during_tool_without_replacing_orig
     tool_entered_task = None
     try:
         await core.start(session=Session(session_id=sid))
-        # This test exercises steering, not tiktoken initialization.  A cold
-        # tiktoken cache can spend more than 30 seconds loading its encoding in
-        # the full parallel suite, exhausting the tool-entry deadline before the
-        # real Core loop reaches the fake tool.
-        from openjiuwen.core.context_engine.token import tiktoken_counter
-
-        monkeypatch.setattr(
-            tiktoken_counter,
-            "TiktokenCounter",
-            _FastTokenCounter,
-        )
         adapter = JiuWenSwarmDeepAdapter()
         adapter.mark_as_session_scoped(sid)
         adapter._instance = core
