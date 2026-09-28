@@ -6,6 +6,7 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isWorkspaceQuotaError } from '../multi-session/state/createConversationSession';
 import {
   ConnectionAckPayload,
   WebConnectOptions,
@@ -3556,8 +3557,11 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
         if (!sessionId) return;
         if (shouldDropDuplicatedEvent('chat.error', payload)) return;
         useChatStore.getState().setThinking(sessionId, false);
-        const errorMsg =
+        const rawError =
           typeof payload.error === 'string' ? payload.error : t('network.unknownError');
+        const errorMsg = isWorkspaceQuotaError(payload)
+          ? t('multiSession.errors.quotaExceeded')
+          : rawError;
         // 忽略 "invalid page_idx or session history not found" 错误，因为这是新会话的正常情况
         if (errorMsg.includes('invalid page_idx or session history not found')) {
           useChatStore.getState().setLoadingHistory(sessionId, false);
