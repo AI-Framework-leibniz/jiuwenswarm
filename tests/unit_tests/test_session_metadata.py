@@ -778,6 +778,131 @@ class TestGetAllSessionsMetadata:
         assert sessions[0]["created_at"] > 0
 
     @staticmethod
+    def test_explicit_sessions_root_is_used_for_channel_lock_migration(
+        sessions_dir, tmp_path
+    ):
+        """多租户批量迁移只读写显式租户根，不访问默认根同名会话。"""
+        from jiuwenswarm.server.runtime.session.session_metadata import (
+            _METADATA_CACHE,
+            _METADATA_QUEUE,
+            get_all_sessions_metadata,
+        )
+
+        session_id = "same_session"
+        tenant_root = tmp_path / "tenant_sessions"
+        default_dir = sessions_dir / session_id
+        tenant_dir = tenant_root / session_id
+        default_dir.mkdir(parents=True)
+        tenant_dir.mkdir(parents=True)
+        base = {
+            "session_id": session_id,
+            "user_id": "user",
+            "created_at": 1.0,
+            "last_message_at": 1.0,
+            "title": "",
+            "message_count": 1,
+        }
+        (default_dir / "metadata.json").write_text(
+            json.dumps({**base, "channel_id": "default-original"}),
+            encoding="utf-8",
+        )
+        (tenant_dir / "metadata.json").write_text(
+            json.dumps({**base, "channel_id": "tenant-overwritten"}),
+            encoding="utf-8",
+        )
+        (default_dir / "history.json").write_text(
+            json.dumps({"role": "user", "channel_id": "feishu"}) + "\n",
+            encoding="utf-8",
+        )
+        (tenant_dir / "history.json").write_text(
+            json.dumps({"role": "user", "channel_id": "web"}) + "\n",
+            encoding="utf-8",
+        )
+        _METADATA_CACHE.clear()
+
+        sessions, total = get_all_sessions_metadata(sessions_root=tenant_root)
+        _METADATA_QUEUE.join()
+
+        assert total == 1
+        assert sessions[0]["channel_id"] == "web"
+        assert _read_json(tenant_dir / "metadata.json")["channel_id"] == "web"
+        assert _read_json(default_dir / "metadata.json")["channel_id"] == "default-original"
+
+    @staticmethod
+    def test_no_metadata_session_skips_channel_lock_migration(sessions_dir):
+        """异常残留会话即使有历史记录，批量读取也不创建 metadata.json。"""
+        from jiuwenswarm.server.runtime.session.session_metadata import (
+            _METADATA_QUEUE,
+            get_all_sessions_metadata,
+        )
+
+        session_dir = sessions_dir / "legacy_without_metadata"
+        session_dir.mkdir()
+        (session_dir / "history.json").write_text(
+            json.dumps({"role": "user", "channel_id": "web"}) + "\n",
+            encoding="utf-8",
+        )
+
+        sessions, total = get_all_sessions_metadata(sessions_root=sessions_dir)
+        _METADATA_QUEUE.join()
+
+        assert total == 1
+        assert sessions[0]["channel_id"] == ""
+        assert not (session_dir / "metadata.json").exists()
+
+    @staticmethod
+    def test_unusable_history_is_marked_checked_once(
+        sessions_dir, monkeypatch
+    ):
+        """非空历史无有效用户通道时只检查一次，避免列表请求重复解析。"""
+        from jiuwenswarm.server.runtime.session import session_history
+        from jiuwenswarm.server.runtime.session.session_metadata import (
+            _CHANNEL_ID_LOCK_VERSION,
+            _CHANNEL_ID_LOCK_VERSION_KEY,
+            _METADATA_CACHE,
+            _METADATA_QUEUE,
+            get_all_sessions_metadata,
+        )
+
+        session_id = "legacy_without_user_channel"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+        (session_dir / "metadata.json").write_text(
+            json.dumps({
+                "session_id": session_id,
+                "channel_id": "feishu",
+                "created_at": 1.0,
+                "last_message_at": 1.0,
+            }),
+            encoding="utf-8",
+        )
+        (session_dir / "history.json").write_text(
+            json.dumps({"role": "assistant", "channel_id": "feishu"}) + "\n",
+            encoding="utf-8",
+        )
+        original_load = session_history.load_history_records
+        load_count = 0
+
+        def counting_load(*args, **kwargs):
+            nonlocal load_count
+            load_count += 1
+            return original_load(*args, **kwargs)
+
+        monkeypatch.setattr(session_history, "load_history_records", counting_load)
+        _METADATA_CACHE.clear()
+
+        get_all_sessions_metadata(sessions_root=sessions_dir)
+        _METADATA_QUEUE.join()
+        _METADATA_CACHE.clear()
+        get_all_sessions_metadata(sessions_root=sessions_dir)
+        _METADATA_QUEUE.join()
+
+        assert load_count == 1
+        persisted = _read_json(session_dir / "metadata.json")
+        assert persisted[_CHANNEL_ID_LOCK_VERSION_KEY] == _CHANNEL_ID_LOCK_VERSION
+        assert persisted["channel_id"] == "feishu"
+
+    @staticmethod
     def test_empty_dir(sessions_dir):
         from jiuwenswarm.server.runtime.session.session_metadata import get_all_sessions_metadata
 

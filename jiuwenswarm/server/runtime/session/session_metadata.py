@@ -87,9 +87,11 @@ def _migrate_legacy_channel_id_lock(
     user history record as the authoritative creation channel, then mark the
     migration so later cross-channel traffic cannot change it again.
 
-    Returns ``True`` only when metadata changed.  If no usable user record is
-    available, leave the session unmarked so a later read can retry after the
-    asynchronous history writer has flushed the first turn.
+    Returns ``True`` only when metadata changed.  An empty history is left
+    unmarked so a later read can retry after the asynchronous history writer
+    has flushed the first turn.  A non-empty history with no usable creation
+    channel is marked as checked to avoid repeatedly parsing it on session
+    list requests.
     """
     if metadata.get(_CHANNEL_ID_LOCK_VERSION_KEY) == _CHANNEL_ID_LOCK_VERSION:
         return False
@@ -112,8 +114,11 @@ def _migrate_legacy_channel_id_lock(
             continue
         first_channel_id = record.get("channel_id")
         if not isinstance(first_channel_id, str) or not first_channel_id.strip():
-            return False
+            break
         metadata["channel_id"] = first_channel_id.strip()
+        metadata[_CHANNEL_ID_LOCK_VERSION_KEY] = _CHANNEL_ID_LOCK_VERSION
+        return True
+    if records:
         metadata[_CHANNEL_ID_LOCK_VERSION_KEY] = _CHANNEL_ID_LOCK_VERSION
         return True
     return False
@@ -170,6 +175,7 @@ def _apply_metadata_defaults_with_inference(
     dir_to_projects: dict[str, list[tuple[str, str]]] | None = None,
     id_to_work_mode: dict[str, str] | None = None,
     enable_writeback: bool = True,
+    enable_channel_lock_migration: bool = True,
     sessions_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """统一兜底 + 推断缺失字段,并在确定性推断时异步写盘。
@@ -200,6 +206,8 @@ def _apply_metadata_defaults_with_inference(
             ``None`` 时与 ``dir_to_projects`` 一起自行构建。
         enable_writeback: 是否允许写盘。批量入口在循环中调用时传 ``True``,
             但写盘走异步队列,不会阻塞读路径。
+        enable_channel_lock_migration: 是否允许修复旧会话归属通道。无
+            ``metadata.json`` 的异常残留会话应传 ``False``,避免迁移新建元数据。
 
     Returns:
         原地修改后的 ``metadata`` dict(保证所有字段齐全且 ``work_mode`` 合法)。
@@ -225,8 +233,10 @@ def _apply_metadata_defaults_with_inference(
     # 一次性修复旧版本中被后续跨通道请求覆写的会话归属。
     # 即使批量读取关闭了普通字段回写，此迁移仍需持久化版本标记，
     # 否则每次 session.list 都会重复读取 history，且无法真正完成一次性修复。
-    channel_lock_migrated = _migrate_legacy_channel_id_lock(
-        session_id, metadata, sessions_root=sessions_root
+    channel_lock_migrated = enable_channel_lock_migration and (
+        _migrate_legacy_channel_id_lock(
+            session_id, metadata, sessions_root=sessions_root
+        )
     )
     changed = channel_lock_migrated  # 是否有需要写盘的确定性推断
 
@@ -1798,6 +1808,8 @@ def get_all_sessions_metadata(
                 dir_to_projects=dir_to_projects,
                 id_to_work_mode=id_to_work_mode,
                 enable_writeback=False,
+                enable_channel_lock_migration=False,
+                sessions_root=sessions_root,
             )
         else:
             # 批量入口不写盘:避免首次 session.list 触发大量异步写入导致队列满退化为同步写。
@@ -1809,6 +1821,7 @@ def get_all_sessions_metadata(
                 dir_to_projects=dir_to_projects,
                 id_to_work_mode=id_to_work_mode,
                 enable_writeback=False,
+                sessions_root=sessions_root,
             )
 
         sessions.append(metadata)
@@ -1869,6 +1882,8 @@ def collect_all_sessions_metadata() -> list[dict[str, Any]]:
                 dir_to_projects=dir_to_projects,
                 id_to_work_mode=id_to_work_mode,
                 enable_writeback=False,
+                enable_channel_lock_migration=False,
+                sessions_root=str(sessions_dir),
             )
         else:
             # 批量入口不写盘:避免首次 collect 触发大量异步写入导致队列满退化为同步写。
@@ -1880,6 +1895,7 @@ def collect_all_sessions_metadata() -> list[dict[str, Any]]:
                 dir_to_projects=dir_to_projects,
                 id_to_work_mode=id_to_work_mode,
                 enable_writeback=False,
+                sessions_root=str(sessions_dir),
             )
         result.append(meta)
     return result
