@@ -3750,6 +3750,7 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
             return inputs
 
         from jiuwenswarm.agents.harness.common.prompt.user_prompt_builder import (
+            extract_image_tool_question,
             extract_multimodal_image_files,
         )
 
@@ -3763,11 +3764,7 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
         raw_question = params.get("query")
         if not isinstance(raw_question, str) or not raw_question.strip():
             raw_question = params.get("content")
-        question = raw_question.strip() if isinstance(raw_question, str) else ""
-        first_path = str(image_files[0].get("path") or "").strip()
-        if not first_path:
-            return inputs
-
+        question = extract_image_tool_question(raw_question) if isinstance(raw_question, str) else ""
         media_items = []
         for image_file in image_files:
             path = str(image_file.get("path") or "").strip()
@@ -3786,15 +3783,17 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
 
         tool_context = {
             "marker": "jiuwenswarm_image_tool_context",
-            "mediaPath": first_path,
             "mediaItems": media_items,
             "question": question,
             "toolHint": (
                 "当前主模型未启用原生图片输入。如果需要理解图片内容，请调用图片理解工具；"
-                "优先使用 image_reading(local_url=mediaPath, prompt=question)，"
-                "或使用 visual_question_answering(image_path_or_url=mediaPath, question=question)。"
+                "各图片的路径位于 mediaItems 中："
+                "image_reading(local_url=图片路径, prompt=question)，"
+                "或 visual_question_answering(image_path_or_url=图片路径, question=question)。"
             ),
         }
+        if len(media_items) == 1:
+            tool_context["mediaPath"] = media_items[0]["mediaPath"]
 
         updated = dict(inputs)
         updated.pop("_multimodal_image_files", None)
