@@ -8169,6 +8169,8 @@ class JiuWenSwarmDeepAdapter:
                 on_task_created=self._track_skill_sleep_task,
                 model_provider=self._skill_sleep_model_spec,
                 skills_dirs_provider=self._resolve_skill_sleep_skills_dirs,
+                on_published=self._push_skill_sleep_published,
+                on_suggest=self._push_skill_sleep_suggest,
             )
             rail = SkillSleepRail(
                 counter=counter,
@@ -8199,6 +8201,72 @@ class JiuWenSwarmDeepAdapter:
                 exc,
             )
             return None
+
+    async def _push_skill_sleep_published(
+        self,
+        *,
+        skill_name: str,
+        version: str,
+        session_id: str,
+        request_id: str,
+    ) -> None:
+        """AOM ``published`` push after an offline sleep cycle auto-adopts a skill."""
+        from jiuwenswarm.server.gateway_push import WebSocketGatewayPushTransport
+
+        push_context = EvolutionPushContext(
+            transport=WebSocketGatewayPushTransport(),
+            channel_id=None,
+            session_id=session_id,
+        )
+        await push_evolution_published(
+            push_context,
+            request_id=request_id,
+            skill_name=skill_name,
+            version=version,
+            build_push_message=build_server_push_message,
+            source="skill_sleep",
+        )
+        logger.info(
+            "[JiuWenSwarmDeepAdapter] skill sleep published push: skill=%s version=%s "
+            "session=%s request_id=%s",
+            skill_name,
+            version,
+            session_id,
+            request_id,
+        )
+
+    async def _push_skill_sleep_suggest(
+        self,
+        *,
+        skill_name: str,
+        session_id: str,
+        request_id: str,
+    ) -> None:
+        """Push ``chat.evolution_status`` end/completed so relay can notify suggest."""
+        from jiuwenswarm.server.gateway_push import WebSocketGatewayPushTransport
+
+        push_context = EvolutionPushContext(
+            transport=WebSocketGatewayPushTransport(),
+            channel_id=None,
+            session_id=session_id,
+        )
+        await push_evolution_status(
+            push_context,
+            build_evolution_status_update(
+                request_id=request_id,
+                status="end",
+                stage="completed",
+                message=f"Skill sleep suggest completed for {skill_name}",
+            ),
+            build_server_push_message,
+        )
+        logger.info(
+            "[JiuWenSwarmDeepAdapter] skill sleep suggest push: skill=%s "
+            "session=%s request_id=%s",
+            skill_name,
+            session_id,
+            request_id,
+        )
 
     def _skill_sleep_model_spec(self) -> SleepModelSpec | None:
         """Resolve the sleep-training model from the main conversation config.
