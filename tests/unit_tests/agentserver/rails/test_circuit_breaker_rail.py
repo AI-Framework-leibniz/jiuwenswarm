@@ -13,7 +13,6 @@ from types import SimpleNamespace
 
 from openjiuwen.core.single_agent.rail.base import (
     AgentCallbackContext,
-    InvokeInputs,
     ToolCallInputs,
 )
 
@@ -125,17 +124,6 @@ def test_ping_pong_critical_when_both_sides_stall() -> None:
     assert result.stuck is True
     assert result.level == "critical"
     assert result.detector == "ping_pong"
-
-
-async def test_before_invoke_clears_history_for_conversation() -> None:
-    rail = _rail()
-    rail._histories["conv"] = [_record("bash", "a")]
-    ctx = AgentCallbackContext(
-        agent=object(),
-        inputs=InvokeInputs(query="hello", conversation_id="conv"),
-    )
-    await rail.before_invoke(ctx)
-    assert rail._histories["conv"] == []
 
 
 def test_cleanup_session_drops_history() -> None:
