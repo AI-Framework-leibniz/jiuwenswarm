@@ -774,7 +774,6 @@ def _sync_chat_request_metadata(
 
 _XIAOYI_ROUTING_METADATA_KEYS = (
     "xiaoyi_session_id",       # 顶层 sessionId（物理回发地址）
-    "xiaoyi_task_id",          # 手机任务 id（回发 taskId 复用任务气泡）
     "xiaoyi_conversation_id",  # 逻辑会话 id
     "xiaoyi_root_session_id",  # 根回发兜底
 )
@@ -786,6 +785,10 @@ def _inject_session_xiaoyi_routing(request: AgentRequest) -> None:
     桌面端在手机发起的话题里续发消息时，请求本身不带 xiaoyi 元数据；渠道回发
     （xiaoyi_connect._extract_platform_receive_info）在 metadata 缺失时兜底拿
     桌面消息 id 当 sessionId → 手机侧会新建会话。注入后回发走物理回发地址。
+
+    不注入 ``xiaoyi_task_id``：磁盘上的是上一轮已结束的手机任务。下一轮手机
+    发言若读到这份缓存，send_file 会挂到已结束的 task，产物前 flush 刷空。
+    手机入站自带 taskId；请求里已有 ``xiaoyi_session_id`` 时直接返回。
     """
     request_metadata = request.metadata
     if not isinstance(request_metadata, dict):
