@@ -977,6 +977,12 @@ agent_ras:
       global_breaker_threshold: 10
       # 未知/错误工具连续失败达到该次数时 CRITICAL（WARNING 为阈值一半）
       unknown_tool_threshold: 10
+      # Match the outer tool and selected top-level arguments exactly.
+      # Add rules for other polling functions without exempting the whole tool.
+      ignored_tool_calls:
+        - tool_name: invoke_tool
+          argument_equals:
+            tool_name: image_get_run
     # LLM 文本/思考死循环检测（门槛单位：字符）
     llm_thinking_loop:
       enabled: true
