@@ -40,6 +40,25 @@ SKILL_EVOLUTION_APPROVAL_TOOL_KINDS = {
     "simplify_skill_experiences": "simplify",
 }
 
+_HITL_SEQ_SUFFIX_RE = re.compile(r"^(?P<base>.+)#\d+$")
+
+
+def strip_hitl_seq_suffix(request_id: str) -> str:
+    """剥离 HITL 卡片序号后缀（``{call_id}#{n}``），恢复 harness 原始 tool_call id。
+
+    同一外层调用内第 n 次中断（TIE 重写共用外层 call id 的顺序权限门 /
+    ask_user 顺序多问卡）共用同一 base id。用于作答对齐与"base 当前代卡"
+    判定；注意：权限账本去重 key 不做此归一化——``#{n}`` 是顺序门的不同
+    代次（不同权限内容），归一化会把下一个合法门误判为重复（CR-1）。
+    未命中后缀时原样返回（保留空白差异，id 对调用方仍是不透明串）。
+    """
+    if not isinstance(request_id, str):
+        return request_id
+    match = _HITL_SEQ_SUFFIX_RE.match(request_id.strip())
+    if match and match.group("base").strip():
+        return match.group("base").strip()
+    return request_id
+
 
 def is_interrupt_resume_source(source: Any) -> bool:
     """True for permission / confirm / ask_user HITL resume sources.
