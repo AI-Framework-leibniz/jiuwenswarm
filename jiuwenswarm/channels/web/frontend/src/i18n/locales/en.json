@@ -845,6 +845,24 @@
       "invalidField": "Please check: {{field}}"
     }
   },
+  "settingsPanel": {
+    "title": "Settings",
+    "categories": {
+      "personalContext": "Context"
+    },
+    "feedback": {
+      "saving": "Saving",
+      "saved": "Saved",
+      "saveFailed": "Save failed"
+    },
+    "access": {
+      "readOnly": "This setting is currently read-only."
+    },
+    "dialog": {
+      "discardTitle": "Discard unsaved changes?",
+      "discardConfirm": "You have unsaved changes. Discard them?"
+    }
+  },
   "offloadFiles": {
     "title": "Offload Files",
     "count": "{{count}} files",
@@ -1065,10 +1083,13 @@
     "title": "Configuration",
     "subtitle": "Edit by category using the tabs above. The backend will restart after saving to load changes.",
     "tabsAriaLabel": "Configuration categories",
+    "pcEntryTitle": "Personal Context",
+    "pcEntryDescription": "Master switch, content sources and authorization",
     "tabs": {
       "model": "Model",
       "agent": "Agent",
       "security": "Security",
+      "personalContext": "Context",
       "other": "Other"
     },
     "tabEmpty": {

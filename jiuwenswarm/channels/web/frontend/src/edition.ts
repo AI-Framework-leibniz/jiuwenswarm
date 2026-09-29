@@ -13,6 +13,7 @@ export const ENTERPRISE_HIDDEN_NAV_ITEMS = [
   "channels",
   "teams",
   "personalContext",
+  "settings",
   "extensions",
   "configpanel",
   "browserpanel",

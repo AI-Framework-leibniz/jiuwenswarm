@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useState, useRef, typ
 import { createPortal } from "react-dom";
 import { AlertCircle, CheckCircle2, Copy, ExternalLink, KeyRound, Loader2, LogOut, Music2, RefreshCw, Workflow } from "lucide-react";
 import { useTranslation } from 'react-i18next';
+import { isEnterprise } from '../../edition';
+import { FEATURE_PERSONAL_CONTEXT_UI } from '../../featureFlags';
 import { useChatStore, useSessionStore } from '../../stores';
 import type { ModelEntry } from '../../types';
 import { webRequest } from '../../services/webClient';
@@ -16,6 +18,7 @@ import {
   type ModelIdentity,
 } from "./openaiAccountModelState";
 import { ConfigFieldHintLabel } from "./ConfigFieldHintLabel";
+import { PersonalContextSettingsPanel } from '../PersonalContext/SettingsPanel';
 import { PermissionsToolsEditor } from "./PermissionsToolsEditor";
 import { ModelProviderIcon } from '../ModelProviderIcon';
 
@@ -429,7 +432,7 @@ function classifyKey(key: string): string {
 const MODEL_GROUP_TAGS = new Set(["model_default", "model_video", "model_audio", "model_vision"]);
 const SECURITY_GROUP_TAGS = new Set(["permissions", "memory"]);
 
-type ConfigMainTab = "model" | "agent" | "security" | "other";
+type ConfigMainTab = "model" | "agent" | "security" | "personalContext" | "other";
 
 function configTabForGroupTag(tag: string): ConfigMainTab {
   if (MODEL_GROUP_TAGS.has(tag) || tag === "embed") return "model";
@@ -4481,7 +4484,7 @@ export function ConfigPanel({
               <span className="mono">{t('config.paramsCount', { count: totalItems })}</span>
             </div>
             <div className="app-subtabs shrink-0" role="tablist" aria-label={t('config.tabsAriaLabel')}>
-              {(["model", "agent", "security", "other"] as const).map((tab) => (
+              {(["model", "agent", "security", ...(FEATURE_PERSONAL_CONTEXT_UI && !isEnterprise() ? ["personalContext"] as const : []), "other"] as const).map((tab) => (
                 <button
                   key={tab}
                   type="button"
@@ -4662,6 +4665,21 @@ export function ConfigPanel({
                 </div>
               ) : null}
 
+              {configTab === "personalContext" ? (
+                <div role="tabpanel" aria-labelledby="config-tab-personalContext" className="space-y-3 pb-2">
+                  <div
+                    id="config-group-personal_context"
+                    className="rounded-xl border border-border bg-card/70 backdrop-blur-sm overflow-hidden shadow-sm"
+                    data-testid="config-personal-context-entry"
+                  >
+                    <div className="px-4 py-3 bg-secondary/30 border-b border-border">
+                      <span className="text-sm font-medium">{t('config.pcEntryTitle')}</span>
+                      <span className="block text-xs text-text-muted mt-0.5">{t('config.pcEntryDescription')}</span>
+                    </div>
+                    <PersonalContextSettingsPanel isConnected={isConnected} />
+                  </div>
+                </div>
+              ) : null}
               {configTab === "other" ? (
                 <div role="tabpanel" aria-labelledby="config-tab-other" className="space-y-3 pb-2">
                   {otherTabGroups.length === 0 ? (
