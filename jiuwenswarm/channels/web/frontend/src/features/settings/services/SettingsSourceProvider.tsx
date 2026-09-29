@@ -204,7 +204,11 @@ function LocaleSourceProvider({ children }: { children: ReactNode }) {
         return await saveQueue.enqueue(operation, () => request('locale.set_conf', { preferred_language: next }));
       } catch (saveError) {
         setLanguage(previous);
-        await i18n.changeLanguage(previous);
+        try {
+          await i18n.changeLanguage(previous);
+        } catch {
+          // 回滚失败不掩盖原始保存错误
+        }
         throw saveError;
       } finally {
         setSavingKeys(new Set());
