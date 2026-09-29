@@ -3750,6 +3750,7 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
             return inputs
 
         from jiuwenswarm.agents.harness.common.prompt.user_prompt_builder import (
+            extract_image_tool_question,
             extract_multimodal_image_files,
         )
 
@@ -3763,11 +3764,7 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
         raw_question = params.get("query")
         if not isinstance(raw_question, str) or not raw_question.strip():
             raw_question = params.get("content")
-        question = raw_question.strip() if isinstance(raw_question, str) else ""
-        first_path = str(image_files[0].get("path") or "").strip()
-        if not first_path:
-            return inputs
-
+        question = extract_image_tool_question(raw_question) if isinstance(raw_question, str) else ""
         media_items = []
         for image_file in image_files:
             path = str(image_file.get("path") or "").strip()
@@ -3786,15 +3783,17 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
 
         tool_context = {
             "marker": "jiuwenswarm_image_tool_context",
-            "mediaPath": first_path,
             "mediaItems": media_items,
             "question": question,
             "toolHint": (
                 "当前主模型未启用原生图片输入。如果需要理解图片内容，请调用图片理解工具；"
-                "优先使用 image_reading(local_url=mediaPath, prompt=question)，"
-                "或使用 visual_question_answering(image_path_or_url=mediaPath, question=question)。"
+                "各图片的路径位于 mediaItems 中："
+                "image_reading(local_url=图片路径, prompt=question)，"
+                "或 visual_question_answering(image_path_or_url=图片路径, question=question)。"
             ),
         }
+        if len(media_items) == 1:
+            tool_context["mediaPath"] = media_items[0]["mediaPath"]
 
         updated = dict(inputs)
         updated.pop("_multimodal_image_files", None)
@@ -6888,31 +6887,33 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
         session_id: str | None,
         request_id: str | None,
         channel_id: str | None = None,
+        request_metadata: dict[str, Any] | None = None,
     ) -> None:
         """刷新每请求相关的 cron / send_file / send_html_card / append_reference 工具运行时状态。
 
-        两者的工具实例都只建一次：cron 见 ``_ensure_cron_tools_registered``，
-        send_file 首次注册后不再刷新 toolkit 上的 request_id。
-        已注册后仍刷新 channel/metadata，供 A2A 使用本轮 ``xiaoyi_task_id``。
-        发送时读 InvocationContext；ContextVar 在工具线程看不见时回落到
-        toolkit 上刚刷的 metadata。
+        工具实例只建一次。已注册后仍刷新 channel/metadata，供 A2A 使用本轮
+        ``xiaoyi_task_id``。这次刷新在 ``_bind_runtime_cron_context`` 之前，
+        工具线程看不见新 contextvar 时会读这份缓存，所以用调用方传入的本轮
+        channel_id 与 request_metadata，不读刷新当时的 contextvar。
         """
         self._ensure_cron_tools_registered(session_id)
 
         # send_file 工具：由 channels.<channel>.send_file_allowed 控制。工具实例只建一次。
-        # 之后不再把每轮 request_id 写入单例。
-        # channel_id/metadata 由调用前的 _bind_runtime_cron_context 已写入 contextvar
+        # channel/metadata 取本轮请求，不取尚未绑定的 contextvar。
         config_base = get_config()
         channel = (
             str(channel_id or self._resolve_prompt_channel(session_id) or "web").strip() or "web"
         )
-        # cron 执行时 channel_id 是内部标识（如 "__cron__"），真实推送渠道由
-        # _bind_runtime_cron_context 归一后写入 contextvar（= job.targets，与 cron
-        # 文本结果推送到同一批渠道）。send_file 的注册判定与文件推送都按真实渠道进行。
-        if _CRON_TOOL_BOUND.get():
-            cron_channel = str(_CRON_TOOL_CHANNEL_ID.get() or "").strip()
-            if cron_channel:
-                channel = cron_channel
+        metadata_for_tool = (
+            dict(request_metadata) if isinstance(request_metadata, dict) else None
+        )
+        # cron 执行时 channel_id 是内部标识（如 "__cron__"），真实推送渠道在本轮
+        # metadata.targets（= job.targets）。注册判定与文件推送都按真实渠道进行。
+        if channel == "__cron__" and metadata_for_tool:
+            cron_targets = str(metadata_for_tool.get("targets") or "").strip()
+            if cron_targets:
+                channel = cron_targets
+        channel_for_tool = channel
         send_file_enabled = (
             config_base.get("channels", {}).get(channel, {}).get("send_file_allowed")
         )
@@ -6920,8 +6921,6 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
         if send_file_enabled is None:
             send_file_enabled = (channel == "web")
         if send_file_enabled and request_id and session_id:
-            channel_for_tool = _CRON_TOOL_CHANNEL_ID.get()
-            metadata_for_tool = _CRON_TOOL_METADATA.get()
             already_registered = any(
                 getattr(existing, "name", "").startswith("send_file_to_user")
                 for existing in (self._instance.ability_manager.list() or [])
@@ -6954,8 +6953,6 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
         if send_html_card_enabled is None:
             send_html_card_enabled = (channel == "xiaoyi")
         if send_html_card_enabled and request_id and session_id:
-            channel_for_tool = _CRON_TOOL_CHANNEL_ID.get()
-            metadata_for_tool = _CRON_TOOL_METADATA.get()
             already_registered_html = any(
                 getattr(existing, "name", "").startswith("send_html_card")
                 for existing in (self._instance.ability_manager.list() or [])
@@ -6985,8 +6982,6 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
         if append_reference_enabled is None:
             append_reference_enabled = (channel == "xiaoyi")
         if append_reference_enabled and request_id and session_id:
-            channel_for_tool = _CRON_TOOL_CHANNEL_ID.get()
-            metadata_for_tool = _CRON_TOOL_METADATA.get()
             already_registered_ref = any(
                 getattr(existing, "name", "").startswith("xiaoyi_append_reference")
                 for existing in (self._instance.ability_manager.list() or [])
@@ -7334,6 +7329,7 @@ class JiuWenSwarmDeepAdapter(ExpertCapabilityMixin):
             runtime_config.session_id,
             runtime_config.request_id,
             channel_id=runtime_config.channel_id,
+            request_metadata=runtime_config.request_metadata,
         )
         stage_timer.mark("session_tools")
 

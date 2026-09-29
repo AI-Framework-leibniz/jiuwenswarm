@@ -6123,8 +6123,10 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
                     ws, req_id, ok=False, error="AgentServer is not ready", code="AGENT_NOT_READY",
                 )
                 return
-            from jiuwenswarm.agents.harness.common.rails.permissions.permissions_config_rpc import \
-                dispatch_permissions_config_request
+            from jiuwenswarm.agents.harness.common.rails.permissions.permissions_config_rpc import (
+                dispatch_permissions_config_request,
+                get_permissions_read_only_req_methods,
+            )
 
             resp = dispatch_permissions_config_request(synthetic)
             if not resp.ok:
@@ -6138,12 +6140,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
                 )
                 return
             out = resp.payload if isinstance(resp.payload, dict) else {}
-            should_schedule_reload = req_method not in (
-                ReqMethod.PERMISSIONS_FILE_GUARD_GET,
-                ReqMethod.PERMISSIONS_TOOLS_GET,
-                ReqMethod.PERMISSIONS_RULES_GET,
-                ReqMethod.PERMISSIONS_APPROVAL_OVERRIDES_GET,
-            )
+            should_schedule_reload = req_method not in get_permissions_read_only_req_methods()
             if should_schedule_reload:
                 out = {
                     **out,
@@ -6204,6 +6201,8 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
     _register_perm("permissions.rules.delete", _PermReq.PERMISSIONS_RULES_DELETE)
     _register_perm("permissions.approval_overrides.get", _PermReq.PERMISSIONS_APPROVAL_OVERRIDES_GET)
     _register_perm("permissions.approval_overrides.delete", _PermReq.PERMISSIONS_APPROVAL_OVERRIDES_DELETE)
+    _register_perm("permissions.net_guard.get", _PermReq.PERMISSIONS_NET_GUARD_GET)
+    _register_perm("permissions.net_guard.set", _PermReq.PERMISSIONS_NET_GUARD_SET)
 
     async def _memory_forbidden_get(ws, req_id, params, session_id):
         try:

@@ -782,23 +782,36 @@ class BuiltUserPrompt:
     """Result of build_user_prompt: separates pure user content from injected context.
 
     Fields:
-        user_query: Pure user content (the raw message the user typed).
-            Contains no JSON wrapper, no "你收到一条消息" prefix, no system metadata.
+        user_query: User content without attachment metadata duplicated in the
+            desktop protocol. Other desktop context and skill directives remain.
         context: Dict of non-content fields (source/timezone/preferred_response_language/.../skills_to_use/
             trusted_dirs) for injection into the system prompt via RuntimePromptRail.
             Does NOT contain the ``content`` or ``timestamp`` keys.
         interaction_prefix: Prefix from metadata.interaction_context (e.g. "\n<ctx>\n\n").
             Empty string when no interaction_context is present. Caller concatenates
-            this with user_query (and statusline_directive) to form the final user
-            message: ``interaction_prefix + user_query + statusline_directive``.
+            this with user_query, attachment_context and statusline_directive
+            via model_query to form the final user message.
         statusline_directive: Suffix injected by /statusline <description> command
             (the statusline-setup prompt text). Empty string for normal messages.
+        attachment_context: Files supplied with this user message, kept next to
+            user_query in model input rather than changing the raw query.
     """
 
     user_query: str
     context: dict[str, Any]
     interaction_prefix: str
     statusline_directive: str
+    attachment_context: str = ""
+
+    @property
+    def model_query(self) -> str:
+        from jiuwenswarm.agents.harness.common.prompt.user_prompt_builder import bind_attachment_context
+
+        return (
+            self.interaction_prefix
+            + bind_attachment_context(self.user_query, self.attachment_context)
+            + self.statusline_directive
+        )
 
 
 def _handle_skills_use_slash_command(query: str) -> Tuple[list, str]:
@@ -853,15 +866,16 @@ def _handle_statusline_prompt_command(query: str) -> Tuple[str, str]:
     return "", query
 
 
-def build_user_prompt(content: str | dict, files: dict, channel: str, language: str, *,
+def build_user_prompt(content: str | dict, files: dict | list[dict], channel: str, language: str, *,
     trusted_dirs: list[str] | None = None, metadata: dict[str, Any] | None = None,
-    skills: list[str] | None = None) -> BuiltUserPrompt:
+    skills: list[str] | None = None, media_items: list[dict] | None = None,
+    attachments: list[dict] | None = None) -> BuiltUserPrompt:
     """Build user prompt for the agent.
 
     Returns a BuiltUserPrompt that separates the pure user content (``user_query``)
     from the system-injected metadata (``context``). The caller is responsible
-    for combining ``interaction_prefix + user_query + statusline_directive``
-    into the final user message; ``context`` is routed to the system prompt
+    for using ``model_query`` as the final user message, including attachments
+    supplied with that message; ``context`` is routed to the system prompt
     via prompt_attachment (RuntimePromptRail).
 
     Args:
@@ -956,11 +970,39 @@ def build_user_prompt(content: str | dict, files: dict, channel: str, language: 
             interaction_prefix + str(content),
         )
 
+    from jiuwenswarm.agents.harness.common.prompt.user_prompt_builder import (
+        extract_current_turn_attachments,
+        remaining_legacy_file_metadata,
+        remove_desktop_attachment_metadata,
+        render_current_turn_attachments,
+    )
+
+    attachment_context = render_current_turn_attachments(
+        extract_current_turn_attachments(
+            {
+                "query": content,
+                "files": files,
+                "media_items": media_items,
+                "attachments": attachments,
+            }
+        )
+    )
+    if attachment_context:
+        # The user message now owns these files; retain only legacy fields that
+        # were not represented by the normalized attachment list.
+        remaining_files = remaining_legacy_file_metadata(files)
+        if remaining_files:
+            user_message_context["files_updated_by_user"] = json.dumps(remaining_files, ensure_ascii=False)
+        else:
+            user_message_context.pop("files_updated_by_user", None)
+        if isinstance(content, str):
+            content = remove_desktop_attachment_metadata(content)
     return BuiltUserPrompt(
         user_query=str(content),
         context=user_message_context,
         interaction_prefix=interaction_prefix,
         statusline_directive=statusline_directive,
+        attachment_context=attachment_context,
     )
 
 
@@ -1267,8 +1309,10 @@ class JiuWenSwarm:
                         trusted_dirs=trusted_dirs,
                         metadata=request.metadata,
                         skills=skills,
+                        media_items=params.get("media_items"),
+                        attachments=params.get("attachments"),
                     )
-                    final_query = built.interaction_prefix + built.user_query + built.statusline_directive
+                    final_query = built.model_query
                     built_user_context = built.context
             else:
                 built = build_user_prompt(
@@ -1279,8 +1323,10 @@ class JiuWenSwarm:
                     trusted_dirs=trusted_dirs,
                     metadata=request.metadata,
                     skills=skills,
+                    media_items=params.get("media_items"),
+                    attachments=params.get("attachments"),
                 )
-                final_query = built.interaction_prefix + built.user_query + built.statusline_directive
+                final_query = built.model_query
                 built_user_context = built.context
                 # 调试日志：确认 /statusline prompt 注入是否生效
                 if isinstance(query, str) and "/statusline" in query:
@@ -2492,14 +2538,30 @@ class JiuWenSwarm:
             )
             return
 
-        # Team 模式：使用原始 query，而不是 build_user_prompt 包装后的内容
+        # Team uses the raw query (e.g. for /debug), but must retain its attachments.
         team_query_is_interactive_input = False
         if is_team_mode:
             from openjiuwen.core.session.interaction.interactive_input import InteractiveInput
 
             team_query_is_interactive_input = isinstance(inputs.get("query"), InteractiveInput)
             if not team_query_is_interactive_input:
-                inputs["query"] = raw_query
+                from jiuwenswarm.agents.harness.common.prompt.user_prompt_builder import (
+                    bind_attachment_context,
+                    extract_current_turn_attachments,
+                    remove_desktop_attachment_metadata,
+                    render_current_turn_attachments,
+                )
+
+                attachment_context = render_current_turn_attachments(
+                    extract_current_turn_attachments(request.params)
+                )
+                team_query = raw_query
+                if attachment_context and isinstance(team_query, str):
+                    team_query = remove_desktop_attachment_metadata(team_query)
+                inputs["query"] = (
+                    bind_attachment_context(team_query, attachment_context)
+                    if isinstance(team_query, str) else team_query
+                )
             logger.info(
                 "[JiuWenSwarm] Team模式使用原始query: %s",
                 raw_query[:100] if isinstance(raw_query, str) and raw_query else type(inputs.get("query")).__name__,

@@ -20,6 +20,19 @@ class Channel:
         pass
 
 
+def test_file_and_network_guard_reads_do_not_trigger_reload():
+    from jiuwenswarm.agents.harness.common.rails.permissions.permissions_config_rpc import (
+        get_permissions_read_only_req_methods,
+    )
+    from jiuwenswarm.common.schema.message import ReqMethod
+
+    methods = get_permissions_read_only_req_methods()
+    assert ReqMethod.PERMISSIONS_FILE_GUARD_GET in methods
+    assert ReqMethod.PERMISSIONS_NET_GUARD_GET in methods
+    assert ReqMethod.PERMISSIONS_FILE_GUARD_UPDATE not in methods
+    assert ReqMethod.PERMISSIONS_NET_GUARD_SET not in methods
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["sandbox.enabled.get", "sandbox.enabled.set", "sandbox.files.sync", "sandbox.restart"])
 async def test_sandbox_web_rpc_requires_agent(method):
