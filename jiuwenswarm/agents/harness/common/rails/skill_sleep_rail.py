@@ -459,7 +459,7 @@ class SkillSleepRail(DeepAgentRail):
             )
             if count <= self._call_threshold:
                 continue
-            started = self._runner.try_start(skill_name)
+            started = self._runner.try_start(skill_name, session_id=session_id)
             if started:
                 logger.info(
                     "[SkillSleepRail] triggered sleep skill=%s count_was=%s",
