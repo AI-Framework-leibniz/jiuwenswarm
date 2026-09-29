@@ -80,6 +80,7 @@ from jiuwenswarm.agents.harness.common.rails.interrupt.interrupt_helpers import 
     EVOLUTION_INTERRUPT_METADATA_SOURCES,
     is_interrupt_resume_payload,
     peek_hitl_batch_members,
+    strip_hitl_seq_suffix,
 )
 from jiuwenswarm.agents.harness.common.rails.skill_active_state import (
     _CHAT_SEND_SOURCE_EXTRA_KEY,
@@ -97,7 +98,14 @@ class _TeamPlanApprovalPayloadError(ValueError):
 
 
 def _permission_response_key(request: AgentRequest) -> str | None:
-    """Return the opaque request ID for a permission continuation."""
+    """Return the opaque request ID for a permission continuation.
+
+    注意：这里必须返回带 ``#{n}`` 序号后缀的原始卡片 id，不做 base 归一化——
+    TIE 重写场景（skill_acceleration_exec 等外层调用）下，``#{n}`` 标识同
+    base 顺序的下一个不同权限门（不同权限内容），归一化会把门 2 的合法应答
+    误判为门 1 的重复并永久死锁（CR-1）。同权限 re-ask 的迟到重复应答由
+    DeepAdapter 死卡守卫（``_is_stale_hitl_card_answer`` 非当前代正判）拦截。
+    """
     if request.req_method not in (ReqMethod.CHAT_SEND, ReqMethod.CHAT_RESUME):
         return None
     params = request.params if isinstance(request.params, dict) else {}
@@ -256,9 +264,7 @@ def _should_record_user_history(params: Any) -> bool:
 def _ask_user_answer_request_id(params: dict[str, Any], fallback: str) -> str:
     rid = str(params.get("request_id") or "").strip()
     if isinstance(rid, str):
-        matched = re.search(r"^(?P<base>.+)#\d+$", rid)
-        if matched and matched.group("base").strip():
-            rid = matched.group("base").strip()
+        rid = strip_hitl_seq_suffix(rid)
     return rid or str(fallback or "").strip()
 
 
@@ -1766,10 +1772,9 @@ class JiuWenSwarm:
                 request_id = params.get("request_id", "")
                 # ask_user 卡片序号后缀（{call_id}#{n}，区分同一外层调用的第 n 次
                 # 中断）在此剥掉，恢复 harness 原始 tool_call id 用于对齐
+                # （与 DeepAdapter 死卡守卫共用同一实现，避免规则漂移）。
                 if isinstance(request_id, str):
-                    _m = re.search(r"^(?P<base>.+)#\d+$", request_id.strip())
-                    if _m and _m.group("base").strip():
-                        request_id = _m.group("base").strip()
+                    request_id = strip_hitl_seq_suffix(request_id)
                 raw_original_request = params.get("original_request") if source == "ask_user_interrupt" else ""
                 original_request = raw_original_request.strip() if isinstance(raw_original_request, str) else ""
                 interactive_input = self._build_interactive_input_from_answers(

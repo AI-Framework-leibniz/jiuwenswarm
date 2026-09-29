@@ -280,6 +280,7 @@ from jiuwenswarm.agents.harness.common.rails.interrupt.interrupt_helpers import 
     convert_interactions_to_ask_user_question,
     discard_hitl_batch_member_entry,
     read_hitl_batch_merge_key,
+    strip_hitl_seq_suffix,
 )
 from jiuwenswarm.agents.harness.common.tools.todo_compat import (
     CompatibleTodoModifyTool,
@@ -21470,7 +21471,14 @@ class JiuWenSwarmDeepAdapter:
         live.clear()
 
     def _is_stale_hitl_card_answer(self, final_id: str) -> bool:
-        """应答是否命中已死卡片实例（未登记的卡片 fail-open 由相位守卫裁决）。"""
+        """应答是否命中已死卡片实例（未登记的卡片 fail-open 由相位守卫裁决）。
+
+        序号后缀正判扩展：未登记的 ``{base}#{n}`` 应答，若其 base 的当前代卡
+        登记在案且不是该 id，同样判陈旧——同权限 re-ask 场景下，上层对旧代卡
+        的迟到应答与伪造代次不得进入 runtime（BUG20260928373903 复读风暴）；
+        当前代卡（同 base 顺序下一个权限门）不受影响（CR-1）。base 未登记仍
+        fail-open（重启恢复 / 未走登记发卡路径）。
+        """
         if not final_id:
             return False
         dead_ids = getattr(self, "_hitl_dead_card_ids", frozenset())
@@ -21478,6 +21486,10 @@ class JiuWenSwarmDeepAdapter:
             return True
         base_id = getattr(self, "_hitl_card_instances", {}).get(final_id)
         if base_id is None:
+            live = getattr(self, "_hitl_base_live_instance", {})
+            suffix_base = strip_hitl_seq_suffix(final_id)
+            if suffix_base != final_id and suffix_base in live:
+                return live.get(suffix_base) != final_id
             return False
         live = getattr(self, "_hitl_base_live_instance", {}).get(base_id)
         return live is not None and live != final_id

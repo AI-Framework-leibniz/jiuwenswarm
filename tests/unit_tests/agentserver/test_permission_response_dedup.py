@@ -101,6 +101,75 @@ def test_ask_user_response_is_not_treated_as_permission_response() -> None:
     assert interface_module._permission_response_key(request) is None
 
 
+@pytest.mark.parametrize(
+    ("continuation_id", "expected"),
+    [
+        ("permission-1", "permission-1"),
+        # CR-1：{id}#{n} 是同 base 顺序权限门的代次（TIE 重写共用外层 call id），
+        # 账本 key 必须保持原始 id——不同代次各自消费，只有同代重放被去重。
+        ("permission-1#2", "permission-1#2"),
+        (" permission-1#2 ", " permission-1#2 "),
+        (" permission-1 ", " permission-1 "),
+        ("call_abc#0", "call_abc#0"),
+    ],
+)
+def test_permission_response_key_keeps_card_generation(
+    continuation_id: str,
+    expected: str,
+) -> None:
+    request = _permission_request(continuation_id, request_id="transport-1")
+
+    assert interface_module._permission_response_key(request) == expected
+
+
+@pytest.mark.asyncio
+async def test_sequential_gate_answers_on_same_base_both_enter_runtime(monkeypatch) -> None:
+    """CR-1/CR-2 回归锚点：同 base 顺序两个不同权限门的应答都必须进 runtime。
+
+    skill_acceleration_exec 场景：外层 call_id 的门 1 卡为 call-1，门 2（不同
+    权限内容）经 _dedupe_ask_user_card 发为 call-1#2。门 1 应答消费后，门 2
+    应答曾被 key 归一化误判 duplicate 导致静默死锁，本用例防止该回归。
+    """
+    adapter = _PermissionAdapter()
+    swarm = _build_swarm(monkeypatch, adapter)
+
+    try:
+        first = await swarm.process_message(
+            _permission_request("call-1", request_id="web-gate1")
+        )
+        second = await swarm.process_message(
+            _permission_request("call-1#2", request_id="web-gate2")
+        )
+
+        assert adapter.runtime_calls == ["call-1", "call-1#2"]
+        assert first.payload.get("code") != "duplicate_permission_response"
+        assert second.payload.get("code") != "duplicate_permission_response"
+    finally:
+        await swarm._session_manager.close_all_sessions()
+
+
+@pytest.mark.asyncio
+async def test_same_generation_replay_is_deduplicated(monkeypatch) -> None:
+    """同一代卡（同原始 id）的重复投递只允许首条进 runtime（幂等）。"""
+    adapter = _PermissionAdapter()
+    swarm = _build_swarm(monkeypatch, adapter)
+
+    try:
+        responses = []
+        for transport_id in ("web-first", "web-replay"):
+            responses.append(
+                await swarm.process_message(
+                    _permission_request("call-1#2", request_id=transport_id)
+                )
+            )
+
+        assert adapter.runtime_calls == ["call-1#2"]
+        assert responses[0].payload.get("code") != "duplicate_permission_response"
+        assert responses[1].payload.get("code") == "duplicate_permission_response"
+    finally:
+        await swarm._session_manager.close_all_sessions()
+
+
 def test_recent_permission_ledger_is_bounded() -> None:
     ledger = PermissionResponseLedger(max_recent_keys=2)
 

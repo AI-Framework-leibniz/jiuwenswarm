@@ -78,6 +78,45 @@ def test_dedupe_marks_superseded_payload() -> None:
     assert second["request_id"] == "tc-1#2"  # 序号后缀成为新卡 ID
 
 
+def test_stale_answer_rejects_non_live_generation_of_known_base() -> None:
+    """同 base 顺序门 + 同权限 re-ask 迟到应答的守卫语义（CR-1/BUG20260928373903）。
+
+    - 门 1 应答（首代卡）消费后，门 2（新一代 tc-1#2，不同权限内容）应答必须
+      放行——顺序权限门不得被误判为重复（CR-1 回归锚点）。
+    - 旧代卡迟到应答（死卡集命中）与未登记的更晚代次（伪造/淘汰后重放，
+      base 当前代卡在案）判陈旧——同权限 re-ask 风暴的迟到重复由此拦截。
+    - base 未登记 / 无后缀未登记：fail-open（重启恢复、未走登记发卡路径）。
+    """
+    adapter = _make_adapter()
+    # 门 1：base tc-1 首代卡（无后缀）
+    assert adapter._register_hitl_card_instance(base_id="tc-1", final_id="tc-1") is None
+    assert adapter._is_stale_hitl_card_answer("tc-1") is False
+
+    # 门 2：不同权限内容 → 新一代 tc-1#2，门 1 卡被顶替进死卡集
+    assert adapter._register_hitl_card_instance(base_id="tc-1", final_id="tc-1#2") == "tc-1"
+
+    # 当前代卡放行（顺序下一个权限门的合法应答）
+    assert adapter._is_stale_hitl_card_answer("tc-1#2") is False
+    # 旧代卡迟到应答：死卡集命中
+    assert adapter._is_stale_hitl_card_answer("tc-1") is True
+    # 未登记的更晚代次（伪造代次 / 登记表淘汰后重放）：base 在案且非当前代 → 陈旧
+    assert adapter._is_stale_hitl_card_answer("tc-1#9") is True
+    # 未登记且 base 也未登记：fail-open
+    assert adapter._is_stale_hitl_card_answer("tc-other#3") is False
+    # 未登记且无后缀：fail-open
+    assert adapter._is_stale_hitl_card_answer("tc-unknown") is False
+    # 同代重复应答不在此判定（由 PermissionResponseLedger 按原始 id 幂等去重）
+
+
+def test_stale_answer_after_round_end_invalidation() -> None:
+    """轮次结束全失效后，包括当前代卡在内的所有应答均判陈旧。"""
+    adapter = _make_adapter()
+    adapter._register_hitl_card_instance(base_id="tc-1", final_id="tc-1#2")
+    adapter._invalidate_all_hitl_card_instances()
+
+    assert adapter._is_stale_hitl_card_answer("tc-1#2") is True
+
+
 def test_pop_superseded_expiry_chunk_builds_event() -> None:
     """expiry helper 构造精确失效事件，并从新卡 payload 移除内部标记。"""
     adapter = _make_adapter()
