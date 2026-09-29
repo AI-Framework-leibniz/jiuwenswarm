@@ -29,6 +29,15 @@ from openjiuwen.core.common.logging import logger
 from openjiuwen.core.foundation.tool import McpServerConfig, Tool, ToolCard
 
 try:
+    # 较新版本 openjiuwen（agent-core）提供；旧版本无此模块时降级为 None——
+    # 此时上游不清洗工具名，清洗名回退匹配无需启用（见
+    # resolve_active_office_claw_tool_id），保证 jiuwenswarm 对新旧
+    # agent-core 前后兼容、CI 不强依赖上游合入顺序。
+    from openjiuwen.core.foundation.tool.name_sanitize import sanitize_llm_tool_name
+except ImportError:  # pragma: no cover - depends on agent-core revision
+    sanitize_llm_tool_name = None  # type: ignore[assignment]
+
+try:
     from openjiuwen.core.foundation.tool.mcp.client import (
         sse_client as _sse_client,  # noqa: F401
         stdio_client as _stdio_client,  # noqa: F401
@@ -1872,6 +1881,25 @@ def resolve_active_office_claw_tool_id(tool_name: str) -> str | None:
         for tool_id in allowed
         if tool_id.endswith(suffix) or tool_id.rsplit(".", 1)[-1] == name
     ]
+    if not matches and sanitize_llm_tool_name is not None:
+        # Fallback for sanitized model-facing names: AbilityManager may expose a
+        # raw tool name (embedded after the ``<scope>.<server>.`` part of the id)
+        # in an LLM-safe form, e.g. ``aippt.doc_beautify`` -> ``aippt_doc_beautify``
+        # (OpenAI-compatible providers reject dots). Scan every dot position so
+        # dotted raw names still match their sanitized exposed name. Requires
+        # the newer agent-core; without it no sanitized names exist upstream,
+        # so exact matching above is authoritative and this stays skipped.
+        for tool_id in allowed:
+            _, sep, remainder = tool_id.partition(".")
+            if not sep or "." not in remainder:
+                continue
+            position = remainder.find(".")
+            while position != -1:
+                candidate = remainder[position + 1:]
+                if candidate and sanitize_llm_tool_name(candidate) == name:
+                    matches.append(tool_id)
+                    break
+                position = remainder.find(".", position + 1)
     if not matches:
         return None
     if len(matches) == 1:
