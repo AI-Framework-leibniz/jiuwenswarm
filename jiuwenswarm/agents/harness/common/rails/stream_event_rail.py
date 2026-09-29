@@ -317,6 +317,8 @@ from jiuwenswarm.server.runtime.skill_turbo.context_binding import (  # noqa: E4
 
 
 class JiuSwarmStreamEventRail(DeepAgentRail):
+
+    _bg_emit_tasks: set = set()
     """Emit frontend stream events and enforce pause/abort checkpoints.
 
     Pause/abort state is owned by this Rail (not DeepAgent) so that
@@ -1097,11 +1099,25 @@ class JiuSwarmStreamEventRail(DeepAgentRail):
             logger.warning("[StreamEventRail] inject call_goal prompt failed: %s", exc)
 
     async def after_model_call(self, ctx: AgentCallbackContext) -> None:
-        await self._emit_context_usage(
+        # [PERF] 轻量模式:context.usage 是信息性统计事件,高并发下
+        # write_stream 背压会把本钩子拖到秒级(100 并发实测 ×12-26 次
+        # >1s 慢回调)。改为后台发射,不阻塞回复路径;背压时晚到但不丢。
+        import os as _os
+        _light = (_os.getenv("JIUWENCLAW_ADAPTER_CKPT_LIGHT") or "").strip().lower() in {"1", "true", "yes", "on"}
+        coro = self._emit_context_usage(
             ctx,
             member_name=self._member_name or None,
             role=self._role or None,
         )
+        if _light:
+            try:
+                task = asyncio.create_task(coro, name="ctx-usage-emit-bg")
+                self._bg_emit_tasks.add(task)
+                task.add_done_callback(self._bg_emit_tasks.discard)
+                return
+            except RuntimeError:
+                pass  # 无 loop 时退回同步
+        await coro
 
     async def before_tool_call(self, ctx: AgentCallbackContext) -> None:
         sid = self._resolve_sid(ctx, ctx.session)

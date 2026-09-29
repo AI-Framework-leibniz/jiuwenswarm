@@ -632,6 +632,7 @@ from jiuwenswarm.server.runtime.agent_adapter.interrupt_resume_helpers import (
 )
 from jiuwenswarm.server.runtime.agent_adapter.stale_todo_cleanup_helpers import (
     prepare_stale_todo_cleanup_for_request,
+    adapter_ckpt_light_enabled,
 )
 from jiuwenswarm.server.runtime.agent_adapter.plan_pause_helpers import (
     build_paused_plan_decision_prompt_from_session_snapshot,
@@ -13590,6 +13591,29 @@ class JiuWenSwarmDeepAdapter:
         # _interaction_session 是 before_invoke 实际读取的运行时 session，
         # 透传让哨兵标志落在 before_invoke 看得到的地方。
         runtime_session = getattr(self._instance, "_interaction_session", None)
+
+        # [PERF] 轻量负过滤:plan-pause 标志几乎恒空。先查运行时 session 内存
+        # 与文件标志(便宜),双空即返回——免去为读标志建临时 session 做全量
+        # checkpoint restore + post_run save。任一命中或判定失败再走全量路径。
+        if adapter_ckpt_light_enabled():
+            _paused_cheap = False
+            try:
+                if runtime_session is not None:
+                    _paused_cheap, _ = read_plan_pause_from_session(runtime_session)
+                if not _paused_cheap:
+                    _paused_cheap, _ = read_plan_pause_from_file(
+                        Path(self._workspace_dir), session_id
+                    )
+            except Exception as _exc:  # noqa: BLE001 - 判定失败退回全量路径
+                logger.debug(
+                    "[JiuWenSwarmDeepAdapter] plan pause light check failed, "
+                    "fallback to full path: %s",
+                    _exc,
+                )
+                _paused_cheap = True  # 无法排除,走原路径
+            if not _paused_cheap:
+                return
+
         from openjiuwen.core.session.agent import create_agent_session
         session = create_agent_session(session_id=session_id, card=self._instance.card)
         await session.pre_run(inputs=None)
