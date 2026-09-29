@@ -193,6 +193,14 @@ async def handle_agent_reload_config(ctx: RequestContext) -> None:
                     **reload_kwargs,
                 )
 
+        # ``xiaoyi_claw`` can be enabled without restarting agent server.
+        # Re-evaluate the gate after every config reload; the patch is idempotent.
+        from jiuwenswarm.server.app_agentserver import (
+            refresh_openai_response_assembly_patch,
+        )
+
+        refresh_openai_response_assembly_patch()
+
         # Hot-reload ProactiveEngine config if available
         should_reload_proactive = not reload_scopes or bool(reload_scopes & {"model", "proactive", "agent_runtime"})
         if ctx.services.proactive_engine is not None and should_reload_proactive:

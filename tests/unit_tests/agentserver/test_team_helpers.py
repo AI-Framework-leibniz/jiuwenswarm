@@ -3235,6 +3235,51 @@ async def test_leader_direct_answer_finishes_settled_round(monkeypatch):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("failure_mode", ["empty", "exception"])
+async def test_team_stream_errors_include_structured_code(monkeypatch, failure_mode):
+    """Team 流本地错误必须携带稳定 code，避免错误文本中的 403 被误判。"""
+    broadcasted: list[dict] = []
+
+    async def _failing_stream(**kwargs):
+        if failure_mode == "exception":
+            raise RuntimeError("upstream returned 403 while retrying")
+        if False:
+            yield None
+
+    class _FakeManager(_InactiveTeamRuntimeManagerMixin):
+        @staticmethod
+        def clear_pending_runtime(session_id: str) -> None:
+            pass
+
+        @staticmethod
+        def clear_active_runtime(session_id: str) -> None:
+            pass
+
+        @staticmethod
+        def pop_stream_task(session_id: str) -> None:
+            pass
+
+    monkeypatch.setattr(team_helpers, "_run_agent_team_streaming", _failing_stream)
+    monkeypatch.setattr(team_helpers, "get_team_manager", lambda channel_id: _FakeManager())
+    monkeypatch.setattr(
+        team_helpers,
+        "_broadcast_event",
+        lambda channel_id, session_id, event: broadcasted.append(event),
+    )
+
+    await _TeamHelpersTestApi.consume_stream_with_query(
+        "officeclaw",
+        f"sess-{failure_mode}",
+        SimpleNamespace(team_name="demo-team"),
+        "hello",
+    )
+
+    errors = [event for event in broadcasted if event.get("event_type") == "chat.error"]
+    assert len(errors) == 1
+    assert errors[0]["code"] == "team_stream_error"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "blocker",
     ["busy_member", "open_task", "unread_message", "active_workflow"],
