@@ -25,7 +25,7 @@ import re
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -397,7 +397,7 @@ def run_sleep_cycle_sync(
     dry_run: bool = False,
     model_spec: SleepModelSpec | None = None,
     action: str = ACTION_AUTO,
-) -> Any:
+) -> tuple[Any, int]:
     """Run one sleep cycle synchronously (intended for ``asyncio.to_thread``).
 
     With ``backend="model"``, the LLM comes from *model_spec* when given,
@@ -411,6 +411,9 @@ def run_sleep_cycle_sync(
     ``suggest`` never stages/adopts and instead appends the proposed edits
     (gate-accepted and gate-rejected) to ``evolutions.json`` as
     ``review_status="suggest"`` experiences.
+
+    Returns ``(outcome, suggest_written)`` where *suggest_written* is the number
+    of suggest experiences persisted (0 for auto / dry-run / no edits).
     """
     from openjiuwen.agent_evolving.checkpointing.evolution_store import EvolutionStore
     from openjiuwen.agent_evolving.skill_train.sleep import SleepConfig, run_sleep_cycle
@@ -461,9 +464,17 @@ def run_sleep_cycle_sync(
         seed_tasks=_mine_skill_tasks(cfg, skill_name) if skill_name else None,
         evolution_store=store,
     )
+    suggest_written = 0
     if suggest and not dry_run:
-        _persist_suggestions(store, skill_name, outcome)
-    return outcome
+        suggest_written = _persist_suggestions(store, skill_name, outcome)
+    return outcome, suggest_written
+
+
+def _unpack_sleep_cycle_result(raw: Any) -> tuple[Any, int | None]:
+    """Normalize ``run_sleep_cycle_sync`` return (or test mocks that return outcome only)."""
+    if isinstance(raw, tuple) and len(raw) == 2:
+        return raw[0], max(0, int(raw[1] or 0))
+    return raw, None
 
 
 def _mine_skill_tasks(cfg: Any, skill_name: str) -> list[Any]:
@@ -568,6 +579,13 @@ def _persist_suggestions(store: Any, skill_name: str, outcome: Any) -> int:
     return written
 
 
+PublishedCallback = Callable[..., Awaitable[None]]
+"""``await cb(skill_name=, version=, session_id=, request_id=)`` after an auto adopt."""
+
+SuggestCallback = Callable[..., Awaitable[None]]
+"""``await cb(skill_name=, session_id=, request_id=)`` after suggest experiences are saved."""
+
+
 class SkillSleepRunner:
     """Reset counter and launch at most one sleep cycle in the background."""
 
@@ -584,10 +602,14 @@ class SkillSleepRunner:
         on_task_created: Callable[[asyncio.Task], None] | None = None,
         model_provider: Callable[[], SleepModelSpec | None] | None = None,
         skills_dirs_provider: Callable[[], SkillsDirs] | None = None,
+        on_published: PublishedCallback | None = None,
+        on_suggest: SuggestCallback | None = None,
     ) -> None:
         self._counter = counter
         self._model_provider = model_provider
         self._skills_dirs_provider = skills_dirs_provider
+        self._on_published = on_published
+        self._on_suggest = on_suggest
         self._trajectory_dir = Path(trajectory_dir)
         self._skills_dirs = _normalize_skills_dirs(skills_base_dir)
         self._state_dir = Path(state_dir)
@@ -701,12 +723,13 @@ class SkillSleepRunner:
             )
             return None
 
-    def try_start(self, skill_name: str) -> bool:
+    def try_start(self, skill_name: str, *, session_id: str = "") -> bool:
         """Take *skill_name*'s count and start sleep if no cycle is running.
 
         Returns True when a background task was scheduled. The taken count is
         given back if scheduling fails or the cycle fails / is cancelled, and a
         skill in failure backoff (or failing preflight) is not started at all.
+        *session_id* is the triggering session, used to route published / suggest pushes.
         """
         name = str(skill_name or "").strip()
         if not name:
@@ -766,7 +789,9 @@ class SkillSleepRunner:
             return False
 
         taken = self._counter.reset(name)
-        coro = self._run_async(name, spec, taken, action, skills_dirs)
+        coro = self._run_async(
+            name, spec, taken, action, skills_dirs, session_id=str(session_id or "").strip()
+        )
         try:
             task = loop.create_task(coro, name=f"skill-sleep:{name}")
         except Exception:
@@ -807,9 +832,13 @@ class SkillSleepRunner:
         taken: int = 0,
         action: str = ACTION_AUTO,
         skills_dirs: Sequence[Path] | None = None,
+        *,
+        session_id: str = "",
     ) -> None:
+        outcome = None
+        suggest_written: int | None = None
         try:
-            outcome = await asyncio.to_thread(
+            raw = await asyncio.to_thread(
                 run_sleep_cycle_sync,
                 trajectory_dir=self._trajectory_dir,
                 skills_base_dir=list(skills_dirs or self._skills_dirs),
@@ -821,6 +850,7 @@ class SkillSleepRunner:
                 model_spec=model_spec,
                 action=action,
             )
+            outcome, suggest_written = _unpack_sleep_cycle_result(raw)
             report = getattr(outcome, "report", None)
             logger.info(
                 "[SkillSleepRunner] sleep finished skill=%s action=%s night=%s "
@@ -842,3 +872,91 @@ class SkillSleepRunner:
             self._release_cross_process_locks()
             with self._lock:
                 self._inflight = False
+        if outcome is not None:
+            if action == ACTION_SUGGEST:
+                await self._notify_suggest(
+                    skill_name,
+                    outcome,
+                    session_id,
+                    suggest_written=suggest_written,
+                )
+            else:
+                await self._notify_published(outcome, session_id)
+
+    async def _notify_suggest(
+        self,
+        skill_name: str,
+        outcome: Any,
+        session_id: str,
+        *,
+        suggest_written: int | None = None,
+    ) -> None:
+        """Notify relay that suggest experiences were saved (best effort)."""
+        if self._on_suggest is None:
+            return
+        if suggest_written is None:
+            count = len(_suggestion_records(skill_name, outcome))
+        else:
+            count = max(0, suggest_written)
+        if count <= 0:
+            return
+        name = str(skill_name or "").strip()
+        if not name:
+            return
+        if not session_id:
+            logger.warning(
+                "[SkillSleepRunner] skip suggest push: skill=%s count=%s "
+                "reason=no_session_context",
+                name,
+                count,
+            )
+            return
+        request_id = f"skill-sleep-{getattr(outcome, 'night', '') or 'night'}"
+        try:
+            await self._on_suggest(
+                skill_name=name,
+                session_id=session_id,
+                request_id=request_id,
+            )
+        except Exception:
+            logger.warning(
+                "[SkillSleepRunner] suggest push failed: skill=%s request_id=%s",
+                name,
+                request_id,
+                exc_info=True,
+            )
+
+    async def _notify_published(self, outcome: Any, session_id: str) -> None:
+        """Report each auto-adopted SemVer bump via *on_published* (best effort)."""
+        if self._on_published is None:
+            return
+        request_id = f"skill-sleep-{getattr(outcome, 'night', '') or 'night'}"
+        for adopted in getattr(outcome, "adopted_skills", None) or []:
+            name = str(getattr(adopted, "skill_name", "") or "").strip()
+            version = str(getattr(adopted, "new_version", "") or "").strip()
+            if not name or not version or version == str(
+                getattr(adopted, "previous_version", "") or ""
+            ).strip():
+                continue
+            if not session_id:
+                logger.warning(
+                    "[SkillSleepRunner] skip published push: skill=%s version=%s "
+                    "reason=no_session_context",
+                    name,
+                    version,
+                )
+                continue
+            try:
+                await self._on_published(
+                    skill_name=name,
+                    version=version,
+                    session_id=session_id,
+                    request_id=request_id,
+                )
+            except Exception:
+                logger.warning(
+                    "[SkillSleepRunner] published push failed: skill=%s version=%s",
+                    name,
+                    version,
+                    exc_info=True,
+                )

@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from openjiuwen.core.single_agent.interrupt.state import (
     INTERRUPTION_KEY,
@@ -402,7 +402,7 @@ class TestSkillSleepRail(unittest.TestCase):
                         )
                     await rail.after_invoke(ctx)
                 self.assertEqual(counter.get("weather"), 2)
-                runner.try_start.assert_called_once_with("weather")
+                runner.try_start.assert_called_once_with("weather", session_id="s-1")
 
             asyncio.run(_run())
 
@@ -894,6 +894,148 @@ class TestSkillSleepRunner(unittest.TestCase):
 
             asyncio.run(_run())
 
+    def _run_publish(
+        self,
+        *,
+        adopted: list,
+        session_id: str = "sess-1",
+        on_published=None,
+    ) -> AsyncMock:
+        callback = on_published or AsyncMock()
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "trace").mkdir()
+            counter = SkillCallCounter(root / "state" / "call_counts.json")
+            counter.increment("tianqi")
+            tracked: list[asyncio.Task] = []
+            runner = SkillSleepRunner(
+                counter=counter,
+                trajectory_dir=root / "trace",
+                skills_base_dir=root / "skills",
+                state_dir=root / "state",
+                backend="mock",
+                on_task_created=tracked.append,
+                on_published=callback,
+            )
+
+            async def _run() -> None:
+                with patch.object(runner_mod, "run_sleep_cycle_sync") as mocked:
+                    mocked.return_value = SimpleNamespace(
+                        night=6, report=MagicMock(), adopted_skills=adopted
+                    )
+                    self.assertTrue(runner.try_start("tianqi", session_id=session_id))
+                    await tracked[0]
+
+            asyncio.run(_run())
+            ledger = root / "state" / "skill_sleep_failures.json"
+            if ledger.exists():
+                self.assertEqual(json.loads(ledger.read_text(encoding="utf-8")), {})
+        return callback
+
+    @staticmethod
+    def _adopted(new: str, previous: str = "1.0.0") -> SimpleNamespace:
+        return SimpleNamespace(
+            skill_name="tianqi", previous_version=previous, new_version=new
+        )
+
+    def test_auto_adopt_pushes_published(self) -> None:
+        callback = self._run_publish(adopted=[self._adopted("1.1.0")])
+        callback.assert_awaited_once_with(
+            skill_name="tianqi",
+            version="1.1.0",
+            session_id="sess-1",
+            request_id="skill-sleep-6",
+        )
+
+    def test_no_adoption_or_unchanged_version_skips_published(self) -> None:
+        self._run_publish(adopted=[]).assert_not_awaited()
+        self._run_publish(adopted=[self._adopted("1.0.0")]).assert_not_awaited()
+        self._run_publish(adopted=[self._adopted("")]).assert_not_awaited()
+
+    def test_missing_session_skips_published(self) -> None:
+        with self.assertLogs(runner_mod.logger, level="WARNING") as logs:
+            callback = self._run_publish(adopted=[self._adopted("1.1.0")], session_id="")
+        callback.assert_not_awaited()
+        self.assertIn("no_session_context", "\n".join(logs.output))
+
+    def test_published_push_failure_does_not_fail_cycle(self) -> None:
+        callback = AsyncMock(side_effect=RuntimeError("gateway down"))
+        with self.assertLogs(runner_mod.logger, level="WARNING") as logs:
+            self._run_publish(adopted=[self._adopted("1.1.0")], on_published=callback)
+        callback.assert_awaited_once()
+        self.assertIn("published push failed", "\n".join(logs.output))
+
+    def _run_suggest_notify(
+        self,
+        *,
+        edits: list | None = None,
+        suggest_written: int | None = 1,
+        session_id: str = "sess-1",
+        on_suggest=None,
+    ) -> AsyncMock:
+        from openjiuwen.agent_evolving.skill_train.sleep.types import EditRecord
+
+        callback = on_suggest or AsyncMock()
+        self.action_mock.return_value = "suggest"
+        if edits is None:
+            edits = [EditRecord(target="skill", op="add", content="use format=j1")]
+        outcome = SimpleNamespace(
+            night=7,
+            report=SimpleNamespace(n_tasks=2, edits=edits, rejected_edits=[]),
+            adopted_skills=[],
+        )
+        cycle_result = (
+            (outcome, suggest_written) if suggest_written is not None else outcome
+        )
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "trace").mkdir()
+            counter = SkillCallCounter(root / "state" / "call_counts.json")
+            counter.increment("tianqi")
+            tracked: list[asyncio.Task] = []
+            runner = SkillSleepRunner(
+                counter=counter,
+                trajectory_dir=root / "trace",
+                skills_base_dir=root / "skills",
+                state_dir=root / "state",
+                backend="mock",
+                on_task_created=tracked.append,
+                on_suggest=callback,
+            )
+
+            async def _run() -> None:
+                with patch.object(runner_mod, "run_sleep_cycle_sync") as mocked:
+                    mocked.return_value = cycle_result
+                    self.assertTrue(runner.try_start("tianqi", session_id=session_id))
+                    await tracked[0]
+
+            asyncio.run(_run())
+        return callback
+
+    def test_suggest_pushes_status_notify(self) -> None:
+        callback = self._run_suggest_notify()
+        callback.assert_awaited_once_with(
+            skill_name="tianqi",
+            session_id="sess-1",
+            request_id="skill-sleep-7",
+        )
+
+    def test_suggest_zero_written_skips_notify(self) -> None:
+        self._run_suggest_notify(edits=[], suggest_written=0).assert_not_awaited()
+
+    def test_suggest_missing_session_skips_notify(self) -> None:
+        with self.assertLogs(runner_mod.logger, level="WARNING") as logs:
+            callback = self._run_suggest_notify(session_id="")
+        callback.assert_not_awaited()
+        self.assertIn("no_session_context", "\n".join(logs.output))
+
+    def test_suggest_push_failure_does_not_fail_cycle(self) -> None:
+        callback = AsyncMock(side_effect=RuntimeError("gateway down"))
+        with self.assertLogs(runner_mod.logger, level="WARNING") as logs:
+            self._run_suggest_notify(on_suggest=callback)
+        callback.assert_awaited_once()
+        self.assertIn("suggest push failed", "\n".join(logs.output))
+
     def _run_with_provider(self, provider) -> MagicMock:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1159,7 +1301,9 @@ class TestBuildChatClient(unittest.TestCase):
         )
 
     def test_body_anchored_replace_becomes_add_and_delete_is_dropped(self) -> None:
-        from openjiuwen.agent_evolving.skill_train.sleep.memory import apply_edits_detailed
+        from openjiuwen.agent_evolving.skill_train.sleep.memory import (
+            apply_edits_detailed,
+        )
         from openjiuwen.agent_evolving.skill_train.sleep.model_backend import (
             _edits_from_payload,
         )
@@ -1235,6 +1379,80 @@ class TestBuildChatClient(unittest.TestCase):
 
 
 class TestAdapterSkillSleepModelSpec(unittest.TestCase):
+    def test_skill_sleep_published_push_payload(self) -> None:
+        from jiuwenswarm.server.runtime.agent_adapter import interface_deep
+        from jiuwenswarm.server.runtime.agent_adapter.interface_deep import (
+            JiuWenSwarmDeepAdapter,
+        )
+
+        transport = MagicMock()
+        transport.send_push = AsyncMock()
+        with patch(
+            "jiuwenswarm.server.gateway_push.WebSocketGatewayPushTransport",
+            return_value=transport,
+        ), patch.object(
+            interface_deep,
+            "build_server_push_message",
+            side_effect=lambda **kw: kw,
+        ):
+            asyncio.run(
+                JiuWenSwarmDeepAdapter._push_skill_sleep_published(
+                    SimpleNamespace(),
+                    skill_name="tianqi",
+                    version="1.1.0",
+                    session_id="sess-1",
+                    request_id="skill-sleep-6",
+                )
+            )
+        message = transport.send_push.await_args.args[0]
+        self.assertEqual(message["session_id"], "sess-1")
+        self.assertEqual(message["request_id"], "skill-sleep-6")
+        self.assertIsNone(message["fallback_channel_id"])
+        self.assertEqual(
+            message["payload"],
+            {
+                "event_type": "chat.evolution_published",
+                "skill_name": "tianqi",
+                "version": "1.1.0",
+                "source": "skill_sleep",
+                "request_id": "skill-sleep-6",
+            },
+        )
+
+    def test_skill_sleep_suggest_push_payload(self) -> None:
+        from jiuwenswarm.server.runtime.agent_adapter import interface_deep
+        from jiuwenswarm.server.runtime.agent_adapter.interface_deep import (
+            JiuWenSwarmDeepAdapter,
+        )
+
+        transport = MagicMock()
+        transport.send_push = AsyncMock()
+        with patch(
+            "jiuwenswarm.server.gateway_push.WebSocketGatewayPushTransport",
+            return_value=transport,
+        ), patch.object(
+            interface_deep,
+            "build_server_push_message",
+            side_effect=lambda **kw: kw,
+        ):
+            asyncio.run(
+                JiuWenSwarmDeepAdapter._push_skill_sleep_suggest(
+                    SimpleNamespace(),
+                    skill_name="tianqi",
+                    session_id="sess-1",
+                    request_id="skill-sleep-7",
+                )
+            )
+        message = transport.send_push.await_args.args[0]
+        self.assertEqual(message["session_id"], "sess-1")
+        self.assertEqual(message["request_id"], "skill-sleep-7")
+        self.assertIsNone(message["fallback_channel_id"])
+        self.assertEqual(message["payload"]["event_type"], "chat.evolution_status")
+        self.assertEqual(message["payload"]["status"], "end")
+        self.assertEqual(message["payload"]["stage"], "completed")
+        self.assertEqual(message["payload"]["request_id"], "skill-sleep-7")
+        self.assertIn("tianqi", message["payload"]["message"])
+
     def test_resolves_override_from_skill_sleep_config(self) -> None:
         from jiuwenswarm.server.runtime.agent_adapter.interface_deep import (
             JiuWenSwarmDeepAdapter,
