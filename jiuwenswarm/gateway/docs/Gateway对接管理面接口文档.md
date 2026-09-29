@@ -842,7 +842,7 @@ HMAC 密钥、Bearer token、长期明文下载凭证不得出现在模板或普
 | `paths`     | array  | 额外路径规则：`path`、`match`（`prefix` 缺省 / `glob`）、以及该路径三轴。                          |
 
 
-`permission_mode` 映射：`normal` 下 LOW/MEDIUM→allow、HIGH/CRITICAL→ask；`strict` 下 MEDIUM→ask、CRITICAL→deny。未知 severity 按 HIGH。
+`permission_mode` 映射：`normal` 下 LOW/MEDIUM→allow、HIGH/CRITICAL→ask；`strict` 下 LOW→allow、MEDIUM/HIGH→ask、CRITICAL→deny。未知 severity 按 HIGH。
 
 ### 8.1 创建 / Upsert 安全护栏模板
 
