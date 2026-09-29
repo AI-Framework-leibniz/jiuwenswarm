@@ -3,12 +3,73 @@
 
 import asyncio
 import socket
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from jiuwenbox.supervisor import sandbox_daemon, win_exec, win_job
+
+
+@pytest.mark.parametrize("waits,failed,retries", [
+    ([0], False, 0),
+    ([0x102, 0], False, 1),
+    ([0x102, 0x102], True, 1),
+    ([0xFFFFFFFF], True, 0),
+    ([0x102, 0xFFFFFFFF], True, 1),
+])
+def test_confirm_exit_checks_wait_result(monkeypatch, waits, failed, retries):
+    kernel = MagicMock()
+    kernel.WaitForSingleObject.side_effect = waits
+    monkeypatch.setattr(win_exec, "_push_log", MagicMock())
+    if failed:
+        with pytest.raises(RuntimeError, match="cannot confirm exec process exit"):
+            win_exec._confirm_process_exit(kernel, 30)
+    else:
+        win_exec._confirm_process_exit(kernel, 30)
+    assert kernel.TerminateProcess.call_count == retries
+    assert kernel.WaitForSingleObject.call_count == len(waits)
+
+
+@pytest.mark.parametrize("waits,exit_query_ok", [
+    ([0, 0x102, 0x102, 0], True),
+    ([0, 0xFFFFFFFF, 0], True),
+    ([0xFFFFFFFF, 0], True),
+    ([0, 0, 0], False),
+])
+def test_exec_wait_failure_sends_error_not_completion(monkeypatch, waits, exit_query_ok):
+    kernel = MagicMock()
+    kernel.WaitForSingleObject.side_effect = waits
+    kernel.GetExitCodeProcess.return_value = exit_query_ok
+    monkeypatch.setattr(win_exec, "get_kernel32", lambda: kernel)
+    monkeypatch.setattr(win_exec, "_clear_inherit", lambda *_: None)
+    monkeypatch.setattr(win_exec, "_exec_peer_disconnected", lambda *_: False)
+    monkeypatch.setattr(win_exec, "_bash_unavailable", lambda: False)
+    monkeypatch.setattr(win_exec, "_get_runner_primary_token", lambda: 10)
+    monkeypatch.setattr(win_exec, "_push_log", MagicMock())
+    monkeypatch.setattr(win_exec, "_create_process_as_user", lambda *a, **k: (30, 31, 32))
+    for name in ("assign_process", "resume_process", "close_job"):
+        monkeypatch.setattr(win_job, name, MagicMock())
+    monkeypatch.setattr(win_job, "create_exec_job", lambda: 20)
+    monkeypatch.setitem(sys.modules, "msvcrt", SimpleNamespace(open_osfhandle=lambda *a: 200))
+    monkeypatch.setattr(win_exec._threading, "Thread", MagicMock())
+    close_fd = MagicMock()
+    monkeypatch.setattr(win_exec.os, "close", close_fd)
+    counter = iter(range(100, 104))
+
+    def pipe(read, write, *_):
+        read._obj.value, write._obj.value = next(counter), next(counter)
+        return True
+
+    kernel.CreatePipe.side_effect = pipe
+    response, error = MagicMock(), MagicMock()
+    monkeypatch.setattr(win_exec, "_send_response", response)
+    monkeypatch.setattr(win_exec, "_send_error_response", error)
+    win_exec._handle_exec_request(None, {"command": ["cmd", "/c", "echo hello"]}, None, None, b"")
+    error.assert_called_once()
+    response.assert_not_called()
+    close_fd.assert_called_once_with(200)
 
 
 @pytest.mark.parametrize("failure", ["job", "create", "assign", "resume"])

@@ -27,6 +27,9 @@ async def test_restart_applies_all_adapters_and_reports_failure(monkeypatch):
     second.apply_sandbox_runtime_patch.side_effect = RuntimeError("backend unavailable")
     with pytest.raises(RuntimeError, match="backend unavailable"):
         await restart(server, {})
+    # Preparation failure must not start any replacement ACL installation.
+    assert first.apply_sandbox_runtime_patch.await_count == 3
+    assert first.apply_sandbox_runtime_patch.await_args.kwargs["prepare_only"] is True
 
 
 @pytest.mark.asyncio
@@ -157,13 +160,13 @@ async def test_windows_second_create_failure_disables_host_fallback(monkeypatch)
 
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(mod, "build_filesystem_policy", lambda *a, **kw: ({"filesystem_policy": {}}, []))
-    create = AsyncMock(side_effect=["new-one", RuntimeError("second create failed")])
+    create = AsyncMock(side_effect=["new-one", RuntimeError("second create failed"), "new-three"])
     monkeypatch.setattr(box, "force_recreate_jiuwenbox_sandbox", create)
     async def delete(**kwargs):
         return [kwargs["sandbox_id"]] if kwargs["sandbox_id"] else []
     monkeypatch.setattr(box, "delete_jiuwenbox_sandbox", delete)
     children = []
-    for name in ("one", "two"):
+    for name in ("one", "two", "three"):
         launcher = SimpleNamespace(sandbox_type="jiuwenbox", base_url="http://localhost:8321",
                                    extra_params={"sandbox_id": name, "fallback_on_failure": True})
         child = SimpleNamespace(
@@ -178,12 +181,18 @@ async def test_windows_second_create_failure_disables_host_fallback(monkeypatch)
                              _resolve_adapter=lambda agent: agent)
     monkeypatch.setattr(server_module, "get_sandbox_runtime", lambda: {"enabled": True, "files": [], "fallback_on_failure": True})
     monkeypatch.setattr(server_module, "get_sandbox_endpoint", lambda: {"type": "jiuwenbox"})
-    with pytest.raises(RuntimeError, match="second create failed"):
+    with pytest.raises(RuntimeError, match="restarted=2, failed=1.*second create failed"):
         await server_module.AgentWebSocketServer._restart_configured_sandboxes(server, {})
     extras = [child._sys_operation_card.gateway_config.launcher_config.extra_params for child in children]
     assert all(extra["fallback_on_failure"] is False for extra in extras)
     assert extras[0]["sandbox_id"] == "new-one"
     assert "sandbox_id" not in extras[1]
+    assert extras[2]["sandbox_id"] == "new-three"
+    assert create.await_count == 3
+    create.side_effect = ["retry-one", "retry-two", "retry-three"]
+    result = await server_module.AgentWebSocketServer._restart_configured_sandboxes(server, {})
+    assert result["restarted"] == 3
+    assert extras[1]["sandbox_id"] == "retry-two"
 
 
 @pytest.mark.asyncio

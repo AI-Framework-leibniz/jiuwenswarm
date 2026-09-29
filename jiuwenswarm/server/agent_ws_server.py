@@ -5255,9 +5255,21 @@ class AgentWebSocketServer:
             await adapter.apply_sandbox_runtime_patch(
                 runtime, files_changed=True, strict=True, prepare_only=True,
             )
-        for adapter in adapters:
-            if await adapter.apply_sandbox_runtime_patch(runtime, files_changed=True, strict=True):
-                restarted += 1
+        failures = []
+        for index, adapter in enumerate(adapters):
+            try:
+                if await adapter.apply_sandbox_runtime_patch(runtime, files_changed=True, strict=True):
+                    restarted += 1
+            except Exception as exc:
+                card = getattr(adapter, "_sys_operation_card", None)
+                identity = getattr(card, "id", None) or f"adapter[{index}]"
+                failures.append(f"{identity}: {exc}")
+        if failures:
+            raise RuntimeError(
+                f"Sandbox rebuild partially failed: restarted={restarted}, failed={len(failures)}; "
+                + "; ".join(failures)
+                + ". Retry sandbox.restart to apply the saved policy."
+            )
         return {"restarted": restarted, "scope": "all_active_sandboxes",
                 "status": "applied" if restarted else "no_active_sandboxes"}
 

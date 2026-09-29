@@ -1679,6 +1679,19 @@ def _exec_peer_disconnected(stream) -> bool:
         return True
 
 
+def _confirm_process_exit(kernel32, proc_handle) -> None:
+    """Confirm exit after Job closure, with one bounded termination retry."""
+    handle = wintypes.HANDLE(proc_handle)
+    result = kernel32.WaitForSingleObject(handle, 5000)
+    if result == 0x102:  # WAIT_TIMEOUT
+        _push_log("WARNING", "exec process still active after Job closure; retrying termination")
+        # A failed termination can race with exit; the subsequent wait decides.
+        kernel32.TerminateProcess(handle, 1)
+        result = kernel32.WaitForSingleObject(handle, 5000)
+    if result != 0:  # WAIT_OBJECT_0 is the only confirmed completion.
+        raise RuntimeError(f"cannot confirm exec process exit: wait_result={result:#x}")
+
+
 def _handle_exec_request(stream, header, restricted_token, workspace, stdin_bytes) -> None:
     """处理 exec 请求: 起 child 子命令, 回传 stdout/stderr/exit. stdin_bytes 透传给子进程."""
     command = header.get("command", [])
@@ -1727,6 +1740,7 @@ def _handle_exec_request(stream, header, restricted_token, workspace, stdin_byte
     proc_handle = 0
     thread_handle = 0
     stdin_thread = None
+    read_fd = None
     try:
         if _exec_peer_disconnected(stream):
             return
@@ -1829,6 +1843,8 @@ def _handle_exec_request(stream, header, restricted_token, workspace, stdin_byte
             )
             if result == 0:  # wait_obj_0: child 已退出
                 break
+            if result != 0x102:  # WAIT_TIMEOUT
+                raise RuntimeError(f"exec process wait failed: wait_result={result:#x}")
             deadline_waited_ms += wait_timeout
             # 每 30s 打一次心跳, 记录 child 仍在跑.
             if deadline_waited_ms - _last_heartbeat_ms >= 30000:
@@ -1859,7 +1875,7 @@ def _handle_exec_request(stream, header, restricted_token, workspace, stdin_byte
         # 先回收孙进程, 再等 stdout EOF; 避免孙进程仍持有 pipe 写端.
         win_job.close_job(exec_job_handle)
         exec_job_handle = 0
-        kernel32.WaitForSingleObject(wintypes.HANDLE(proc_handle), 5000)
+        _confirm_process_exit(kernel32, proc_handle)
         # 进程已退出 (正常或强杀). 等 drain 线程结束 (最多 5s, 防孙进程持写端不 EOF).
         _drain_thread.join(timeout=5.0)
         if _drain_thread.is_alive():
@@ -1877,12 +1893,14 @@ def _handle_exec_request(stream, header, restricted_token, workspace, stdin_byte
                 os.close(read_fd)
             except OSError:
                 pass
+        read_fd = None
         if _drain_exc:
             _push_log("WARNING", f"exec stdout drain 线程异常: {_drain_exc[0]}")
         exit_code = wintypes.DWORD()
-        kernel32.GetExitCodeProcess(
+        if not kernel32.GetExitCodeProcess(
             wintypes.HANDLE(proc_handle), ctypes.byref(exit_code),
-        )
+        ):
+            raise RuntimeError("GetExitCodeProcess failed after confirmed process exit")
         kernel32.CloseHandle(wintypes.HANDLE(proc_handle))
         proc_handle = 0
         ec = int(exit_code.value)
@@ -1936,10 +1954,18 @@ def _handle_exec_request(stream, header, restricted_token, workspace, stdin_byte
         # assign/resume 失败时 child 可能仍挂起且尚未入 Job, 必须单独终止.
         if proc_handle:
             kernel32.TerminateProcess(wintypes.HANDLE(proc_handle), 1)
-            kernel32.WaitForSingleObject(wintypes.HANDLE(proc_handle), 5000)
+            try:
+                _confirm_process_exit(kernel32, proc_handle)
+            except Exception as cleanup_error:  # noqa: BLE001
+                _push_log("ERROR", f"exec process cleanup failed: {cleanup_error}")
             kernel32.CloseHandle(wintypes.HANDLE(proc_handle))
         if thread_handle:
             kernel32.CloseHandle(wintypes.HANDLE(thread_handle))
+        if read_fd is not None:
+            try:
+                os.close(read_fd)
+            except OSError:
+                pass
         if exec_job_handle:
             try:
                 win_job.close_job(exec_job_handle)
