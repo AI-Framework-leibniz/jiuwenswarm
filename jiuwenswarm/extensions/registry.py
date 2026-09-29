@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from jiuwenswarm.extensions.sdk.config_provider import ConfigProviderExtension
     from jiuwenswarm.extensions.sdk.path_provider import PathProviderExtension
 
-logger = logging.getLogger(__name__)
+_logger = logging.getLogger(__name__)
 
 
 class ExtensionRegistry:
@@ -86,7 +86,7 @@ class ExtensionRegistry:
         try:
             instance = cls.get_instance()
         except RuntimeError:
-            logger.debug(
+            _logger.debug(
                 "[ExtensionRegistry] not initialized, skip hook %s", event
             )
             return False
