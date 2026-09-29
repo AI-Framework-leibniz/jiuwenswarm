@@ -3643,11 +3643,18 @@ class JiuWenSwarmDeepAdapter:
             return None
         return self._resolve_interrupt_session_id(loop_sid)
 
-    async def _clear_pending_ask_user_interrupt_for_supplement(
+    async def _drop_pending_pure_ask_user_round(
         self,
         session_id: str | None,
     ) -> bool:
-        """Drop a superseded pure ask_user round without leaving an open tool call."""
+        """Drop a superseded pure ask_user round without leaving an open tool call.
+
+        供 interrupt(cancel/supplement) 共用。cancel_round 只中止"正在跑的 attempt"，
+        不动暂停在 ask_user interrupt 上的 round ownership（故 cancelled=False）；
+        若不显式 discard，残留的 _loop_session.INTERRUPTION_KEY 会让下一条
+        chat.send 被当 resume 输入塞进 rail.resolve_interrupt，非 dict 的自由文本
+        （如"再改改"）parse 失败被当 skip 了结 → 不弹卡直接重生成（Bug2）。
+        """
         instance = getattr(self, "_instance", None)
         loop_session = getattr(instance, "_loop_session", None)
         loop_sid = self._deep_agent_loop_session_id()
@@ -3714,17 +3721,20 @@ class JiuWenSwarmDeepAdapter:
                 )
             await context_engine.save_contexts(loop_session)
         except Exception:
-            logger.debug(
-                "[JiuWenSwarmDeepAdapter] interrupt(supplement): failed to inspect "
-                "pending ask_user state session=%s",
+            # warning（非 debug）：drop 失败时 Bug2 会原样复发（下条消息被当 resume
+            # 重生成），线上 info 级别须留异常栈可查；对齐 _clear_pending_skill_turbo_hitl
+            # 清理失败的 warning 级别（见本类同结构 except）。
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] interrupt(cancel/supplement): failed to inspect "
+                "pending pure ask_user round session=%s",
                 target_sid,
                 exc_info=True,
             )
             return False
 
         logger.info(
-            "[JiuWenSwarmDeepAdapter] interrupt(supplement): cleared pending "
-            "ask_user state session=%s",
+            "[JiuWenSwarmDeepAdapter] interrupt(cancel/supplement): cleared pending "
+            "pure ask_user round session=%s",
             target_sid,
         )
         return True
@@ -15751,8 +15761,18 @@ class JiuWenSwarmDeepAdapter:
             request.session_id,
             reason="task_supplemented" if intent == "supplement" else "task_cancelled",
         )
-        if intent == "supplement" and isinstance(new_input, str) and new_input.strip():
-            await self._clear_pending_ask_user_interrupt_for_supplement(request.session_id)
+        # cancel 同样要 discard 暂停在 ask_user interrupt 上的纯 ask_user 轮：
+        # cancel_round 只中止"正在跑的 attempt"、不动暂停态 round ownership（故
+        # cancelled=False），残留的 _loop_session.INTERRUPTION_KEY 会让下一条
+        # chat.send 被当 resume 输入塞进 rail.resolve_interrupt，非 dict 的"再改改"
+        # parse 失败被当 skip 了结 → 不弹卡直接重生成（Bug2）。复用 supplement 的
+        # 清理：内存 INTERRUPTION_KEY 置 None + pop 掉 pending ask_user AI 消息。
+        # 非纯 ask_user 轮 / 无 pending 时方法自带守卫返回 False，零回归。
+        should_drop_ask_user = intent == "cancel" or (
+            intent == "supplement" and isinstance(new_input, str) and new_input.strip()
+        )
+        if should_drop_ask_user:
+            await self._drop_pending_pure_ask_user_round(request.session_id)
         # 与非 interaction 路径对齐：清理持久化中断状态（哨兵 / plan_pause /
         # SkillTurbo resume ctx）并落状态机终态，否则取消后残留的
         # INTERRUPTION_KEY / resume_ctx 会把下一条消息误判为 resume 输入，
