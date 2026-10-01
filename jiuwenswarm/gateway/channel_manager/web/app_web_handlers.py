@@ -150,6 +150,8 @@ logger = logging.getLogger(__name__)
 
 
 _WEB_CONFIG_RELOAD_CHANNEL_ID = "web"
+# Saved through config.save_all but never sent back to the browser.
+_WRITE_ONLY_CONFIG_KEYS = frozenset({"jev_openrouter_api_key", "jev_typesafe_api_key"})
 _SEARCH_RELOAD_ENV_KEYS = {
     "BOCHA_API_KEY", "PERPLEXITY_API_KEY", "SERPER_API_KEY", "JINA_API_KEY",
 }
@@ -1149,6 +1151,9 @@ _CONFIG_SET_ENV_MAP = {
     "bocha_api_key": "BOCHA_API_KEY",
     "serper_api_key": "SERPER_API_KEY",
     "perplexity_api_key": "PERPLEXITY_API_KEY",
+    # Browser Jev keys: write-only, path.get reports only whether one is configured.
+    "jev_openrouter_api_key": "OPENROUTER_API_KEY",
+    "jev_typesafe_api_key": "TYPESAFE_API_KEY",
     "github_token": "GITHUB_TOKEN",
     "teamskills_market_url": "TEAM_SKILLS_HUB_BASE_URL",
     "teamskills_user_token": "TEAM_SKILLS_HUB_USER_TOKEN",
@@ -3182,7 +3187,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
     async def _config_get(ws, req_id, params, session_id):
         # 返回 _CONFIG_SET_ENV_MAP 里所有键对应的环境变量当前值
         payload = {
-            param_key: (os.getenv(env_key) or "")
+            param_key: "" if param_key in _WRITE_ONLY_CONFIG_KEYS else (os.getenv(env_key) or "")
             for param_key, env_key in _CONFIG_SET_ENV_MAP.items()
         }
         payload["app_version"] = __version__
@@ -5668,14 +5673,14 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             raw_headless = browser_cfg.get("headless", True)
             headless = bool(raw_headless) if isinstance(raw_headless, bool) else True
 
-        from jiuwenswarm.agents.harness.common.browser_config import browser_decision_mode
+        from jiuwenswarm.agents.harness.common.browser_config import browser_decision_state
 
         await channel.send_response(
             ws, req_id, ok=True,
             payload={
                 "chrome_path": chrome_path,
                 "headless": headless,
-                "decision_mode": browser_decision_mode(config),
+                **browser_decision_state(config),
             },
         )
 
@@ -5693,11 +5698,11 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
 
         raw_headless = params.get("headless", True)
         headless = bool(raw_headless) if isinstance(raw_headless, bool) else True
-        # Older clients omit decision_mode; the saved mode is then left untouched.
-        decision_mode = params.get("decision_mode")
+        # Older clients omit the decision fields; the saved values are then left untouched.
         set_params = {"chrome_path": chrome_path, "headless": headless}
-        if decision_mode is not None:
-            set_params["decision_mode"] = decision_mode
+        for decision_key in ("decision_mode", "decision_provider"):
+            if params.get(decision_key) is not None:
+                set_params[decision_key] = params[decision_key]
 
         from jiuwenswarm.gateway.routing.e2a_proxy import (
             fetch_agent_unary,
@@ -5772,21 +5777,22 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
         )
 
         from jiuwenswarm.agents.harness.common.browser_config import (
-            browser_decision_mode,
-            browser_decision_mode_error,
+            browser_decision_state,
+            browser_decision_updates,
         )
-        from jiuwenswarm.common.config import update_browser_decision_mode_in_config
+        from jiuwenswarm.common.config import update_browser_decision_in_config
 
-        if decision_mode is not None:
-            error = browser_decision_mode_error(decision_mode, get_config())
-            if error:
-                await channel.send_response(ws, req_id, ok=False, error=error, code="BAD_REQUEST")
-                return
+        decision_updates, error = browser_decision_updates(
+            set_params.get("decision_mode"), set_params.get("decision_provider"), get_config()
+        )
+        if error:
+            await channel.send_response(ws, req_id, ok=False, error=error, code="BAD_REQUEST")
+            return
 
         try:
             update_browser_in_config({"chrome_path": chrome_path, "headless": headless})
-            if decision_mode is not None:
-                update_browser_decision_mode_in_config(decision_mode)
+            if decision_updates:
+                update_browser_decision_in_config(decision_updates)
             resolved_agent_client = _resolve(agent_client)
             await _clear_agent_config_cache(resolved_agent_client)
         except Exception as e:  # noqa: BLE001
@@ -5808,7 +5814,7 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
 
         await channel.send_response(
             ws, req_id, ok=True,
-            payload={**set_params, "decision_mode": browser_decision_mode(get_config())},
+            payload={"chrome_path": chrome_path, "headless": headless, **browser_decision_state(get_config())},
         )
 
     async def _path_select_directory(ws, req_id, params, session_id, user_id=None):
