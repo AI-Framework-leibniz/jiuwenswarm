@@ -1,4 +1,4 @@
-import { parseStoryboardClips } from './storyboardClips';
+import { parseStoryboardClips, STORYBOARD_COLUMNS } from './storyboardClips';
 
 export type MarkdownTablePreview = {
   headers: string[];
@@ -24,26 +24,15 @@ export function storyboardClipPreviews(
         clipNo: String(clip.clip_no || '').trim(),
         timeline: String(clip.timeline || '').trim(),
         action: String(clip.character_action || '').trim(),
-        picture: String(clip.comment || clip.scene_change || camera || '').trim(),
+        picture: String(clip.scene_change || camera || '').trim(),
       };
     })
     .filter((clip) => clip.clipNo || clip.timeline || clip.action || clip.picture);
 }
 
 export const EMPTY_STORYBOARD_TABLE: MarkdownTablePreview = {
-  headers: [
-    'Clip',
-    'Timeline',
-    'Camera',
-    'Move',
-    'Character action',
-    'Scene change',
-    'Comment',
-  ],
-  rows: [
-    ['', '', '', '', '', '', ''],
-    ['', '', '', '', '', '', ''],
-  ],
+  headers: STORYBOARD_COLUMNS.map(([, header]) => header),
+  rows: [STORYBOARD_COLUMNS.map(() => ''), STORYBOARD_COLUMNS.map(() => '')],
 };
 
 function splitMarkdownRow(line: string): string[] {

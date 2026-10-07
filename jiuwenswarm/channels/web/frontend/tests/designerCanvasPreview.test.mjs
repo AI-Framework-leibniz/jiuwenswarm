@@ -36,47 +36,62 @@ test('bootstrap thinking canvas never reuses another project graph', () => {
   assert.equal(next.description, '新的情人节短片');
 });
 
-test('storyboardClipPreviews shows action and picture from the Brief columns', () => {
+const STORYBOARD_HEADER =
+  '| Shot | Timeline | Camera | Move | On screen | Character action | Speech | Shot consistency |';
+const STORYBOARD_SEPARATOR = '| --- | --- | --- | --- | --- | --- | --- | --- |';
+
+test('storyboardClipPreviews shows action and shot consistency from the storyboard columns', () => {
   const clips = storyboardClipPreviews(
     [
-      '| Clip | Timeline | Camera | Move | Character action | Scene change | Comment |',
-      '| --- | --- | --- | --- | --- | --- | --- |',
-      '| 1 | 0.0-2.0s | wide | static | steps off the train | platform morning light | Wide shot of a young man leaving the train |',
-      '| 2 | 2.0-5.0s | medium | pan | walks toward the exit | same station | Medium shot walking through the concourse |',
+      STORYBOARD_HEADER,
+      STORYBOARD_SEPARATOR,
+      '| 1 | 0.0-2.0s | wide | static | Ann | steps off the train | | platform morning light |',
+      '| 2 | 2.0-5.0s | medium | pan | Ann | walks toward the exit | "Home." | same station |',
     ].join('\n'),
   );
   assert.equal(clips.length, 2);
   assert.equal(clips[0].clipNo, '1');
   assert.equal(clips[0].action, 'steps off the train');
-  assert.equal(clips[0].picture, 'Wide shot of a young man leaving the train');
+  assert.equal(clips[0].picture, 'platform morning light');
   assert.equal(clips[1].action, 'walks toward the exit');
 });
 
-test('storyboardClipPreviews still lists clips when Comment is empty', () => {
+test('storyboardClipPreviews falls back to camera when shot consistency is empty', () => {
   const clips = storyboardClipPreviews(
     [
-      '| Clip | Timeline | Camera | Move | Character action | Scene change | Comment |',
-      '| --- | --- | --- | --- | --- | --- | --- |',
-      '| 1 | 0.0-2.0s | wide / eye-level | slow pan | steps off the train | platform morning light | |',
+      STORYBOARD_HEADER,
+      STORYBOARD_SEPARATOR,
+      '| 1 | 0.0-2.0s | wide / eye-level | slow pan | Ann | steps off the train | | |',
     ].join('\n'),
   );
   assert.equal(clips.length, 1);
   assert.equal(clips[0].action, 'steps off the train');
-  assert.equal(clips[0].picture, 'platform morning light');
+  assert.equal(clips[0].picture, 'wide / eye-level / slow pan');
 });
 
-test('empty storyboard table is a blank seven-column frame', () => {
+test('storyboardClipPreviews keeps every row', () => {
+  const rows = Array.from(
+    { length: 10 },
+    (_, index) => `| ${index + 1} | ${index}.0s | wide | hold | Ann | beat ${index + 1} | | |`,
+  );
+  const clips = storyboardClipPreviews([STORYBOARD_HEADER, STORYBOARD_SEPARATOR, ...rows].join('\n'), 20);
+  assert.equal(clips.length, 10);
+  assert.equal(clips[9].action, 'beat 10');
+});
+
+test('empty storyboard table is a blank eight-column frame', () => {
   assert.deepEqual(EMPTY_STORYBOARD_TABLE.headers, [
     'Clip',
     'Timeline',
     'Camera',
     'Move',
+    'On screen',
     'Character action',
-    'Scene change',
-    'Comment',
+    'Speech',
+    'Shot consistency',
   ]);
   assert.equal(EMPTY_STORYBOARD_TABLE.rows.length, 2);
-  assert.ok(EMPTY_STORYBOARD_TABLE.rows.every((row) => row.length === 7 && row.every((cell) => cell === '')));
+  assert.ok(EMPTY_STORYBOARD_TABLE.rows.every((row) => row.length === 8 && row.every((cell) => cell === '')));
 });
 
 test('parseMarkdownTable keeps a table frame from generated markdown', () => {
