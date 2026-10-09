@@ -20,6 +20,7 @@ from jiuwenswarm.server.runtime.designer.trajectory import (
     current_trajectory_span,
     end_trajectory,
     get_trajectory,
+    read_canvas_trajectory,
 )
 
 
@@ -106,11 +107,64 @@ def test_second_run_appends_to_same_project_files(data_dir: Path) -> None:
     assert spans[0]["traceId"] != spans[1]["traceId"]
 
 
-def test_trajectory_key_uses_project_id_only() -> None:
+def test_trajectory_key_uses_project_id_until_a_session_exists() -> None:
     assert paths.design_trajectory_key("proj_1") == "proj_1"
     assert paths.design_trajectory_key("default") == "default"
+    assert paths.design_trajectory_key("proj_1", "graph-9") == "proj_1"
+    assert paths.design_trajectory_key("proj_1", "graph-9", "design_abc") == "design_abc"
     unsafe = paths.design_trajectory_key("../escape")
     assert "/" not in unsafe and len(unsafe) == 64
+
+
+def test_sessions_keep_separate_trajectory_files(data_dir: Path) -> None:
+    for session_id, graph_id, run_id in (
+        ("design_one", "graph-1", "run-1"),
+        ("design_two", "graph-2", "run-2"),
+    ):
+        rec = begin_trajectory(
+            graph_id,
+            run_id,
+            project_id="proj_abc",
+            session_id=session_id,
+            settings=_settings(data_dir, enabled=True),
+        )
+        with rec.span(agent_id="director", action="plan"):
+            pass
+        end_trajectory(run_id)
+
+    directory = data_dir / ".trace" / "designer"
+    assert (directory / "design_one.design.jsonl").is_file()
+    assert (directory / "design_two.design.jsonl").is_file()
+    assert not (directory / "proj_abc.design.jsonl").exists()
+    one = read_canvas_trajectory(project_id="proj_abc", graph_id="graph-1", session_id="design_one")
+    two = read_canvas_trajectory(project_id="proj_abc", graph_id="graph-2", session_id="design_two")
+    assert {item["run_id"] for item in one} == {"run-1"}
+    assert {item["run_id"] for item in two} == {"run-2"}
+    span = _spans(directory / "design_one.otlp.jsonl")[0]
+    assert _attrs(span)["session.id"] == "design_one"
+
+
+def test_legacy_project_file_is_filtered_to_the_canvas(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(paths, "get_user_workspace_dir", lambda: data_dir)
+    directory = data_dir / ".trace" / "designer"
+    directory.mkdir(parents=True)
+    legacy = directory / "proj_abc.design.jsonl"
+    legacy.write_text(
+        "\n".join(
+            [
+                '{"kind":"run_started","ts_ms":1,"graph_id":"graph-1","run_id":"old-1","meta":{}}',
+                '{"kind":"run_started","ts_ms":2,"graph_id":"graph-2","run_id":"old-2","meta":{}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    events = read_canvas_trajectory(
+        project_id="proj_abc",
+        graph_id="graph-1",
+        session_id="design_new",
+    )
+    assert [item["run_id"] for item in events] == ["old-1"]
 
 
 def test_disabled_toggle_writes_nothing(data_dir: Path) -> None:

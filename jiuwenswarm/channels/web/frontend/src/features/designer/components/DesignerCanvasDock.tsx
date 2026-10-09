@@ -94,7 +94,7 @@ export function DesignerCanvasDock() {
           data-testid="designer-canvas-dock-assets"
         >
           <p className="designer-canvas-dock__panel-title">{t('designer.dock.assetsTitle')}</p>
-          <DesignerAssetsPanel />
+          <DesignerAssetsPanel scope="project" />
         </div>
       ) : null}
 

@@ -149,10 +149,27 @@
     "sidebar": {
       "tabsLabel": "Sidebar",
       "assistant": "Assistant",
-      "assets": "Assets"
+      "assets": "This canvas",
+      "create": "New"
+    },
+    "sessions": {
+      "label": "Canvas",
+      "new": "New canvas",
+      "create": "New session",
+      "project": "Project",
+      "pickProject": "Select a project",
+      "needProject": "Create a project first, then add a session to it.",
+      "createFailed": "Could not create the session. Try again."
+    },
+    "trajectory": {
+      "title": "Trajectory",
+      "empty": "This canvas has no trajectory yet. A run is stored with this session.",
+      "show": "Show trajectory",
+      "hide": "Hide trajectory"
     },
     "assets": {
-      "empty": "No assets yet. Attach image, video, or audio when creating a task, or upload/generate on the canvas.",
+      "empty": "This canvas has no assets yet. Upload or generate some and they will show up here.",
+      "emptyProject": "This project has no shared assets yet. Uploads and generations from any canvas appear here.",
       "onCanvas": "On canvas",
       "libraryOnly": "Library only",
       "delete": "Delete asset",
@@ -169,9 +186,9 @@
       "handHint": "Drag to pan. Shortcut H.",
       "layout": "Auto layout",
       "layoutHint": "Rearrange nodes by connections so they sit close without overlapping.",
-      "assets": "Asset pack",
-      "assetsTitle": "Asset pack",
-      "assetsHint": "Open the asset pack. Drag an item onto the canvas to create a node.",
+      "assets": "Project assets",
+      "assetsTitle": "Project assets",
+      "assetsHint": "Assets shared by every canvas in this project. Drag one onto the current canvas.",
       "comfyuiHint": "Import a ComfyUI workflow (.json). Only vLLM-Omni Generate Image / Generate Video nodes are added.",
       "group": {
         "image": "Image",

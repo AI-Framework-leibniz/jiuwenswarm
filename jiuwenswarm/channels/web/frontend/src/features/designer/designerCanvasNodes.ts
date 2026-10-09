@@ -35,6 +35,7 @@ export const DESIGNER_SUCCESSOR_GAP_Y = 24;
 export const DESIGNER_LAYOUT_ORIGIN_X = 40;
 export const DESIGNER_LAYOUT_ORIGIN_Y = 40;
 export const DESIGNER_ASSET_DRAG_MIME = 'application/x-designer-asset-id';
+export const DESIGNER_PROJECT_ASSET_DRAG_MIME = 'application/x-designer-project-asset';
 export const DESIGNER_ADD_GROUP_ORDER: DesignerAddGroup[] = ['image', 'video', 'audio'];
 
 export type DesignerCanvasTool = 'select' | 'hand';

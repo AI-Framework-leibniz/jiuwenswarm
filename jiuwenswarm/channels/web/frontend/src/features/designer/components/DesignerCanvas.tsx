@@ -33,11 +33,12 @@ import { DesignerActivityPeek } from './DesignerActivityPeek';
 import { selectLeaderPeek, useDesignerRunStore } from '../designerRunStore';
 import {
   DESIGNER_ASSET_DRAG_MIME,
+  DESIGNER_PROJECT_ASSET_DRAG_MIME,
   buildNodeFromLibraryAsset,
   canvasEditGlance,
   offsetCanvasPosition,
 } from '../designerCanvasNodes';
-import { useDesignerAssetLibraryStore } from '../designerAssetLibraryStore';
+import { useDesignerAssetLibraryStore, type DesignerAssetKind } from '../designerAssetLibraryStore';
 import { localPathToFileUri, uploadDesignerAsset } from '../designerAssetUrl';
 import { useDesignerUiStore } from '../designerUiStore';
 import { DESIGNER_FIT_VIEW_PADDING } from '../designerFitView';
@@ -306,7 +307,10 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
   );
 
   const onDragOver = useCallback((event: DragEvent) => {
-    if (![...event.dataTransfer.types].includes(DESIGNER_ASSET_DRAG_MIME)) return;
+    const types = [...event.dataTransfer.types];
+    if (!types.includes(DESIGNER_ASSET_DRAG_MIME) && !types.includes(DESIGNER_PROJECT_ASSET_DRAG_MIME)) {
+      return;
+    }
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
   }, []);
@@ -314,6 +318,57 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
   const onDrop = useCallback(
     (event: DragEvent) => {
       if (canvasLocked) return;
+      const sharedRaw = event.dataTransfer.getData(DESIGNER_PROJECT_ASSET_DRAG_MIME).trim();
+      if (sharedRaw) {
+        event.preventDefault();
+        let shared: { uri?: string; filename?: string; kind?: DesignerAssetKind; mime_type?: string };
+        try {
+          shared = JSON.parse(sharedRaw) as typeof shared;
+        } catch {
+          return;
+        }
+        const uri = String(shared.uri || '').trim();
+        const kind = shared.kind;
+        if (!uri || (kind !== 'image' && kind !== 'video' && kind !== 'audio')) return;
+        const filename = String(shared.filename || kind);
+        const position = offsetCanvasPosition(
+          screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+          graphRef.current.nodes.length,
+        );
+        const node = buildNodeFromLibraryAsset({
+          asset: {
+            id: `shared_${uri}`,
+            filename,
+            mime_type: shared.mime_type || '',
+            kind,
+            source: 'generated',
+            objectUrl: uri,
+            size: 0,
+            created_at: Date.now(),
+          },
+          existing: graphRef.current.nodes,
+          position,
+        });
+        node.output_ref = {
+          kind: node.type,
+          uri,
+          mime_type: shared.mime_type || '',
+          label: filename,
+        };
+        node.config = {
+          ...(node.config ?? {}),
+          user_replaced_output: true,
+          upload: {
+            ...(node.config?.upload ?? {}),
+            filename,
+            uri,
+            mime_type: shared.mime_type || '',
+          },
+        };
+        addDomainNode(node);
+        void useDesignerStore.getState().flushSave();
+        return;
+      }
       const assetId = event.dataTransfer.getData(DESIGNER_ASSET_DRAG_MIME).trim();
       if (!assetId) return;
       event.preventDefault();
@@ -327,7 +382,8 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
         try {
           const blob = await fetch(asset.objectUrl).then((response) => response.blob());
           const file = new File([blob], asset.filename, { type: asset.mime_type || blob.type });
-          const stored = await uploadDesignerAsset(file);
+          const sessionId = String(graphRef.current.metadata?.session_id || '');
+          const stored = await uploadDesignerAsset(file, sessionId || undefined);
           const uri = localPathToFileUri(stored.path);
           const node = buildNodeFromLibraryAsset({
             asset,

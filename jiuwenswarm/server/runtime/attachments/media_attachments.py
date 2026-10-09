@@ -29,6 +29,29 @@ _SUPPORTED_IMAGE_MIME_TYPES = {
 _IMAGE_FILENAME_SUFFIX_ALIASES = frozenset({".jpeg", ".jfif"})
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
 _MAX_IMAGE_COUNT = 8
+# Video and audio share the session uploads directory with images. Base64 still
+# has to fit a WebSocket frame, so inline bytes stay at the image cap. A local
+# path is copied from disk and may be larger.
+_MAX_AV_BYTES = 10 * 1024 * 1024
+_MAX_LOCAL_MEDIA_BYTES = 100 * 1024 * 1024
+_MAX_AV_COUNT = 4
+_SUPPORTED_AV_MIME_TYPES = {
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "video/quicktime": ".mov",
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/mp4": ".m4a",
+    "audio/aac": ".aac",
+    "audio/ogg": ".ogg",
+    "audio/flac": ".flac",
+    "audio/x-m4a": ".m4a",
+}
+_AV_FILENAME_SUFFIXES = frozenset(
+    {".mp4", ".webm", ".mov", ".m4v", ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
+)
 
 
 def image_suffix_for_mime(mime_type: str) -> str | None:
@@ -49,6 +72,46 @@ def ensure_image_upload_filename(filename: str, canonical_suffix: str) -> str:
     if Path(filename).suffix.lower() in supported_image_suffixes():
         return filename
     return f"{filename}{canonical_suffix}"
+
+
+def session_uploads_dir(session_id: str | None, *, create: bool = True) -> Path:
+    """Return ``agent/sessions/<id>/uploads``, the directory work chat already uses."""
+    directory = get_agent_sessions_dir() / safe_session_dirname(session_id) / "uploads"
+    if create:
+        directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def resolve_listed_session_file(raw: str) -> Path | None:
+    """Resolve a file-api relative path under ``agent/sessions`` to a real file.
+
+    The work file list returns paths relative to the user data root
+    (``agent/sessions/<id>/uploads/name``). Design materials dragged from that
+    list use the same path.
+    """
+    value = (raw or "").strip().replace("\\", "/")
+    if not value or value.startswith("blob:") or value.startswith("designer://"):
+        return None
+    marker = "agent/sessions/"
+    index = value.find(marker)
+    if index < 0:
+        return None
+    relative = value[index:]
+    if ".." in Path(relative).parts:
+        return None
+    root = get_agent_sessions_dir().resolve()
+    data_root = root.parent.parent
+    candidate = (data_root / relative).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    try:
+        if candidate.is_symlink() or not candidate.is_file():
+            return None
+    except OSError:
+        return None
+    return candidate
 
 
 def discard_session_upload(session_id: str | None, raw_path: str) -> dict[str, bool]:
@@ -178,9 +241,7 @@ def _store_image_item(item: dict[str, Any], *, session_id: str | None, index: in
     if not data or len(data) > _MAX_IMAGE_BYTES:
         return None
 
-    safe_session_id = safe_session_dirname(session_id)
-    upload_dir = get_agent_sessions_dir() / safe_session_id / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    upload_dir = session_uploads_dir(session_id)
 
     filename = ensure_image_upload_filename(
         safe_upload_filename(
@@ -198,3 +259,229 @@ def _store_image_item(item: dict[str, Any], *, session_id: str | None, index: in
         "path": str(path),
         "size_bytes": len(data),
     }
+
+
+def normalize_session_media_attachments(params: dict[str, Any], session_id: str | None) -> None:
+    """Persist images, video, and audio into the work session uploads directory.
+
+    Work chat keeps calling :func:`normalize_chat_media_attachments`, which
+    stores images only. Design opts into this function so reference media uses
+    the same folder and naming rules without changing the work chat contract.
+    """
+    raw_items = params.get("media_items")
+    if not isinstance(raw_items, list) or not raw_items:
+        return
+
+    stored: list[dict[str, Any]] = []
+    image_count = 0
+    av_count = 0
+    for index, item in enumerate(raw_items):
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or "").strip().lower()
+        if kind == "image":
+            if image_count >= _MAX_IMAGE_COUNT:
+                continue
+            stored_item = _store_image_item(item, session_id=session_id, index=index)
+            if stored_item is None:
+                stored_item = _store_local_media(
+                    item,
+                    session_id=session_id,
+                    kind="image",
+                    index=index,
+                    mime_type=str(item.get("mimeType") or item.get("mime_type") or "image/png"),
+                    suffix=Path(str(item.get("filename") or "")).suffix.lower(),
+                )
+            if stored_item:
+                stored.append(stored_item)
+                image_count += 1
+            continue
+        if kind not in {"video", "audio"}:
+            continue
+        if av_count >= _MAX_AV_COUNT:
+            continue
+        stored_item = _store_av_item(item, session_id=session_id, kind=kind, index=index)
+        if stored_item:
+            stored.append(stored_item)
+            av_count += 1
+
+    if not stored:
+        params.pop("media_items", None)
+        return
+
+    params["media_items"] = stored
+    files = params.get("files")
+    if not isinstance(files, dict):
+        files = {}
+    images = [item for item in stored if item.get("type") == "image"]
+    if images:
+        files["uploaded_images"] = [
+            {
+                "filename": item.get("filename"),
+                "path": item.get("path"),
+                "mime_type": item.get("mime_type"),
+                "size_bytes": item.get("size_bytes"),
+            }
+            for item in images
+        ]
+    files["uploaded_media"] = [
+        {
+            "filename": item.get("filename"),
+            "path": item.get("path"),
+            "mime_type": item.get("mime_type"),
+            "size_bytes": item.get("size_bytes"),
+            "type": item.get("type"),
+        }
+        for item in stored
+    ]
+    params["files"] = files
+
+
+def _store_av_item(
+    item: dict[str, Any],
+    *,
+    session_id: str | None,
+    kind: str,
+    index: int,
+) -> dict[str, Any] | None:
+    mime_type = str(item.get("mimeType") or item.get("mime_type") or "").lower().strip()
+    suffix = _SUPPORTED_AV_MIME_TYPES.get(mime_type)
+    filename = str(item.get("filename") or "").strip()
+    if suffix is None:
+        guessed = Path(filename).suffix.lower()
+        if guessed not in _AV_FILENAME_SUFFIXES:
+            return None
+        suffix = guessed
+        mime_type = mime_type or _mime_for_av_suffix(guessed)
+
+    if item.get("_persisted"):
+        path = item.get("path")
+        if isinstance(path, str) and path.strip():
+            try:
+                exists = os.path.isfile(path) and not Path(path).is_symlink()
+                size = os.path.getsize(path) if exists else 0
+            except OSError:
+                exists = False
+                size = 0
+            if exists:
+                return {
+                    "type": kind,
+                    "filename": Path(path).name,
+                    "mime_type": mime_type,
+                    "path": path,
+                    "size_bytes": size,
+                }
+        return None
+
+    raw_base64 = item.get("base64Data") or item.get("base64_data")
+    if isinstance(raw_base64, str) and raw_base64.strip():
+        data: bytes | None = None
+        with suppress(binascii.Error):
+            payload = raw_base64.split(",", 1)[-1] if raw_base64.startswith("data:") else raw_base64
+            data = base64.b64decode(payload, validate=True)
+        if not data or len(data) > _MAX_AV_BYTES:
+            return None
+        return _write_session_media(
+            data,
+            session_id=session_id,
+            kind=kind,
+            mime_type=mime_type,
+            filename=filename or f"{kind}-{index + 1}{suffix}",
+            suffix=suffix,
+        )
+
+    return _store_local_media(item, session_id=session_id, kind=kind, index=index, mime_type=mime_type, suffix=suffix)
+
+
+def _store_local_media(
+    item: dict[str, Any],
+    *,
+    session_id: str | None,
+    kind: str,
+    index: int,
+    mime_type: str = "",
+    suffix: str = "",
+) -> dict[str, Any] | None:
+    raw_path = item.get("path") or item.get("original_path")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    source = Path(raw_path).expanduser()
+    try:
+        if source.is_symlink() or not source.is_file():
+            return None
+        size = source.stat().st_size
+    except OSError:
+        return None
+    file_suffix = source.suffix.lower()
+    if file_suffix not in _AV_FILENAME_SUFFIXES and file_suffix not in supported_image_suffixes():
+        return None
+    if size <= 0 or size > _MAX_LOCAL_MEDIA_BYTES:
+        return None
+    upload_dir = session_uploads_dir(session_id)
+    try:
+        already_there = _same_directory(source.parent.resolve(strict=False), upload_dir.resolve(strict=False))
+    except OSError:
+        already_there = False
+    if already_there:
+        return {
+            "type": kind,
+            "filename": source.name,
+            "mime_type": mime_type or _mime_for_av_suffix(source.suffix.lower()),
+            "path": str(source.resolve()),
+            "size_bytes": size,
+        }
+    filename = filename_with_suffix(
+        str(item.get("filename") or source.name or f"{kind}-{index + 1}"),
+        suffix or source.suffix.lower() or ".bin",
+    )
+    try:
+        data = source.read_bytes()
+    except OSError:
+        return None
+    return _write_session_media(
+        data,
+        session_id=session_id,
+        kind=kind,
+        mime_type=mime_type or _mime_for_av_suffix(Path(filename).suffix.lower()),
+        filename=filename,
+        suffix=Path(filename).suffix.lower() or suffix,
+    )
+
+
+def filename_with_suffix(filename: str, suffix: str) -> str:
+    """Keep an allowed suffix and append *suffix* when the name has none."""
+    safe = safe_upload_filename(filename, fallback=f"upload{suffix}")
+    current = Path(safe).suffix.lower()
+    if current in _AV_FILENAME_SUFFIXES or current in supported_image_suffixes():
+        return safe
+    return f"{safe}{suffix}"
+
+
+def _write_session_media(
+    data: bytes,
+    *,
+    session_id: str | None,
+    kind: str,
+    mime_type: str,
+    filename: str,
+    suffix: str,
+) -> dict[str, Any]:
+    upload_dir = session_uploads_dir(session_id)
+    stored_name = filename_with_suffix(filename, suffix)
+    path = atomic_write_unique(upload_dir / stored_name, data)
+    return {
+        "type": kind,
+        "filename": path.name,
+        "mime_type": mime_type,
+        "path": str(path),
+        "size_bytes": len(data),
+    }
+
+
+def _mime_for_av_suffix(suffix: str) -> str:
+    for mime, mapped in _SUPPORTED_AV_MIME_TYPES.items():
+        if mapped == suffix:
+            return mime
+    if suffix == ".m4v":
+        return "video/mp4"
+    return ""

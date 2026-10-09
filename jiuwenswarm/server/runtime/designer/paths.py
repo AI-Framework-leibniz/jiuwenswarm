@@ -62,13 +62,19 @@ def design_trajectory_dir() -> Path:
     return get_user_workspace_dir() / ".trace" / "designer"
 
 
-def design_trajectory_key(project_id: str) -> str:
-    """File stem shared by every run of one design project.
+def design_trajectory_key(
+    project_id: str,
+    graph_id: str = "",
+    session_id: str | None = None,
+) -> str:
+    """File stem for one design canvas.
 
-    A design project owns exactly one graph, so the project id (visible in the
-    URL) identifies the trajectory files for all agent actions in that project.
+    A session owns one canvas, so its id is the trajectory key. Runs recorded
+    before sessions still use the required project id, including ``default``.
+    ``graph_id`` is accepted so older call sites keep working.
     """
-    raw = str(project_id).strip()
+    del graph_id
+    raw = str(session_id or "").strip() or str(project_id).strip()
     if _SAFE_TRAJECTORY_KEY.fullmatch(raw):
         return raw
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()

@@ -135,11 +135,22 @@ export function DesignerNodeToolbar({ nodeId, nodeType }: DesignerNodeToolbarPro
 
   const persistUploadedFile = useCallback(
     async (file: File) => {
-      const asset = addFromFile(file);
+      const asset = addFromFile(file, {
+        projectId: domainGraph?.project_id,
+        sessionId:
+          typeof domainGraph?.metadata?.session_id === 'string'
+            ? domainGraph.metadata.session_id
+            : undefined,
+      });
       if (!asset) return;
       setUploading(true);
       try {
-        const stored = await uploadDesignerAsset(file);
+        const stored = await uploadDesignerAsset(
+          file,
+          typeof domainGraph?.metadata?.session_id === 'string'
+            ? domainGraph.metadata.session_id
+            : undefined,
+        );
         const outputRef = {
           kind: nodeType,
           uri: localPathToFileUri(stored.path),
@@ -166,7 +177,7 @@ export function DesignerNodeToolbar({ nodeId, nodeType }: DesignerNodeToolbarPro
         setUploading(false);
       }
     },
-    [addFromFile, applyUploadedOutput, nodeId, nodeType, setNodeOutputRef, updateNodeConfig],
+    [addFromFile, applyUploadedOutput, domainGraph, nodeId, nodeType, setNodeOutputRef, updateNodeConfig],
   );
 
   const confirmUpload = useCallback(async () => {
