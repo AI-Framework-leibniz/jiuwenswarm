@@ -10,9 +10,9 @@ from typing import TypedDict
 
 from jiuwenswarm.common.schema.designer_graph import DesignerGraphValidationError
 
-_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
-_SHOT = re.compile(r"(?:shot|分镜|镜头)\s*#?\s*([1-9]\d*)(?:\s*[:：—-]\s*.+)?", re.I)
-_FIELD = re.compile(r"^\s*[-*+]\s+(?:\*\*)?([^:：*]+?)(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(.+)$")
+_HEADING = re.compile(r"^(#{1,6})['clips']+(.+?)['clips']*#*['clips']*$")
+_SHOT = re.compile(r"(?:shot|分镜|镜头)['clips']*#?['clips']*([1-9]\d*)(?:['clips']*[:：—-]['clips']*.+)?", re.I)
+_FIELD = re.compile(r"^['clips']*[-*+]['clips']+(?:\*\*)?([^:：*]+?)(?:\*\*)?['clips']*[:：]['clips']*(?:\*\*)?['clips']*(.+)$")
 
 
 class ShotSectionRequirement(TypedDict):

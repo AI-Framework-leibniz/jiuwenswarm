@@ -11,7 +11,7 @@ import re
 from typing import Any
 
 _SPEECH_QUOTE_RE = re.compile(
-    r"""["“]([^"”]{3,160})["”]|'([^']{3,120})'|says?\s*[:,]?\s*["“]?([^"”.\n]{3,120})""",
+    r"""["“]([^"”]{3,160})["”]|'([^']{3,120})'|says?['clips']*[:,]?['clips']*["“]?([^"”.\n]{3,120})""",
     re.I,
 )
 
@@ -22,7 +22,7 @@ def _guess_speech_line(shot: dict[str, Any]) -> str:
         return existing[:280]
     blob = " ".join(
         str(shot.get(k) or "")
-        for k in ("action", "keyframe_prompt", "title", "comment")
+        for k in ("action", "clip_prompt", "title", "comment")
     )
     m = _SPEECH_QUOTE_RE.search(blob)
     if not m:
@@ -34,12 +34,12 @@ def _timeline_seconds(timeline: str) -> tuple[float, float]:
     """Parse '0-5s' / '0:00-0:07' → (start, end) seconds; default 0–5."""
     t = (timeline or "").strip().lower()
     m = re.search(
-        r"(\d+(?:\.\d+)?)\s*(?:s|sec)?\s*[-–—to]+\s*(\d+(?:\.\d+)?)\s*(?:s|sec)?",
+        r"(\d+(?:\.\d+)?)['clips']*(?:s|sec)?['clips']*[-–—to]+['clips']*(\d+(?:\.\d+)?)['clips']*(?:s|sec)?",
         t,
     )
     if m:
         return float(m.group(1)), float(m.group(2))
-    m2 = re.search(r"(\d+):(\d+)\s*[-–—]\s*(\d+):(\d+)", t)
+    m2 = re.search(r"(\d+):(\d+)['clips']*[-–—]['clips']*(\d+):(\d+)", t)
     if m2:
         a = int(m2.group(1)) * 60 + int(m2.group(2))
         b = int(m2.group(3)) * 60 + int(m2.group(4))
@@ -47,7 +47,7 @@ def _timeline_seconds(timeline: str) -> tuple[float, float]:
     return 0.0, 5.0
 
 
-def stamp_director_shot_sheets(
+def stamp_director_clip_sheets(
     analysis: dict[str, Any],
     *,
     prompt: str = "",
@@ -56,7 +56,7 @@ def stamp_director_shot_sheets(
     out = analysis if isinstance(analysis, dict) else {}
     characters = [c for c in (out.get("characters") or []) if isinstance(c, dict)]
     by_id = {str(c.get("id")): c for c in characters if c.get("id")}
-    shots = [s for s in (out.get("shots") or []) if isinstance(s, dict)]
+    shots = [s for s in (out.get("clips") or []) if isinstance(s, dict)]
 
     for shot in shots:
         focus = [str(x) for x in (shot.get("character_ids") or shot.get("on_screen") or []) if str(x)]
@@ -91,7 +91,7 @@ def stamp_director_shot_sheets(
         if look_bits and not str(shot.get("wardrobe_lock") or "").strip():
             shot["wardrobe_lock"] = " | ".join(look_bits)[:520]
 
-        action = str(shot.get("action") or shot.get("keyframe_prompt") or "").strip()
+        action = str(shot.get("action") or shot.get("clip_prompt") or "").strip()
         timeline = str(shot.get("timeline") or "0-5s")
         t0, t1 = _timeline_seconds(timeline)
         dur = max(1.0, t1 - t0)
@@ -115,7 +115,7 @@ def stamp_director_shot_sheets(
                 str((by_id.get(c) or {}).get("name") or c) for c in off
             ]
             is_master = (
-                str(shot.get("keyframe_strategy") or "") == "master_still"
+                str(shot.get("clip_strategy") or "") == "master_still"
                 or bool(shot.get("ensemble_master"))
             )
             if is_master:
@@ -172,15 +172,15 @@ def stamp_director_shot_sheets(
                 )[:900]
 
         try:
-            from jiuwenswarm.server.runtime.designer.pipeline.shot_staging_lock import (
-                enrich_shot_staging,
+            from jiuwenswarm.server.runtime.designer.pipeline.clip_staging_lock import (
+                enrich_clip_staging,
             )
 
-            enrich_shot_staging(shot, characters)
+            enrich_clip_staging(shot, characters)
         except Exception:  # noqa: BLE001
             pass
 
-    out["shots"] = shots
+    out["clips"] = shots
     out.setdefault("director_contract", {})
     if isinstance(out["director_contract"], dict):
         out["director_contract"]["shot_sheets"] = "speech/motion/wardrobe/framing.v2"

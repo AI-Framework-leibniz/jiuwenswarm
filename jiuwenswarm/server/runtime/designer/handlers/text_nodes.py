@@ -9,9 +9,8 @@ from typing import Any, TypedDict
 
 from jiuwenswarm.common.schema.designer_graph import (
     NODE_ROLE_BRIEF,
-    NODE_ROLE_CHARACTER_DESIGN,
+    NODE_ROLE_CHARACTER,
     NODE_ROLE_CLIP,
-    NODE_ROLE_FRAME,
     NODE_ROLE_SCENE,
     NODE_TYPE_TABLE,
     NODE_TYPE_TEXT,
@@ -238,11 +237,11 @@ def _parse_storyboard_table(text: str) -> list[StoryboardShot]:
 
 
 _HIER_SHOT_RE = re.compile(
-    r"(?im)^###\s*Shot\s+(\d+)\s*[—\-–:]?\s*(.*)$"
+    r"(?im)^###['clips']*Shot['clips']+(\d+)['clips']*[—\-–:]?['clips']*(.*)$"
 )
 _HIER_FIELD_RE = re.compile(
-    r"(?im)^-\s*(Timeline|Camera|Camera move|Move|Action|Character action|"
-    r"Comment|Keyframe|Doing|Speech)\s*:\s*(.*)$"
+    r"(?im)^-['clips']*(Timeline|Camera|Camera move|Move|Action|Character action|"
+    r"Comment|Keyframe|Doing|Speech)['clips']*:['clips']*(.*)$"
 )
 
 
@@ -334,10 +333,10 @@ def sync_shot_nodes_from_storyboard_markdown(
         if not isinstance(node, dict):
             continue
         role = str(node_pipeline(node) or "").strip().lower()
-        if role not in {NODE_ROLE_FRAME, NODE_ROLE_CLIP, "keyframe"}:
+        if role not in {NODE_ROLE_CLIP}:
             continue
         cfg = dict(node.get("config") or {})
-        idx = int(cfg.get("shot_index") or 0)
+        idx = int(cfg.get("clip_index") or 0)
         shot = by_index.get(idx)
         if not isinstance(shot, dict):
             continue
@@ -346,7 +345,7 @@ def sync_shot_nodes_from_storyboard_markdown(
         timeline = str(shot.get("timeline") or "").strip()
         changed = False
         if narrative:
-            cfg["shot_action"] = narrative[:500]
+            cfg["clip_action"] = narrative[:500]
             changed = True
         if camera:
             cfg["camera"] = camera[:120]
@@ -378,20 +377,20 @@ def sync_shot_nodes_from_storyboard_markdown(
 
 
 _DURATION_FIELD_RE = re.compile(
-    r"(?im)^(?:[-*]\s*)?(?:\*\*)?duration(?:\*\*)?\s*:?\s*~?\s*(\d{1,2}(?:\.\d+)?)",
+    r"(?im)^(?:[-*]['clips']*)?(?:\*\*)?duration(?:\*\*)?['clips']*:?['clips']*~?['clips']*(\d{1,2}(?:\.\d+)?)",
 )
 _DURATION_INLINE_RE = re.compile(
-    r"(\d{1,2}(?:\.\d+)?)\s*-?\s*(?:seconds?|secs?|秒)",
+    r"(\d{1,2}(?:\.\d+)?)['clips']*-?['clips']*(?:seconds?|secs?|秒)",
     re.I,
 )
 _LOGLINE_RE = re.compile(
-    r"(?im)^(?:[-*]\s*)?(?:\*\*)?logline(?:\*\*)?\s*:\s*(.+)$",
+    r"(?im)^(?:[-*]['clips']*)?(?:\*\*)?logline(?:\*\*)?['clips']*:['clips']*(.+)$",
 )
 
 
 def brief_duration_seconds(text: str, default: int = 5) -> int:
     """Read an explicit duration from a brief or user request."""
-    from jiuwenswarm.server.runtime.designer.pipeline.clip_shot_scope import (
+    from jiuwenswarm.server.runtime.designer.pipeline.clip_scope import (
         requested_film_duration_sec,
     )
 
@@ -423,7 +422,7 @@ def brief_logline(brief: str) -> str:
     match = _LOGLINE_RE.search(text)
     if match:
         return match.group(1).strip().strip("*").strip()
-    match = re.search(r"(?i)\*\*logline:\*\*\s*(.+)", text)
+    match = re.search(r"(?i)\*\*logline:\*\*['clips']*(.+)", text)
     if match:
         return match.group(1).strip()
     return ""
@@ -432,11 +431,11 @@ def brief_logline(brief: str) -> str:
 def brief_story_focus(prompt: str) -> str:
     text = (prompt or "").strip()
     text = re.sub(
-        r"^(?:generate|create|make|please\s+(?:make|create))\s+"
-        r"(?:a\s+)?(?:\d{3,4}p\s+)?(?:video|film|clip|short)?"
-        r"(?:\s+in\s+\d+\s+seconds?)?"
-        r"(?:\s*,\s*(?:at least\s+)?(?:two|2)\s+cams?)?"
-        r"[,:]?\s*",
+        r"^(?:generate|create|make|please['clips']+(?:make|create))['clips']+"
+        r"(?:a['clips']+)?(?:\d{3,4}p['clips']+)?(?:video|film|clip|short)?"
+        r"(?:['clips']+in['clips']+\d+['clips']+seconds?)?"
+        r"(?:['clips']*,['clips']*(?:at least['clips']+)?(?:two|2)['clips']+cams?)?"
+        r"[,:]?['clips']*",
         "",
         text,
         flags=re.I,
@@ -446,20 +445,20 @@ def brief_story_focus(prompt: str) -> str:
 
 def _stamp_bible_on_text(text: str, ctx: NodeExecutionContext) -> str:
     try:
-        from jiuwenswarm.server.runtime.designer.pipeline.production_bible import (
-            append_bible_to_markdown,
-            build_production_bible,
+        from jiuwenswarm.server.runtime.designer.pipeline.production_specs import (
+            append_specs_to_markdown,
+            build_production_specs,
         )
 
         meta = ctx.graph.get("metadata") if isinstance(ctx.graph.get("metadata"), dict) else {}
-        bible = str(meta.get("production_bible") or "").strip()
+        bible = str(meta.get("production_specs") or "").strip()
         if not bible:
             analysis = meta.get("script_analysis") if isinstance(meta.get("script_analysis"), dict) else {}
-            bible = build_production_bible(
+            bible = build_production_specs(
                 analysis,
                 user_prompt=str(ctx.graph.get("description") or ""),
             )
-        return append_bible_to_markdown(text, bible)
+        return append_specs_to_markdown(text, bible)
     except Exception:  # noqa: BLE001
         return text
 
@@ -511,8 +510,8 @@ class BriefNodeHandler:
 def _storyboard_alignment_context(ctx: NodeExecutionContext) -> str:
     parts: list[str] = []
     character_notes = (
-        collaboration_card(ctx.run_id, NODE_ROLE_CHARACTER_DESIGN)
-        or role_output_text(ctx, NODE_ROLE_CHARACTER_DESIGN)
+        collaboration_card(ctx.run_id, NODE_ROLE_CHARACTER)
+        or role_output_text(ctx, NODE_ROLE_CHARACTER)
     )
     scene_notes = (
         collaboration_card(ctx.run_id, NODE_ROLE_SCENE)
@@ -520,7 +519,7 @@ def _storyboard_alignment_context(ctx: NodeExecutionContext) -> str:
     )
     if character_notes:
         parts.append("Character sheet / notes (character action must match):\n" + character_notes)
-    elif role_output_image_path(ctx, NODE_ROLE_CHARACTER_DESIGN) is not None:
+    elif role_output_image_path(ctx, NODE_ROLE_CHARACTER) is not None:
         parts.append("A character sheet exists. Character action must match that look, costume, and materials. Do not invent a new character.")
     if scene_notes:
         parts.append("Scene sheet / notes (scene change must match):\n" + scene_notes)

@@ -28,7 +28,7 @@ This document is the reproduce guide after:
 | Intent | Behavior |
 |---|---|
 | Still bound **verbatim** (default) | Handler card (`n_ref_*`). Pixels never image-gen’d. |
-| Still bound **condition** | May regenerate (`identity_sheet` / `medium_change` / scene plate). |
+| Still bound **condition** | May regenerate (`character_specs` / `medium_change` / scene plate). |
 | Uncovered analysis cast/set | Companion sheets/plates under film `style_lock`. |
 | **`video_binding=multi_ref_story`** (default) | **R2V**. Advertise / act / dinner / celebrate / product story. All plan refs sent. |
 | **`video_binding=animate_keyframe`** | True “animate this picture/painting” only. Solo → **I2V**. Extra cast/set → **R2V** with keyframe as Image 1 + companions packed. |
@@ -115,7 +115,7 @@ Remaining budget: on-screen companion solos; overflow → one `combined_cast` sh
 | Node | When | Notes |
 |---|---|---|
 | `n_ref_*` | Every upload | force_handler; card role when verbatim |
-| `n_character_*` condition | Character `binding=condition` | identity_sheet from upload |
+| `n_character_*` condition | Character `binding=condition` | character_specs from upload |
 | `n_character_*` companion | Uncovered cast | `companion_cast=True` |
 | `n_character_*` combined | Cap overflow | `combined_cast=True`, multi names |
 | `n_restyle_01` | animate_keyframe + motion condition | medium_change → first frame / Image 1 |

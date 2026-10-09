@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # Roles that must emit real media (handlers are the generation backends).
 _MEDIA_MATERIALIZE_ROLES = {
     "character",
-    "character_design",
+    "character",
     "scene",
     "frame",
     "keyframe",
@@ -54,7 +54,7 @@ _MEDIA_URI_SUFFIXES = _IMAGE_URI_SUFFIXES + _VIDEO_URI_SUFFIXES + _AUDIO_URI_SUF
 # Clip/compose must not treat a keyframe PNG as "done" (agents often attach stills).
 _ROLE_REQUIRED_MEDIA: dict[str, str] = {
     "character": "image",
-    "character_design": "image",
+    "character": "image",
     "scene": "image",
     "frame": "image",
     "keyframe": "image",
@@ -165,7 +165,7 @@ def _upstream_image_uri_keys(ctx: NodeExecutionContext | None) -> set[str]:
         )
     except Exception:  # noqa: BLE001
         return set()
-    for role in ("character_design", "character", "scene"):
+    for role in ("character", "character", "scene"):
         try:
             paths = role_output_image_paths(ctx, role)
         except Exception:  # noqa: BLE001
@@ -176,7 +176,7 @@ def _upstream_image_uri_keys(ctx: NodeExecutionContext | None) -> set[str]:
             except OSError:
                 continue
             keys.add(resolved.as_uri().lower())
-            keys.add(str(resolved).replace("\\", "/").lower())
+            keys.add(str(resolved).replace("['clips']", "/").lower())
             keys.add(resolved.name.lower())
     return keys
 
@@ -197,7 +197,7 @@ def _result_satisfies_required_media(
     if required == "image" and role in {
         "scene",
         "character",
-        "character_design",
+        "character",
         "frame",
         "keyframe",
     }:
@@ -222,8 +222,8 @@ def _result_satisfies_required_media(
         label = str(ref.get("label") or "").lower()
         if "designer_frame_" in uri_l or "designer_frame_" in label:
             return True
-        name = Path(uri_l.replace("\\", "/").split("/")[-1]).name
-        keys = {uri_l, uri_l.replace("\\", "/"), name}
+        name = Path(uri_l.replace("['clips']", "/").split("/")[-1]).name
+        keys = {uri_l, uri_l.replace("['clips']", "/"), name}
         if upstream and keys & upstream:
             continue
         # Non-upstream image counts as this node's keyframe.
@@ -502,7 +502,7 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         spatial = meta.get("spatial_lock") if isinstance(meta.get("spatial_lock"), dict) else {}
     locks = {
         "setting_id": cfg.get("setting_id") or identity.get("setting_id"),
-        "keyframe_strategy": cfg.get("keyframe_strategy") or identity.get("keyframe_strategy"),
+        "clip_strategy": cfg.get("clip_strategy") or identity.get("clip_strategy"),
         "costume_lock": cfg.get("costume_lock") or identity.get("costume_lock"),
         "positioning_lock": cfg.get("positioning_lock"),
         "action_lock": cfg.get("action_lock"),
@@ -513,8 +513,8 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         "occupancy": cfg.get("occupancy") or identity.get("occupancy"),
         "character_node_ids": cfg.get("character_node_ids") or identity.get("character_node_ids"),
         "all_solo_node_ids": identity.get("all_solo_node_ids"),
-        "prior_keyframe_node_id": cfg.get("prior_keyframe_node_id")
-        or identity.get("prior_keyframe_node_id"),
+        "prior_clip_node_id": cfg.get("prior_clip_node_id")
+        or identity.get("prior_clip_node_id"),
         "director_prompt_reviewed": bool(cfg.get("director_prompt_reviewed")),
         "director_lock_gate": cfg.get("director_lock_gate"),
         "language_lock": cfg.get("language_lock"),
@@ -526,10 +526,10 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
     }
     extra: dict[str, Any] = {}
     try:
-        from jiuwenswarm.server.runtime.designer.pipeline.leaf_agent_continuity import (
+        from jiuwenswarm.server.runtime.designer.pipeline.leaf_agent_consistency import (
             hollywood_leaf_instructions,
         )
-        from jiuwenswarm.server.runtime.designer.pipeline.production_bible import (
+        from jiuwenswarm.server.runtime.designer.pipeline.production_specs import (
             leaf_lock_packet,
         )
         from jiuwenswarm.server.runtime.designer.pipeline.clip_prompt_handoff import (
@@ -539,8 +539,8 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
             agent_prior_story_block,
             ensure_prior_clip_story_on_cfg,
         )
-        from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
-            merge_storyboard_continuity,
+        from jiuwenswarm.server.runtime.designer.pipeline.shot_consistency_contract import (
+            merge_storyboard_consistency,
         )
         from jiuwenswarm.server.runtime.designer.pipeline.media_prompt_limits import (
             media_prompt_limit_packet,
@@ -550,13 +550,13 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         role = str(node_pipeline(node) or node_role(node) or "")
         if role in {"clip", "video"}:
             cfg = ensure_prior_clip_story_on_cfg(cfg, graph)
-            cfg, _ = merge_storyboard_continuity(cfg, graph=graph)
+            cfg, _ = merge_storyboard_consistency(cfg, graph=graph)
             node["config"] = cfg
         limits = media_prompt_limit_packet()
         extra["hollywood_instructions"] = hollywood_leaf_instructions(role)
         extra["media_prompt_limits"] = limits
         kind = "video" if role in {"clip", "video"} else "image"
-        if role in {"scene", "character", "character_design", "frame", "keyframe", "clip", "video"}:
+        if role in {"scene", "character", "character", "frame", "keyframe", "clip", "video"}:
             lim = resolve_prompt_limit("video" if kind == "video" else "image")
             extra["prompt_char_limit"] = lim.max_chars
             extra["prompt_limit_guidance"] = lim.guidance()
@@ -565,15 +565,15 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
             node["config"] = cfg
         extra["lock_packet"] = leaf_lock_packet(
             role=role,
-            shot_index=int(cfg.get("shot_index") or 0),
+            clip_index=int(cfg.get("clip_index") or 0),
             analysis=(graph.get("metadata") or {}).get("script_analysis")
             if isinstance(graph.get("metadata"), dict)
             else None,
             meta=graph.get("metadata") if isinstance(graph.get("metadata"), dict) else cfg,
         )
         extra["same_scene_prompt_gate"] = same_scene_prompt_gate_clause(
-            shot_index=int(cfg.get("shot_index") or 0),
-            this_action=str(cfg.get("shot_action") or ""),
+            clip_index=int(cfg.get("clip_index") or 0),
+            this_action=str(cfg.get("clip_action") or ""),
             this_camera=str(cfg.get("camera") or ""),
             this_speech=str(cfg.get("speech_line") or ""),
             already_done=[str(x) for x in (cfg.get("already_done") or []) if str(x)],
@@ -596,8 +596,8 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         "label": node.get("label"),
         "type": node.get("type"),
         "prompt": graph_prompt(graph, node),
-        "shot_index": cfg.get("shot_index"),
-        "shot_action": str(cfg.get("shot_action") or "")[:500],
+        "clip_index": cfg.get("clip_index"),
+        "clip_action": str(cfg.get("clip_action") or "")[:500],
         "camera": str(cfg.get("camera") or "")[:120],
         "speech_line": str(cfg.get("speech_line") or "")[:200],
         "agent_template": node_agent_template(node),
@@ -610,7 +610,7 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         if isinstance(graph.get("metadata"), dict)
         else [],
         "setting_id": locks["setting_id"],
-        "keyframe_strategy": locks["keyframe_strategy"],
+        "clip_strategy": locks["clip_strategy"],
         "occupancy": locks["occupancy"],
         "already_done": cfg.get("already_done"),
         "beat_done": cfg.get("beat_done"),
@@ -619,8 +619,8 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         "forbidden_speech": cfg.get("forbidden_speech"),
         "end_state": cfg.get("end_state"),
         "scene_specs": cfg.get("scene_specs"),
-        "previous_keyframe_prompt": str(cfg.get("previous_keyframe_prompt") or "")[:800],
-        "previous_keyframe_action": str(cfg.get("previous_keyframe_action") or "")[:300],
+        "previous_clip_prompt": str(cfg.get("previous_clip_prompt") or "")[:800],
+        "previous_clip_action": str(cfg.get("previous_clip_action") or "")[:300],
         # Do NOT pass raw previous_clip_wan_prompt to the leaf — contamination source.
         "previous_clip_action": str(cfg.get("previous_clip_action") or "")[:300],
         "previous_clip_finished_events": cfg.get("previous_clip_finished_events"),
@@ -930,7 +930,7 @@ class DesignerGraphToolkit:
         if role in {
             "scene",
             "character",
-            "character_design",
+            "character",
             "frame",
             "keyframe",
         }:
@@ -1035,7 +1035,7 @@ class DesignerGraphToolkit:
             generate_clip_video,
             parse_shot_duration_seconds,
         )
-        from jiuwenswarm.common.schema.designer_graph import node_shot_index
+        from jiuwenswarm.common.schema.designer_graph import node_clip_index
         from jiuwenswarm.server.runtime.designer.pipeline.clip_last_frame_handoff import (
             extract_last_frame,
             resolve_gated_last_frame_chain,
@@ -1060,9 +1060,9 @@ class DesignerGraphToolkit:
         node["config"] = cfg
 
         # Gated same-scene last-frame chain before prompt so Wan binding matches attach order.
-        shot_index = node_shot_index(node)
+        clip_index = node_clip_index(node)
         refs = collect_clip_reference_images(
-            self.ctx, shot_index, node=node
+            self.ctx, clip_index, node=node
         )
         _IMG = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
         ref_paths = [p for p in refs if p.is_file() and p.suffix.lower() in _IMG]
@@ -1083,18 +1083,18 @@ class DesignerGraphToolkit:
         meta = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
         user_prompt = str(graph.get("description") or meta.get("user_prompt") or "")
         try:
-            from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
-                merge_storyboard_continuity,
-                prompt_violates_continuity,
+            from jiuwenswarm.server.runtime.designer.pipeline.shot_consistency_contract import (
+                merge_storyboard_consistency,
+                prompt_violates_consistency,
             )
 
-            cfg, _ = merge_storyboard_continuity(cfg, graph=graph)
+            cfg, _ = merge_storyboard_consistency(cfg, graph=graph)
             node["config"] = cfg
         except Exception:  # noqa: BLE001
             pass
         if agent_text:
             try:
-                from jiuwenswarm.server.runtime.designer.pipeline.clip_shot_scope import (
+                from jiuwenswarm.server.runtime.designer.pipeline.clip_scope import (
                     looks_like_full_story_restatement,
                     looks_like_prior_copy,
                 )
@@ -1115,10 +1115,10 @@ class DesignerGraphToolkit:
                 elif agent_replays_finished_events(
                     body,
                     already_done=[str(x) for x in (cfg.get("already_done") or []) if str(x)],
-                    this_action=str(cfg.get("shot_action") or ""),
+                    this_action=str(cfg.get("clip_action") or ""),
                 ):
                     agent_text = ""
-                elif prompt_violates_continuity(body, cfg=cfg):
+                elif prompt_violates_consistency(body, cfg=cfg):
                     agent_text = ""
             except Exception:  # noqa: BLE001
                 pass
@@ -1220,7 +1220,7 @@ class DesignerGraphToolkit:
             text,
             cfg=cfg,
             graph=graph,
-            shot_index=shot_index,
+            clip_index=clip_index,
         )
         cfg["prompt"] = text
         want_audio, _model_override = resolve_video_audio_request(cfg, meta)
@@ -1236,7 +1236,7 @@ class DesignerGraphToolkit:
             _, shot = _shot_for_node(self.ctx.graph, node, self.ctx)
         except Exception:  # noqa: BLE001
             shot = None
-        from jiuwenswarm.server.runtime.designer.pipeline.clip_shot_scope import (
+        from jiuwenswarm.server.runtime.designer.pipeline.clip_scope import (
             clamp_clip_duration,
         )
 
@@ -1337,10 +1337,10 @@ class DesignerGraphToolkit:
 
             stamp_wan_prompt_handoff(
                 graph,
-                shot_index=shot_index,
+                clip_index=clip_index,
                 prompt=str(text),
                 node_id=str(node.get("id") or ""),
-                shot_action=str(cfg.get("shot_action") or ""),
+                shot_action=str(cfg.get("clip_action") or ""),
                 speech_line=str(cfg.get("speech_line") or ""),
             )
         except Exception:  # noqa: BLE001
@@ -1353,7 +1353,7 @@ class DesignerGraphToolkit:
                     graph,
                     completed_clip_id=str(node.get("id") or ""),
                     last_frame_path=str(extracted),
-                    shot_index=shot_index,
+                    clip_index=clip_index,
                     speech_line=str(
                         cfg.get("speech_line") or cfg.get("previous_clip_speech") or ""
                     ),

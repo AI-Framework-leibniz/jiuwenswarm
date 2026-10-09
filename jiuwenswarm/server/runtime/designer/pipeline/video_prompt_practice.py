@@ -97,7 +97,7 @@ def _scene_name(cfg: dict[str, Any]) -> str:
 def _style_phrase(cfg: dict[str, Any]) -> str:
     style = cfg.get("style_lock") if isinstance(cfg.get("style_lock"), dict) else {}
     look = str(style.get("look") or style.get("medium") or "").strip()
-    look = re.split(r"\s+[—–-]\s+|\bnever\b|\bno style\b", look, maxsplit=1, flags=re.I)[0]
+    look = re.split(r"['clips']+[—–-]['clips']+|\bnever\b|\bno style\b", look, maxsplit=1, flags=re.I)[0]
     look = look.strip(" .;")
     return look
 
@@ -131,7 +131,7 @@ def _doing_line(cfg: dict[str, Any], graph: dict[str, Any] | None, action: str) 
     if len(bits) == 1:
         text = bits[0]
         return text if text.endswith(".") else text + "."
-    beat = str(action or cfg.get("shot_action") or cfg.get("character_action") or "").strip()
+    beat = str(action or cfg.get("clip_action") or cfg.get("character_action") or "").strip()
     if not beat or _BAD_DIRECTIVE.search(beat):
         return ""
     return beat if beat.endswith(".") else beat + "."
@@ -265,7 +265,7 @@ def _language_display(code: str) -> str:
     if key in known:
         return known[key]
     # Already a language name (e.g. "English") — keep as-is.
-    if re.fullmatch(r"[A-Za-z][A-Za-z\s-]{1,40}", raw):
+    if re.fullmatch(r"[A-Za-z][A-Za-z['clips']-]{1,40}", raw):
         return raw[0].upper() + raw[1:]
     return raw
 
@@ -377,7 +377,7 @@ def ensure_story_lock_coverage(
             mentioned = lang.lower() in pl
         if not mentioned and lang and len(lang) <= 3:
             mentioned = bool(
-                re.search(rf"(?i)\b(?:in\s+)?{re.escape(lang)}\b", pl)
+                re.search(rf"(?i)\b(?:in['clips']+)?{re.escape(lang)}\b", pl)
             )
         if not mentioned:
             additions.append(lang_sent)
@@ -441,8 +441,8 @@ def _scrub_lock_phrase(text: str) -> str:
     if not value:
         return ""
     value = re.sub(
-        r"(?i)\b(?:positioning(?:\s+lock)?|staging(?:\s+lock)?|seat\s+holds?|"
-        r"continuity\s+state|people in frame now)\s*:\s*",
+        r"(?i)\b(?:positioning(?:['clips']+lock)?|staging(?:['clips']+lock)?|seat['clips']+holds?|"
+        r"continuity['clips']+state|people in frame now)['clips']*:['clips']*",
         "",
         value,
     ).strip()
@@ -605,7 +605,7 @@ def _continuity_story_lines(cfg: dict[str, Any]) -> list[str]:
     """Opening holds from storyboard start_state + crowd + continue cue."""
     lines: list[str] = []
     try:
-        from jiuwenswarm.server.runtime.designer.pipeline.storyboard_shot_state import (
+        from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
             start_end_story_lines,
         )
 
@@ -638,9 +638,9 @@ def _continuity_story_lines(cfg: dict[str, Any]) -> list[str]:
         except Exception:  # noqa: BLE001
             holds = []
     prior_action = str(cfg.get("previous_clip_action") or "")
-    this_action = str(cfg.get("shot_action") or cfg.get("action") or "")
+    this_action = str(cfg.get("clip_action") or cfg.get("action") or "")
     try:
-        from jiuwenswarm.server.runtime.designer.pipeline.storyboard_shot_state import (
+        from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
             _is_action_restatement,
         )
     except Exception:  # noqa: BLE001
@@ -699,9 +699,9 @@ def _wardrobe_for(token: str, cfg: dict[str, Any], graph: dict[str, Any] | None)
     if not raw:
         return ""
     # Drop "Name:" prefix and slot= noise into a readable wear phrase.
-    raw = re.sub(rf"(?i)^{re.escape(name)}\s*:\s*", "", raw).strip()
-    raw = re.sub(r"\b(top|bottom|outfit|footwear|outerwear|accessories)\s*=\s*", "", raw)
-    raw = re.sub(r"\s*;\s*", ", ", raw)
+    raw = re.sub(rf"(?i)^{re.escape(name)}['clips']*:['clips']*", "", raw).strip()
+    raw = re.sub(r"\b(top|bottom|outfit|footwear|outerwear|accessories)['clips']*=['clips']*", "", raw)
+    raw = re.sub(r"['clips']*;['clips']*", ", ", raw)
     return raw[:160]
 
 
@@ -748,11 +748,11 @@ def _action_for(token: str, cfg: dict[str, Any], graph: dict[str, Any] | None, f
         # Drop leading "Name …" / "The Name is …" so story sentence can say "is <verb…>".
         if name:
             text = re.sub(
-                rf"(?i)^(?:the\s+)?{re.escape(name)}\s+(?:is\s+|are\s+)?",
+                rf"(?i)^(?:the['clips']+)?{re.escape(name)}['clips']+(?:is['clips']+|are['clips']+)?",
                 "",
                 text,
             ).strip()
-        text = re.sub(r"(?i)^(is|are|was|were)\s+", "", text).strip()
+        text = re.sub(r"(?i)^(is|are|was|were)['clips']+", "", text).strip()
         return text[:180]
 
     for key, value in actions.items():
@@ -769,9 +769,9 @@ def _action_for(token: str, cfg: dict[str, Any], graph: dict[str, Any] | None, f
     if len({u.casefold() for u in unique}) == 1:
         return unique[0]
     # Prefer this character's clause inside a shared "A … while B …" beat.
-    beat = str(fallback or cfg.get("shot_action") or "").strip().rstrip(".")
+    beat = str(fallback or cfg.get("clip_action") or "").strip().rstrip(".")
     if beat and name and " while " in beat.lower():
-        for part in re.split(r"(?i)\s+while\s+", beat):
+        for part in re.split(r"(?i)['clips']+while['clips']+", beat):
             if name.casefold() in part.casefold():
                 cleaned = _clean_doing(part)
                 if cleaned:
@@ -979,13 +979,13 @@ def compose_practice_prompt(
         sentences.append(f"{look}.")
 
     text = " ".join(s for s in sentences if s and not _BAD_DIRECTIVE.search(s))
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\s+\.", ".", text)
+    text = re.sub(r"[ ['clips']]+", " ", text)
+    text = re.sub(r"['clips']+\.", ".", text)
     # Final safety: strip any exited names that leaked via speech/continue text.
     for gone_name in exited_names(cfg, graph):
         if gone_name and gone_name.casefold() not in {n.casefold() for n in names}:
             text = re.sub(rf"(?i)\b{re.escape(gone_name)}\b[^.]*\.?", "", text)
-    text = re.sub(r"\s{2,}", " ", text).strip()
+    text = re.sub(r"['clips']{2,}", " ", text).strip()
     text, _cov_notes = ensure_story_lock_coverage(text, cfg, graph=graph)
     return text[:2200]
 
@@ -1058,8 +1058,8 @@ def resolve_still_call_prompt(cfg: dict[str, Any] | None, fallback: str = "") ->
 
 
 _LOCK_BANNER_LINE = re.compile(
-    r"(?i)^\s*(?:style\s*lock|costume\s*lock|clothing\s*lock|wardrobe\s*lock|"
-    r"positioning\s*lock|scene\s*specs|forbid|forbidden|already-?done|on\s*screen)\b"
+    r"(?i)^['clips']*(?:style['clips']*lock|costume['clips']*lock|clothing['clips']*lock|wardrobe['clips']*lock|"
+    r"positioning['clips']*lock|scene['clips']*specs|forbid|forbidden|already-?done|on['clips']*screen)\b"
 )
 
 
@@ -1074,7 +1074,7 @@ def narrative_seed_from_user_prompt(prompt: str) -> str:
     if not _BAD_DIRECTIVE.search(text) and not _LOCK_BANNER_LINE.search(text):
         return text[:_SEED_CAP]
     chunks: list[str] = []
-    for part in re.split(r"(?<=[.!?])\s+|\n+", text):
+    for part in re.split(r"(?<=[.!?])['clips']+|\n+", text):
         line = part.strip().lstrip("-").strip()
         if not line:
             continue
@@ -1082,9 +1082,9 @@ def narrative_seed_from_user_prompt(prompt: str) -> str:
             continue
         # Inline lock essays (same paragraph as Action:) — cut from the banner on.
         cut = re.split(
-            r"(?i)\b(?:style\s*lock|costume\s*lock|clothing\s*lock|wardrobe\s*lock|"
-            r"positioning\s*lock|scene\s*specs|forbid|forbidden|already-?done|"
-            r"identity\s*sheets|strategy\s*=)\b",
+            r"(?i)\b(?:style['clips']*lock|costume['clips']*lock|clothing['clips']*lock|wardrobe['clips']*lock|"
+            r"positioning['clips']*lock|scene['clips']*specs|forbid|forbidden|already-?done|"
+            r"identity['clips']*sheets|strategy['clips']*=)\b",
             line,
             maxsplit=1,
         )[0].strip(" ,;.—-")
@@ -1097,7 +1097,7 @@ def narrative_seed_from_user_prompt(prompt: str) -> str:
 def _compose_cfg_for_user_origin(cfg: dict[str, Any], *, camera: str) -> dict[str, Any]:
     """Compose without re-seeding from stale storyboard beats/camera/cast_actions."""
     out = dict(cfg)
-    out["shot_action"] = ""
+    out["clip_action"] = ""
     out["character_action"] = ""
     out["cast_actions"] = {}
     out["camera"] = str(camera or "")
@@ -1127,9 +1127,9 @@ def prompt_respects_practice(
         reasons.append("too_long")
     if _BAD_DIRECTIVE.search(text):
         reasons.append("negative_or_example_or_lock_essay")
-    if not re.search(r"(?i)(?:from\s+(?:@)?image\s*\d+|(?:@)?image\s*\d+\s+is\b)", text):
+    if not re.search(r"(?i)(?:from['clips']+(?:@)?image['clips']*\d+|(?:@)?image['clips']*\d+['clips']+is\b)", text):
         reasons.append("missing_image_binding")
-    if not re.search(r"(?i)scene is as in\s+(?:@)?image\s*\d+|in the scene from\s+(?:@)?image", text):
+    if not re.search(r"(?i)scene is as in['clips']+(?:@)?image['clips']*\d+|in the scene from['clips']+(?:@)?image", text):
         reasons.append("missing_in_scene")
     for name in on_screen_names(cfg, graph):
         if name.casefold() in {n.casefold() for n in exited_names(cfg, graph)}:
@@ -1166,7 +1166,7 @@ def prompt_respects_practice(
             reasons.append("missing_prior_continue")
     # Toolbar user edits are authoritative for beat fidelity; do not force stale shot_action.
     if not honor_user_origin:
-        action = str(cfg.get("shot_action") or "").strip()
+        action = str(cfg.get("clip_action") or "").strip()
         if action and not _covers_beat(text, action):
             reasons.append("misses_storyboard_beat")
         if action and not _story_leads_prompt(text, action):
@@ -1220,7 +1220,7 @@ def _pull_labeled(prompt: str, prefixes: tuple[str, ...]) -> str:
         for line in lines:
             low = line.lower()
             rest = low[len(prefix):].lstrip() if low.startswith(prefix) else ""
-            if rest and re.match(r"^(?:\d+\s*)?:", rest):
+            if rest and re.match(r"^(?:\d+['clips']*)?:", rest):
                 value = line.split(":", 1)[-1].strip().strip(".")
                 value = re.split(
                     r"(?i)\b(?:no whip|no crash|do not|don't|never|forbid)\b",
@@ -1237,14 +1237,14 @@ def director_prepare_video_prompt(
     *,
     cfg: dict[str, Any] | None,
     graph: dict[str, Any] | None = None,
-    shot_index: int = 0,
+    clip_index: int = 0,
     model: str | None = None,
     action: str = "",
     camera: str = "",
     extra_image_labels: list[str] | None = None,
 ) -> tuple[str, list[str]]:
     """Keep a concise faithful story-form prompt; otherwise rewrite locks into narrative."""
-    del shot_index
+    del clip_index
     cfg = cfg if isinstance(cfg, dict) else {}
     user_text = resolve_user_origin_prompt(cfg, prompt)
     honor_user = bool(user_text)
@@ -1266,11 +1266,11 @@ def director_prepare_video_prompt(
         prompt, cfg=cfg, graph=graph, honor_user_origin=honor_user,
     )
     try:
-        from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
-            prompt_violates_continuity,
+        from jiuwenswarm.server.runtime.designer.pipeline.shot_consistency_contract import (
+            prompt_violates_consistency,
         )
 
-        for r in prompt_violates_continuity(prompt, cfg=cfg):
+        for r in prompt_violates_consistency(prompt, cfg=cfg):
             if r not in reasons:
                 reasons.append(r)
     except Exception:  # noqa: BLE001
@@ -1283,7 +1283,7 @@ def director_prepare_video_prompt(
         reasons = [*reasons, "wired_user_images"]
     if raw and re.search(
         r"(?i)\b(?:costume lock|positioning lock|scene specs|style lock|forbid|already-?done)\b"
-        r"|^\s*on screen\s*:",
+        r"|^['clips']*on screen['clips']*:",
         raw,
         flags=re.M,
     ):
@@ -1306,7 +1306,7 @@ def director_prepare_video_prompt(
     else:
         mined_action = (
             action
-            or str(cfg.get("shot_action") or "")
+            or str(cfg.get("clip_action") or "")
             or _pull_labeled(prompt, ("primary action", "character action", "storyboard shot", "storyboard beat", "action"))
         )
         move = _pull_labeled(prompt, ("camera move",))
@@ -1338,7 +1338,7 @@ def director_approve_video_prompt(
     *,
     cfg: dict[str, Any] | None,
     graph: dict[str, Any] | None = None,
-    shot_index: int = 0,
+    clip_index: int = 0,
     model: str | None = None,
     action: str = "",
     camera: str = "",
@@ -1369,7 +1369,7 @@ def director_approve_video_prompt(
     else:
         beat = (
             action
-            or str(cfg.get("shot_action") or "")
+            or str(cfg.get("clip_action") or "")
             or _pull_labeled(prompt, ("primary action", "character action", "storyboard shot", "storyboard beat", "action"))
         )
         cam = (
@@ -1381,7 +1381,7 @@ def director_approve_video_prompt(
         prompt,
         cfg=cfg,
         graph=graph,
-        shot_index=shot_index,
+        clip_index=clip_index,
         model=model,
         action=beat,
         camera=cam,

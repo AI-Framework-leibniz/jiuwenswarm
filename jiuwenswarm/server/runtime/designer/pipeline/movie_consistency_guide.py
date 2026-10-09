@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 
-def build_movie_continuity_guide(
+def build_movie_consistency_guide(
     *,
     style_lock: dict[str, Any] | None = None,
     spatial_lock: dict[str, Any] | None = None,
@@ -58,7 +58,7 @@ def build_movie_continuity_guide(
     )
 
 
-def continuity_guide_clause(
+def consistency_guide_clause(
     analysis: dict[str, Any] | None,
     *,
     max_chars: int = 1200,
@@ -74,7 +74,7 @@ def continuity_guide_clause(
         name = str(ch.get("name") or cid).strip()
         if cid:
             bits.append(f"{cid}={name}")
-    guide = build_movie_continuity_guide(
+    guide = build_movie_consistency_guide(
         style_lock=analysis.get("style_lock") if isinstance(analysis.get("style_lock"), dict) else None,
         spatial_lock=analysis.get("spatial_lock") if isinstance(analysis.get("spatial_lock"), dict) else None,
         cast_summary="; ".join(bits[:8]),

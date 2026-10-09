@@ -42,12 +42,12 @@ _LOCK_MARKERS = (
 )
 
 _EXIT_RE = re.compile(
-    r"\b(?:walk(?:s|ed|ing)?\s+away|leave(?:s|ing)?|left|exit(?:s|ed|ing)?|"
+    r"\b(?:walk(?:s|ed|ing)?['clips']+away|leave(?:s|ing)?|left|exit(?:s|ed|ing)?|"
     r"depart(?:s|ed|ing)?|gone)\b",
     re.I,
 )
 _ONSET_RE = re.compile(
-    r"\b(?:start(?:s|ed|ing)?|begin(?:s|ning)?)\s+(?:to\s+)?\w+",
+    r"\b(?:start(?:s|ed|ing)?|begin(?:s|ning)?)['clips']+(?:to['clips']+)?\w+",
     re.I,
 )
 # Domain-agnostic finished beats: gaze / turn / reach / check / speak onset, etc.
@@ -55,15 +55,15 @@ _BEAT_RE = re.compile(
     r"\b(?:"
     r"turn(?:s|ed|ing)?|look(?:s|ed|ing)?|gaze(?:s|d)?|glance(?:s|d)?|"
     r"face(?:s|d|ing)?|check(?:s|ed|ing)?|reach(?:es|ed|ing)?|"
-    r"pick(?:s|ed|ing)?\s+up|open(?:s|ed|ing)?|grab(?:s|bed|bing)?|"
-    r"point(?:s|ed|ing)?|nod(?:s|ded|ding)?|stand(?:s|ing)?\s+up|"
-    r"sit(?:s|ting)?\s+down|arrive(?:s|d|ing)?|enter(?:s|ed|ing)?"
+    r"pick(?:s|ed|ing)?['clips']+up|open(?:s|ed|ing)?|grab(?:s|bed|bing)?|"
+    r"point(?:s|ed|ing)?|nod(?:s|ded|ding)?|stand(?:s|ing)?['clips']+up|"
+    r"sit(?:s|ting)?['clips']+down|arrive(?:s|d|ing)?|enter(?:s|ed|ing)?"
     r")\b",
     re.I,
 )
 _CROWD_WORD_RE = re.compile(
     r"\b(?:crowd|colleagues?|coworkers?|extras?|bystanders?|people|"
-    r"office\s+floor|staff|workers|passers[- ]?by)\b",
+    r"office['clips']+floor|staff|workers|passers[- ]?by)\b",
     re.I,
 )
 
@@ -73,7 +73,7 @@ def extract_finished_events(
     *,
     characters: list[dict[str, Any]] | None = None,
     on_screen: list[str] | None = None,
-    shot_index: int | None = None,
+    clip_index: int | None = None,
 ) -> list[dict[str, str]]:
     """Typed already-done events from prior Wan/storyboard text (domain-agnostic).
 
@@ -85,7 +85,7 @@ def extract_finished_events(
         return []
     names = character_name_map(characters)
     present = [str(x) for x in (on_screen or []) if str(x).strip()] or list(names)
-    prefix = f"shot {shot_index}: " if shot_index else ""
+    prefix = f"shot {clip_index}: " if clip_index else ""
     events: list[dict[str, str]] = []
 
     def add(kind: str, note: str, cid: str = "") -> None:
@@ -224,7 +224,7 @@ def narrative_from_wan_prompt(text: str, *, limit: int = 2500) -> str:
         lines.append(line)
     cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
     if not cleaned:
-        cleaned = re.sub(r"\s+", " ", raw)[:limit]
+        cleaned = re.sub(r"['clips']+", " ", raw)[:limit]
     return cleaned[:limit]
 
 def seat_anchors_from_cfg(cfg: dict[str, Any] | None) -> dict[str, dict[str, str]]:
@@ -326,7 +326,7 @@ def agent_prior_story_block(cfg: dict[str, Any] | None) -> str:
     mining only; leaf context uses storyboard-derived end_state fields.
     """
     try:
-        from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
+        from jiuwenswarm.server.runtime.designer.pipeline.shot_consistency_contract import (
             agent_structured_continuity_block,
         )
 
@@ -336,7 +336,7 @@ def agent_prior_story_block(cfg: dict[str, Any] | None) -> str:
         action = str(cfg.get("previous_clip_action") or "").strip()
         if not action:
             return ""
-        idx = cfg.get("previous_clip_shot_index") or ""
+        idx = cfg.get("previous_clip_clip_index") or ""
         return (
             f"CONTINUITY STATE (prior shot {idx} finished — structured only):\n"
             f"- Prior action finished: {action[:220]}"
@@ -367,7 +367,7 @@ def apply_story_state_to_next_cfg(
     from_cfg: dict[str, Any] | None = None,
     from_prompt: str = "",
     from_action: str = "",
-    from_shot_index: int = 0,
+    from_clip_index: int = 0,
     graph: dict[str, Any] | None = None,
     characters: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -393,14 +393,14 @@ def apply_story_state_to_next_cfg(
     except Exception:  # noqa: BLE001
         pass
     narrative = narrative_from_wan_prompt(from_prompt, limit=2500)
-    action = str(from_action or src.get("shot_action") or "").strip()
+    action = str(from_action or src.get("clip_action") or "").strip()
     seed = " ".join(x for x in (action, narrative) if x)
     src_on = on_screen_ids(src)
     events = extract_finished_events(
         seed,
         characters=characters,
         on_screen=src_on,
-        shot_index=from_shot_index,
+        clip_index=from_clip_index,
     )
     done = [str(x).strip() for x in (cfg.get("already_done") or []) if str(x).strip()]
     for item in events:
@@ -417,8 +417,8 @@ def apply_story_state_to_next_cfg(
         cfg["previous_clip_wan_prompt"] = action[:2500]
     if action:
         cfg["previous_clip_action"] = action[:220]
-    if from_shot_index:
-        cfg["previous_clip_shot_index"] = int(from_shot_index)
+    if from_clip_index:
+        cfg["previous_clip_clip_index"] = int(from_clip_index)
 
     cfg = stamp_continuity_story_fields(
         cfg,
@@ -491,11 +491,11 @@ def _hold_from_beat_note(note: str) -> str:
         return ""
     # "Name already finished: <clause> — …" → "Name is already past: <clause>."
     m = re.match(
-        r"(?i)^(?:shot\s+\d+:\s*)?(?P<body>.+?)\s*(?:—|-)\s*open this shot",
+        r"(?i)^(?:shot['clips']+\d+:['clips']*)?(?P<body>.+?)['clips']*(?:—|-)['clips']*open this shot",
         raw,
     )
     body = (m.group("body") if m else raw).strip().rstrip(".")
-    body = re.sub(r"(?i)\balready finished:\s*", "already past: ", body)
+    body = re.sub(r"(?i)\balready finished:['clips']*", "already past: ", body)
     body = re.sub(r"(?i)\bmotion onset already happened.*", "already mid-action", body)
     if not body:
         return ""
@@ -582,7 +582,7 @@ def infer_crowd_state(
             # Explicit off-camera rule wins.
             if re.search(r"(?i)\b(?:off[- ]?camera|elsewhere|out of frame|corridor|hallway)\b", rule):
                 disposition = "off_camera"
-            elif re.search(r"(?i)\b(?:empty|cleared|deserted|no\s+crowd|nobody)\b", rule):
+            elif re.search(r"(?i)\b(?:empty|cleared|deserted|no['clips']+crowd|nobody)\b", rule):
                 disposition = "empty"
             elif re.search(r"(?i)\b(?:background|distant|far)\b", rule):
                 disposition = "background_hold"

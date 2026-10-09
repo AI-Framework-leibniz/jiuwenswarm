@@ -19,17 +19,17 @@ from jiuwenswarm.common.schema.designer_graph import (
 )
 
 _SHOT_REFERENCE = re.compile(
-    r"(?:\bshot\s*#?\s*|分镜\s*#?\s*|镜头\s*#?\s*)([1-9]\d*)(?![0-9A-Za-z_])",
+    r"(?:\bshot['clips']*#?['clips']*|分镜['clips']*#?['clips']*|镜头['clips']*#?['clips']*)([1-9]\d*)(?![0-9A-Za-z_])",
     re.I,
 )
 _CONTINUITY_REFERENCE = re.compile(
-    r"(?:承接|延续|接续|continu(?:ing|es?)\s+from)\s*(?:shot|分镜|镜头)\s*#?\s*([1-9]\d*)",
+    r"(?:承接|延续|接续|continu(?:ing|es?)['clips']+from)['clips']*(?:shot|分镜|镜头)['clips']*#?['clips']*([1-9]\d*)",
     re.I,
 )
 # Duration units after a captured number — not a shot index (e.g. 每个镜头 5 秒).
 # Chinese units must not require \b: 秒的节奏 has no word boundary after 秒.
 _DURATION_AFTER = re.compile(
-    r"^\s*(?:"
+    r"^['clips']*(?:"
     r"秒钟|秒|"
     r"seconds?\b|secs?\b|s\b|"
     r"分钟|"
@@ -39,12 +39,12 @@ _DURATION_AFTER = re.compile(
 )
 # Distributive quantifiers immediately before 镜头/shot/分镜.
 _DISTRIBUTIVE_BEFORE = re.compile(
-    r"(?:每个|每一|各|每|each|every|per)\s*$",
+    r"(?:每个|每一|各|每|each|every|per)['clips']*$",
     re.I,
 )
 _REMOVED_SHOT_MARKER = re.compile(r"\[\[REMOVED_SHOT:[^\]]+\]\]")
 _SHOT_HEADING_TITLE = re.compile(
-    r"(?:shot|分镜|镜头)\s*#?\s*([1-9]\d*)\b.*",
+    r"(?:shot|分镜|镜头)['clips']*#?['clips']*([1-9]\d*)\b.*",
     re.I,
 )
 
@@ -52,7 +52,7 @@ _SHOT_HEADING_TITLE = re.compile(
 # Authored generation prose; derived copies and document bodies are synchronized later.
 NODE_PROSE_FIELDS = (
     "prompt",
-    "shot_action",
+    "clip_action",
     "shot_title",
     "camera",
     "cast_actions",
@@ -69,7 +69,7 @@ NODE_PROSE_FIELDS = (
 )
 
 
-def _is_shot_index_reference(text: str, match: re.Match[str]) -> bool:
+def _is_clip_index_reference(text: str, match: re.Match[str]) -> bool:
     """True when the match names a concrete shot index, not a duration/distributive idiom."""
     after = text[match.end(1) :]
     if _DURATION_AFTER.match(after):
@@ -83,7 +83,7 @@ def _is_shot_index_reference(text: str, match: re.Match[str]) -> bool:
 def iter_shot_reference_matches(text: str) -> Iterator[re.Match[str]]:
     """Yield `_SHOT_REFERENCE` matches that are real shot indices."""
     for match in _SHOT_REFERENCE.finditer(text or ""):
-        if _is_shot_index_reference(text, match):
+        if _is_clip_index_reference(text, match):
             yield match
 
 
@@ -97,7 +97,7 @@ def map_shot_references(text: str, targets: dict[int, tuple[str, int | None]]) -
     source = text or ""
 
     def replace(match: re.Match[str]) -> str:
-        if not _is_shot_index_reference(source, match):
+        if not _is_clip_index_reference(source, match):
             return match[0]
         target = targets.get(int(match[1]))
         if target is None:
@@ -131,7 +131,7 @@ def missing_shot_tombstones(
 
 
 def _collapse_blank_lines(text: str) -> str:
-    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"[ ['clips']]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
@@ -159,7 +159,7 @@ def _drop_missing_shot_sections(text: str, missing: set[int]) -> str:
     skip_level = 0
     for line in lines:
         stripped = line.strip()
-        heading = re.match(r"^(#{1,6})\s+(.+)$", stripped)
+        heading = re.match(r"^(#{1,6})['clips']+(.+)$", stripped)
         bold = (
             stripped.startswith("**")
             and stripped.endswith("**")
@@ -199,7 +199,7 @@ def _neutralize_inline_missing_refs(text: str, missing: set[int]) -> str:
         return text
 
     def replace_shot(match: re.Match[str]) -> str:
-        if not _is_shot_index_reference(text, match):
+        if not _is_clip_index_reference(text, match):
             return match[0]
         if int(match[1]) in missing:
             return ""
@@ -214,10 +214,10 @@ def _neutralize_inline_missing_refs(text: str, missing: set[int]) -> str:
 
     out = _CONTINUITY_REFERENCE.sub(replace_continuity, out)
     # Clean orphaned chain arrows left after dropping a missing index.
-    out = re.sub(r"[→\-–—]+(?:\s*[→\-–—]+)+", "→", out)
-    out = re.sub(r"(?:^|[\s,，、])[→\-–—]+", " ", out)
-    out = re.sub(r"[→\-–—]+(?:\s|$)", " ", out)
-    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"[→\-–—]+(?:['clips']*[→\-–—]+)+", "→", out)
+    out = re.sub(r"(?:^|[['clips'],，、])[→\-–—]+", " ", out)
+    out = re.sub(r"[→\-–—]+(?:['clips']|$)", " ", out)
+    out = re.sub(r"[ ['clips']]{2,}", " ", out)
     return out
 
 

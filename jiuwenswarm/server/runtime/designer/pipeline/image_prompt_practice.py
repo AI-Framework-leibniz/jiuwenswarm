@@ -16,7 +16,7 @@ _BAD = re.compile(
     r"\bstyle lock\b|\bspatial lock\b|\baspect lock\b|\btime of day lock\b|"
     r"\bclothing lock\b|\bstaging lock\b|\bfor example\b|\be\.g\.\b)"
 )
-_SETTING_ID = re.compile(r"(?i)^(set|scene|setting)[_\s-]?\d+$")
+_SETTING_ID = re.compile(r"(?i)^(set|scene|setting)[_['clips']-]?\d+$")
 _INSTRUCTION_PLACE = re.compile(
     r"(?i)("
     r"keep one coherent|one coherent interior|coherent scene|primary setting|"
@@ -47,7 +47,7 @@ def _cfg(cfg: dict[str, Any] | None) -> dict[str, Any]:
 def _style_look(cfg: dict[str, Any]) -> str:
     style = cfg.get("style_lock") if isinstance(cfg.get("style_lock"), dict) else {}
     look = str(style.get("look") or style.get("medium") or "").strip()
-    look = re.split(r"\s+[—–-]\s+|\bnever\b|\bno style\b", look, maxsplit=1, flags=re.I)[0]
+    look = re.split(r"['clips']+[—–-]['clips']+|\bnever\b|\bno style\b", look, maxsplit=1, flags=re.I)[0]
     return look.strip(" .;")
 
 
@@ -87,18 +87,18 @@ def _visual_lighting(text: str) -> str:
     """Drop planner clauses. Keep only the light the image can show."""
     body = re.split(r"(?i)\b(?:do not|don't|never|forbid)\b", str(text or ""), maxsplit=1)[0]
     body = re.sub(
-        r"(?i)\s*;?\s*keep\s+[\w /+-]+\s+across\s+same-setting\s+shots",
+        r"(?i)['clips']*;?['clips']*keep['clips']+[\w /+-]+['clips']+across['clips']+same-setting['clips']+shots",
         "",
         body,
     )
-    body = re.sub(r"(?i)\s*;?\s*no relight mid-scene", "", body)
+    body = re.sub(r"(?i)['clips']*;?['clips']*no relight mid-scene", "", body)
     return body.strip(" ,;.—-")
 
 
 def visual_place_name(text: Any) -> str:
     """A place the image model can draw. Setting ids and lock sentences are not places."""
     raw = str(text or "").strip()
-    raw = re.sub(r"(?i)^(set|scene|setting)[_\s-]?\d+\s*[:.\-]\s*", "", raw).strip()
+    raw = re.sub(r"(?i)^(set|scene|setting)[_['clips']-]?\d+['clips']*[:.\-]['clips']*", "", raw).strip()
     if not raw or _SETTING_ID.match(raw) or _INSTRUCTION_PLACE.search(raw):
         return ""
     if _PLACEHOLDER_PROP.search(raw) or _BAD.search(raw):
@@ -182,7 +182,7 @@ def looks_like_lock_essay(prompt: str) -> bool:
         return True
     if _BAD.search(text):
         return True
-    if re.search(r"(?i)\b(?:STYLE|SPATIAL|ASPECT|TIME OF DAY|CLOTHING|STAGING)\s+LOCK\b", text):
+    if re.search(r"(?i)\b(?:STYLE|SPATIAL|ASPECT|TIME OF DAY|CLOTHING|STAGING)['clips']+LOCK\b", text):
         return True
     return False
 
@@ -223,7 +223,7 @@ def compose_scene_specs_prompt(
     if seed_text and not looks_like_lock_essay(seed_text) and len(seed_text) < 400:
         bits.insert(1, seed_text.rstrip(".") + ".")
     text = " ".join(b for b in bits if b)
-    return re.sub(r"\s+", " ", text).strip()[:2200]
+    return re.sub(r"['clips']+", " ", text).strip()[:2200]
 
 
 def compose_character_sheet_prompt(
@@ -261,7 +261,7 @@ def compose_character_sheet_prompt(
     if seed_text and not looks_like_lock_essay(seed_text) and len(seed_text) < 300:
         bits.insert(1, seed_text.rstrip(".") + ".")
     text = " ".join(b for b in bits if b)
-    return re.sub(r"\s+", " ", text).strip()[:2200]
+    return re.sub(r"['clips']+", " ", text).strip()[:2200]
 
 
 def ensure_still_tool_prompt(
@@ -295,7 +295,7 @@ def ensure_still_tool_prompt(
     if role_l in {"scene"} or "scene" in role_l:
         if looks_like_lock_essay(text) or not text:
             text = compose_scene_specs_prompt(cfg=cfg, graph=graph, seed="")
-            notes.append("still_rewrote_scene_plate")
+            notes.append("still_rewrote_scene_specs")
         else:
             # Soft fill missing ToD / style as positive prose.
             pl = text.lower()
@@ -308,7 +308,7 @@ def ensure_still_tool_prompt(
             if look and not _style_is_covered(text, look):
                 text = (text.rstrip(".") + f". {look}.").strip()
                 notes.append("still_cover_style")
-    elif role_l in {"character", "character_design"} or "character" in role_l:
+    elif role_l in {"character", "character"} or "character" in role_l:
         if looks_like_lock_essay(text) or not text:
             text = compose_character_sheet_prompt(cfg=cfg, graph=graph, seed="")
             notes.append("still_rewrote_character_sheet")

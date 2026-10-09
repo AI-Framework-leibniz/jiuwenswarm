@@ -21,7 +21,7 @@ from urllib.parse import unquote, urlparse
 
 from jiuwenswarm.common.schema.designer_graph import (
     NODE_ROLE_BRIEF,
-    NODE_ROLE_CHARACTER_DESIGN,
+    NODE_ROLE_CHARACTER,
     NODE_ROLE_CLIP,
     NODE_ROLE_SCENE,
     NODE_TYPE_AUDIO,
@@ -543,7 +543,7 @@ def attach_user_reference_nodes(graph: dict[str, Any]) -> list[str]:
     cast_nodes = [
         n
         for n in nodes
-        if node_pipeline(n) == NODE_ROLE_CHARACTER_DESIGN and str(n.get("id") or "")
+        if node_pipeline(n) == NODE_ROLE_CHARACTER and str(n.get("id") or "")
     ]
     scene_nodes = [
         n

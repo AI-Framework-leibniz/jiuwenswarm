@@ -65,7 +65,7 @@ _STALE = (
     "architecture=keep one coherent place; static_rule=STATIC OBJECTS LOCKED "
     "Later same-setting keyframes reuse"
 )
-_ROLES = ("scene", "character", "character_design", "frame", "keyframe")
+_ROLES = ("scene", "character", "character", "frame", "keyframe")
 
 
 def _pick(items: tuple, index: int, salt: int = 0):

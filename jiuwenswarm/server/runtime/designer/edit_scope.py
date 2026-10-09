@@ -23,12 +23,12 @@ _CN_CHANGE = re.compile(
     r"(?:把|将)(?P<old>.{1,80}?)(?:统一)?(?:改成|改为|换成|变成)(?P<new>.{1,40}?)(?:[，。,.;；]|$)"
 )
 _EN_CHANGE = re.compile(
-    r"\b(?:change|recolor|turn)\s+(?P<old>.{1,80}?)\s+(?:in)?to\s+(?P<new>.{1,40}?)(?:[.,;]|$)",
+    r"\b(?:change|recolor|turn)['clips']+(?P<old>.{1,80}?)['clips']+(?:in)?to['clips']+(?P<new>.{1,40}?)(?:[.,;]|$)",
     re.I,
 )
 _REWRITE = re.compile(r"重写|改写|改得|重新设计|整段|rewrite|restyle", re.I)
 _ALL_SCOPE = re.compile(r"所有|全部|每一|全都|凡是|\ball\b|\bevery\b|\beach\b", re.I)
-_BOUNDARY = set("的中里及与和、，。；：,.; \n\t把将")
+_BOUNDARY = set("的中里及与和、，。；：,.; \n['clips']把将")
 _MEASURE = set("只个条辆张件台些双对")
 _NUMBER = set("0123456789一二两三四五六七八九十几")
 _IGNORE = _MEASURE | _NUMBER | set("的")
@@ -254,7 +254,7 @@ def _sweep(text: str, spec: _Spec, spans: list[tuple[int, int]] | None = None) -
     for qualifier in spec.qualifiers:
         if spec.source.isascii():
             pattern = re.compile(
-                rf"\b{re.escape(qualifier)}\s+{re.escape(spec.dest)}\b",
+                rf"\b{re.escape(qualifier)}['clips']+{re.escape(spec.dest)}\b",
                 re.I,
             )
         else:
@@ -363,7 +363,7 @@ def _used_as_verb(corpus: str, token: str, spec: _Spec) -> bool:
     """A word that also takes the named object after a measure is a verb, not a second object."""
     if spec.source.isascii():
         return re.search(
-            rf"\b{re.escape(token)}\s+(?:a|an|the|one|several|some)\s+{re.escape(spec.source)}\b",
+            rf"\b{re.escape(token)}['clips']+(?:a|an|the|one|several|some)['clips']+{re.escape(spec.source)}\b",
             corpus,
             re.I,
         ) is not None
@@ -386,7 +386,7 @@ def _right_is_noun(text: str, pos: int, spec: _Spec) -> bool:
     if tail and text.startswith(tail, pos):
         return True
     if spec.source.isascii():
-        match = re.match(r"\s*([A-Za-z]+)", text[pos:])
+        match = re.match(r"['clips']*([A-Za-z]+)", text[pos:])
         noun = spec.old_core.split()[-1]
         return bool(match and match.group(1).lower().rstrip("s") == noun.lower().rstrip("s"))
     if pos < len(text) and (text[pos] in tail or text[pos] == spec.old_core[-1]):

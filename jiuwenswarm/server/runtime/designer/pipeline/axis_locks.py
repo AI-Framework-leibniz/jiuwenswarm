@@ -15,7 +15,7 @@ from typing import Any
 
 _MALE_RE = re.compile(
     r"\b(?:boy|son|father|dad|man|male|brother|husband|gentleman|"
-    r"young\s+man)\b",
+    r"young['clips']+man)\b",
     re.I,
 )
 # Note: bare "he/him/his" omitted — "his partner" was flipping partner to male.
@@ -27,18 +27,18 @@ _FEMALE_RE = re.compile(
 _CHILD_RE = re.compile(r"\b(?:child|kid|boy|girl|son|daughter|toddler|infant)\b", re.I)
 _ADULT_RE = re.compile(r"\b(?:father|mother|dad|mom|man|woman|adult|teen)\b", re.I)
 _CROSS_RE = re.compile(
-    r"\b(?:cross(?:es|ing)?|walks?\s+to\s+the\s+other|swaps?\s+sides|moves?\s+left|moves?\s+right)\b",
+    r"\b(?:cross(?:es|ing)?|walks?['clips']+to['clips']+the['clips']+other|swaps?['clips']+sides|moves?['clips']+left|moves?['clips']+right)\b",
     re.I,
 )
 _VERTICAL_RE = re.compile(
-    r"\b(?:vertical|9\s*[:x]\s*16|tiktok|reels|shorts|portrait\s+video)\b|竖屏",
+    r"\b(?:vertical|9['clips']*[:x]['clips']*16|tiktok|reels|shorts|portrait['clips']+video)\b|竖屏",
     re.I,
 )
 _SQUARE_RE = re.compile(
-    r"\b(?:1\s*[:x]\s*1|square\s+(?:frame|video|format)|square\s+\d{3,4}\s*p)\b",
+    r"\b(?:1['clips']*[:x]['clips']*1|square['clips']+(?:frame|video|format)|square['clips']+\d{3,4}['clips']*p)\b",
     re.I,
 )
-_ULTRAWIDE_RE = re.compile(r"\b(?:21\s*[:x]\s*9|cinemascope|ultrawide)\b", re.I)
+_ULTRAWIDE_RE = re.compile(r"\b(?:21['clips']*[:x]['clips']*9|cinemascope|ultrawide)\b", re.I)
 
 
 def infer_aspect_lock(prompt: str) -> dict[str, str]:
@@ -206,7 +206,7 @@ def infer_demographics(ch: dict[str, Any]) -> dict[str, str]:
         str(ch.get(k) or "") for k in ("name", "role", "description", "costume_lock")
     )
     # Drop possessive "his/her X" so "his partner" does not mark the partner male.
-    blob_sex = re.sub(r"\b(?:his|her|their)\s+", " ", blob, flags=re.I)
+    blob_sex = re.sub(r"\b(?:his|her|their)['clips']+", " ", blob, flags=re.I)
     male = bool(_MALE_RE.search(blob_sex))
     female = bool(_FEMALE_RE.search(blob_sex))
     if male and not female:
@@ -246,7 +246,7 @@ def stamp_axis_locks(analysis: dict[str, Any]) -> dict[str, Any]:
     """Heuristic 180-degree + occupancy + landmark floor on analysis (mutates copy)."""
     out = analysis if isinstance(analysis, dict) else {}
     characters = [c for c in (out.get("characters") or []) if isinstance(c, dict)]
-    shots = [s for s in (out.get("shots") or []) if isinstance(s, dict)]
+    shots = [s for s in (out.get("clips") or []) if isinstance(s, dict)]
     by_id = {str(c.get("id")): c for c in characters if c.get("id")}
 
     for ch in characters:
@@ -358,7 +358,7 @@ def stamp_axis_locks(analysis: dict[str, Any]) -> dict[str, Any]:
         ),
     }
     out["characters"] = characters
-    out["shots"] = shots
+    out["clips"] = shots
     return out
 
 
@@ -448,7 +448,7 @@ def apply_aspect_to_node_config(cfg: dict[str, Any], aspect: dict[str, Any] | No
     if not isinstance(cfg, dict) or not isinstance(aspect, dict):
         return
     role = str(cfg.get("role") or "")
-    if role in {"character", "character_design", "scene", "frame", "keyframe"}:
+    if role in {"character", "character", "scene", "frame", "keyframe"}:
         if aspect.get("image_size"):
             cfg["image_size"] = aspect["image_size"]
     if role == "clip":
@@ -490,8 +490,8 @@ def apply_axis_locks_to_graph(graph: dict[str, Any]) -> list[str]:
         except Exception:  # noqa: BLE001
             style = {}
     shots = {
-        int(s.get("shot_index") or 0): s
-        for s in (analysis.get("shots") or [])
+        int(s.get("clip_index") or 0): s
+        for s in (analysis.get("clips") or [])
         if isinstance(s, dict)
     }
     clause_global = format_axis_clause({}, analysis)
@@ -513,15 +513,15 @@ def apply_axis_locks_to_graph(graph: dict[str, Any]) -> list[str]:
             cfg.setdefault("role", "clip")
             role = "clip"
         elif "character" in role:
-            cfg.setdefault("role", "character_design")
-            role = "character_design"
+            cfg.setdefault("role", "character")
+            role = "character"
         elif "scene" in role:
             cfg.setdefault("role", "scene")
             role = "scene"
         apply_aspect_to_node_config(cfg, aspect)
-        idx = int(cfg.get("shot_index") or 0)
+        idx = int(cfg.get("clip_index") or 0)
         clause = format_axis_clause(shots.get(idx), analysis) if idx else clause_global
-        if role in {"scene", "frame", "keyframe", "clip", "character", "character_design"} and clause:
+        if role in {"scene", "frame", "keyframe", "clip", "character", "character"} and clause:
             gen = dict(cfg.get("generate") or {}) if isinstance(cfg.get("generate"), dict) else {}
             prev = str(gen.get("prompt") or cfg.get("prompt") or "")
             needs = (

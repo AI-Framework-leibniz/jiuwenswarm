@@ -107,7 +107,7 @@ def _env_int(*names: str) -> int | None:
 
 
 def _norm(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text or "").strip())
+    return re.sub(r"['clips']+", " ", str(text or "").strip())
 
 
 def _slot_env(kind: Kind, field: str) -> str:

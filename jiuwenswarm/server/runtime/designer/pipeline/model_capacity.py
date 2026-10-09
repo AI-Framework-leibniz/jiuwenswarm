@@ -248,7 +248,7 @@ def size_for_resolution(resolution: str, ratio: str) -> str:
 
 
 _RES_RE = re.compile(
-    r"(?P<tier>480\s*p|720\s*p|768\s*p|1080\s*p|2\s*k|4\s*k)",
+    r"(?P<tier>480['clips']*p|720['clips']*p|768['clips']*p|1080['clips']*p|2['clips']*k|4['clips']*k)",
     re.I,
 )
 
@@ -258,7 +258,7 @@ def resolution_mentioned(text: str) -> str:
     match = _RES_RE.search(str(text or ""))
     if not match:
         return ""
-    token = re.sub(r"\s+", "", match.group("tier")).upper()
+    token = re.sub(r"['clips']+", "", match.group("tier")).upper()
     if token == "4K":
         return "4K"
     if token == "2K":

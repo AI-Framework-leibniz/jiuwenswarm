@@ -25,14 +25,14 @@ def _use_wan(monkeypatch) -> None:
 
 
 def _graph(prompt: str, *, director: str = "") -> dict:
-    analysis: dict = {"characters": [], "shots": []}
+    analysis: dict = {"characters": [], "clips": []}
     if director:
         analysis["video_resolution"] = director
     return {
         "description": prompt,
         "metadata": {"user_prompt": prompt, "script_analysis": analysis},
         "nodes": [
-            {"id": "char", "type": "image", "config": {"role": "character_design"}},
+            {"id": "char", "type": "image", "config": {"role": "character"}},
             {"id": "scene", "type": "image", "config": {"role": "scene"}},
             {"id": "frame", "type": "image", "config": {"role": "frame"}},
             {"id": "keyframe", "type": "image", "config": {"role": "keyframe"}},
@@ -183,9 +183,9 @@ def test_smart_graph_shot_character_and_scene_follow_user_resolution(monkeypatch
             "scenes": [
                 {"id": "set_1", "name": "Clearing", "description": "A forest clearing in morning light"}
             ],
-            "shots": [
+            "clips": [
                 {
-                    "shot_index": 1,
+                    "clip_index": 1,
                     "title": "Wave",
                     "action": "The bear waves.",
                     "camera": "medium",
@@ -204,7 +204,7 @@ def test_smart_graph_shot_character_and_scene_follow_user_resolution(monkeypatch
     for cfg in by_role["clip"]:
         assert cfg["video_resolution"] == "720P"
         assert cfg["video_size"] == "1280*720"
-    for role in ("character_design", "scene"):
+    for role in ("character", "scene"):
         assert by_role[role]
         for cfg in by_role[role]:
             assert cfg.get("video_resolution") != "480P"

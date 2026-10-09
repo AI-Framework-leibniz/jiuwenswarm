@@ -21,7 +21,7 @@ from jiuwenswarm.common.schema.designer_graph import (
     AssetRef,
     DesignerGraphNode,
     node_pipeline,
-    node_shot_index,
+    node_clip_index,
 )
 from jiuwenswarm.server.runtime.designer.handlers import common as handler_io
 from jiuwenswarm.server.runtime.designer.handlers.common import role_output_text
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 _VIDEO_SUFFIXES = {".mp4", ".webm", ".mov", ".m4v"}
 _STREAM_SIZE = re.compile(r"Stream #0:\d+.*.*?Video:.*?(\d{2,5})x(\d{2,5})")
-_MEDIA_DURATION = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
+_MEDIA_DURATION = re.compile(r"Duration:['clips']*(\d+):(\d+):(\d+(?:\.\d+)?)")
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 
@@ -67,7 +67,7 @@ def _run_ffmpeg(ffmpeg: str, args: list[str]) -> subprocess.CompletedProcess[str
 
 
 def _concat_file_line(path: Path) -> str:
-    posix = path.resolve().as_posix().replace("'", r"'\''")
+    posix = path.resolve().as_posix().replace("'", r"'['clips']'")
     return f"file '{posix}'"
 
 
@@ -389,7 +389,7 @@ def collect_clip_video_paths(ctx: NodeExecutionContext) -> list[Path]:
     states = (ctx.run or {}).get("node_states") or {}
     clips = sorted(
         [node for node in (ctx.graph.get("nodes") or []) if node_pipeline(node) == NODE_ROLE_CLIP],
-        key=node_shot_index,
+        key=node_clip_index,
     )
     # Prefer edged clips when present, but never drop other completed clips.
     pred_ids = {
@@ -412,7 +412,7 @@ def collect_clip_video_paths(ctx: NodeExecutionContext) -> list[Path]:
             state = {}
         path = _video_from_state(state, require_completed=True)
         if path is None:
-            missing.append(node_id or f"shot {node_shot_index(node)}")
+            missing.append(node_id or f"shot {node_clip_index(node)}")
             continue
         paths.append(path)
 

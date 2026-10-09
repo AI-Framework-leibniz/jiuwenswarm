@@ -11,21 +11,21 @@ def infer_continuity_lock(action: str) -> dict[str, str]:
     """Derive a short motion/geography lock from shot action text (domain-agnostic)."""
     text = (action or "").lower()
     lock: dict[str, str] = {}
-    if re.search(r"walk(?:s|ing)?\s+away|leave|leaving|exit(?:s|ing)?\b|depart", text):
+    if re.search(r"walk(?:s|ing)?['clips']+away|leave|leaving|exit(?:s|ing)?\b|depart", text):
         lock["motion"] = "subject_exits_away"
         lock["facing"] = "moving_away_from_speaker_or_camera_subject"
         lock["forbid"] = "do_not_walk_toward_the_speaker_or_toward_camera_subject"
     elif re.search(
-        r"walk(?:s|ing)?\s+(?:towards|toward|to)\b|approach|approaching|come\s+(?:closer|near)",
+        r"walk(?:s|ing)?['clips']+(?:towards|toward|to)\b|approach|approaching|come['clips']+(?:closer|near)",
         text,
     ):
         lock["motion"] = "subject_approaches"
         lock["facing"] = "moving_toward_speaker_or_camera_subject"
         lock["forbid"] = "do_not_walk_away_from_the_speaker"
-    elif re.search(r"facing\s+away|back\s+to\s+(?:the\s+)?(?:camera|speaker)", text):
+    elif re.search(r"facing['clips']+away|back['clips']+to['clips']+(?:the['clips']+)?(?:camera|speaker)", text):
         lock["facing"] = "back_to_camera_or_speaker"
         lock["forbid"] = "do_not_face_toward_camera_unless_cut_requires"
-    if re.search(r"behind\s+(?:the\s+)?camera|off[- ]?screen\s+voice|voice\s+off", text):
+    if re.search(r"behind['clips']+(?:the['clips']+)?camera|off[- ]?screen['clips']+voice|voice['clips']+off", text):
         lock["speaker_placement"] = "speaker_behind_or_off_camera"
     if re.search(r"speak(?:s|ing)?|talk(?:s|ing)?|say(?:s|ing)?|narrat", text):
         lock["audio_beat"] = "speech_present_in_beat"

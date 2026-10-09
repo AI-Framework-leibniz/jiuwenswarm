@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 _ROLE_ALIASES: dict[str, str] = {
     "brief": "brief",
     "character": "character",
-    "character_design": "character",
+    "character": "character",
     "scene": "scene",
     "storyboard": "storyboard",
     "frame": "frame",
@@ -63,7 +63,7 @@ def load_skill(*keys: str) -> str:
     """Return first matching skill markdown body (without YAML frontmatter if present)."""
     index = _skill_index()
     for key in keys:
-        norm = str(key or "").strip().lower().replace("\\", "/")
+        norm = str(key or "").strip().lower().replace("['clips']", "/")
         if not norm:
             continue
         path = index.get(norm) or index.get(norm.split("/")[-1])
@@ -227,7 +227,7 @@ def _tool_skills_for_role(role: str) -> str:
     chunks: list[str] = []
     if role_l in {
         "character",
-        "character_design",
+        "character",
         "frame",
         "keyframe",
         "scene",

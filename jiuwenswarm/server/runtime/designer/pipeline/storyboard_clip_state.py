@@ -14,7 +14,7 @@ from typing import Any
 
 
 def _short(text: str, *, limit: int = 200) -> str:
-    return re.sub(r"\s+", " ", str(text or "").strip())[:limit]
+    return re.sub(r"['clips']+", " ", str(text or "").strip())[:limit]
 
 
 def _as_state(raw: Any) -> dict[str, Any]:
@@ -106,9 +106,9 @@ def _infer_start_from_shot(shot: dict[str, Any]) -> dict[str, Any]:
 
 
 def _norm_phrase(text: str) -> str:
-    body = re.sub(r"\s+", " ", str(text or "").strip().lower()).rstrip(".")
+    body = re.sub(r"['clips']+", " ", str(text or "").strip().lower()).rstrip(".")
     return re.sub(
-        r"^(after this shot|by the last frame|the earlier event is already finished)\s*:\s*",
+        r"^(after this shot|by the last frame|the earlier event is already finished)['clips']*:['clips']*",
         "",
         body,
     )
@@ -116,7 +116,7 @@ def _norm_phrase(text: str) -> str:
 
 def _is_action_restatement(text: str, *actions: str) -> bool:
     """True when text is the previous shot's motion, not a still result."""
-    raw = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    raw = re.sub(r"['clips']+", " ", str(text or "").strip().lower())
     if "after this shot" in raw or "already past:" in raw:
         return True
     body = _norm_phrase(text)
@@ -140,7 +140,7 @@ def _hold_state(state: dict[str, Any], *actions: str) -> dict[str, Any]:
 
 
 def _infer_end_from_shot(shot: dict[str, Any]) -> dict[str, Any]:
-    action = _short(str(shot.get("action") or shot.get("keyframe_prompt") or ""), limit=220)
+    action = _short(str(shot.get("action") or shot.get("clip_prompt") or ""), limit=220)
     result = _short(str(shot.get("irreversible") or ""), limit=160)
     speech = _short(str(shot.get("speech_line") or ""), limit=160)
     exiting = [
@@ -350,7 +350,7 @@ def ensure_shot_start_end_states(
             continue
         shot = dict(raw)
         sid = str(shot.get("setting_id") or "set_1").strip() or "set_1"
-        action = str(shot.get("action") or shot.get("keyframe_prompt") or "")
+        action = str(shot.get("action") or shot.get("clip_prompt") or "")
         start = normalize_shot_state(shot.get("start_state"))
         end = normalize_shot_state(shot.get("end_state"))
         if not start:
@@ -393,7 +393,7 @@ def validate_storyboard_state_chain(
     for shot in shots or []:
         if not isinstance(shot, dict):
             continue
-        idx = int(shot.get("shot_index") or 0) or "?"
+        idx = int(shot.get("clip_index") or 0) or "?"
         sid = str(shot.get("setting_id") or "").strip() or "set_1"
         start = normalize_shot_state(shot.get("start_state"))
         end = normalize_shot_state(shot.get("end_state"))
@@ -482,7 +482,7 @@ def start_end_story_lines(cfg: dict[str, Any] | None) -> list[str]:
     """Opening placement from start_state. Finished action poses stay off the video body."""
     cfg = cfg if isinstance(cfg, dict) else {}
     lines: list[str] = []
-    action = str(cfg.get("shot_action") or cfg.get("action") or "")
+    action = str(cfg.get("clip_action") or cfg.get("action") or "")
     prior_action = str(cfg.get("previous_clip_action") or "")
     start = normalize_shot_state(cfg.get("start_state"))
     end = normalize_shot_state(cfg.get("end_state"))

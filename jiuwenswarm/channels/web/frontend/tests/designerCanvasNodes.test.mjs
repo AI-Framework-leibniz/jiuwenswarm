@@ -147,10 +147,10 @@ test('connectNodeToGraph adds a data edge and predecessor input', () => {
   const template = DESIGNER_ADD_TEMPLATES.find((item) => item.id === 'video');
   assert.ok(template);
   const source = {
-    id: 'n_frame_1',
+    id: 'n_clip_1a',
     type: 'image',
     label: 'Keyframe 1',
-    config: { role: 'frame' },
+    config: { role: 'clip' },
     layout: { x: 0, y: 0, width: 280, height: 160 },
   };
   const added = buildManualDesignerNode({
@@ -162,9 +162,9 @@ test('connectNodeToGraph adds a data edge and predecessor input', () => {
   assert.ok(next);
   assert.equal(next.nodes.length, 2);
   assert.equal(next.edges.length, 1);
-  assert.equal(next.edges[0].source, 'n_frame_1');
+  assert.equal(next.edges[0].source, 'n_clip_1a');
   assert.equal(next.edges[0].target, added.id);
-  assert.deepEqual(next.nodes[1].config.inputs, ['n_frame_1']);
+  assert.deepEqual(next.nodes[1].config.inputs, ['n_clip_1a']);
 });
 
 test('removeNodesFromGraph drops edges and strips inputs', () => {
@@ -213,14 +213,14 @@ test('packDesignerNodeLayouts separates stacked portrait media nodes', () => {
   const portrait = sizeNodeForContentAspect(9 / 16);
   const packed = packDesignerNodeLayouts([
     {
-      id: 'n_frame_1',
+      id: 'n_clip_1a',
       type: 'image',
       label: 'Frame 1',
       config: { aspect_lock: { ratio: '9:16' } },
       layout: { x: 1020, y: 40, width: 240, height: 140 },
     },
     {
-      id: 'n_frame_2',
+      id: 'n_clip_2a',
       type: 'image',
       label: 'Frame 2',
       config: { aspect_lock: { ratio: '9:16' } },
@@ -234,8 +234,8 @@ test('packDesignerNodeLayouts separates stacked portrait media nodes', () => {
       layout: { x: 1320, y: 40, width: 240, height: 140 },
     },
   ]);
-  const frame1 = packed.find((node) => node.id === 'n_frame_1');
-  const frame2 = packed.find((node) => node.id === 'n_frame_2');
+  const clip1a = packed.find((node) => node.id === 'n_clip_1a');
+  const clip2a = packed.find((node) => node.id === 'n_clip_2a');
   const clip1 = packed.find((node) => node.id === 'n_clip_1');
   assert.ok(frame1 && frame2 && clip1);
   const top = frame1.layout?.y ?? 0;
@@ -265,7 +265,7 @@ test('packDesignerNodeLayouts keeps a wide table from covering the next column',
       layout: { x: 400, y: 440, width: 280, height: 280 },
     },
     {
-      id: 'n_frame_1',
+      id: 'n_clip_1a',
       type: 'image',
       label: 'Frame',
       layout: { x: 760, y: 240, width: 280, height: 160 },
@@ -273,7 +273,7 @@ test('packDesignerNodeLayouts keeps a wide table from covering the next column',
   ]);
   const scene = packed.find((node) => node.id === 'n_scene');
   const table = packed.find((node) => node.id === 'n_storyboard');
-  const frame = packed.find((node) => node.id === 'n_frame_1');
+  const clipNode = packed.find((node) => node.id === 'n_clip_1a');
   assert.ok(scene && table && frame);
   assert.equal(scene.layout?.x, table.layout?.x);
   assert.equal(table.layout?.y, (scene.layout?.y ?? 0) + (scene.layout?.height ?? 0) + DESIGNER_SUCCESSOR_GAP_Y);
@@ -338,7 +338,7 @@ test('autoLayoutDesignerNodes layers successors to the right and stacks without 
         id: 'n_character',
         type: 'image',
         label: 'Character',
-        config: { pipeline: 'character_design', inputs: ['n_brief'] },
+        config: { pipeline: 'character', inputs: ['n_brief'] },
         layout: { x: 10, y: 400, width: 280, height: 160 },
       },
       {
@@ -349,32 +349,32 @@ test('autoLayoutDesignerNodes layers successors to the right and stacks without 
         layout: { x: 40, y: 10, width: 280, height: 160 },
       },
       {
-        id: 'n_frame_2',
+        id: 'n_clip_2a',
         type: 'image',
         label: 'Frame 2',
-        config: { pipeline: 'frame', shot_index: 2, inputs: ['n_scene'] },
+        config: { pipeline: 'clip', clip_index: 2, inputs: ['n_scene'] },
         layout: { x: 40, y: 40, width: 180, height: 320 },
       },
       {
-        id: 'n_frame_1',
+        id: 'n_clip_1a',
         type: 'image',
         label: 'Frame 1',
-        config: { pipeline: 'frame', shot_index: 1, inputs: ['n_scene'] },
+        config: { pipeline: 'clip', clip_index: 1, inputs: ['n_scene'] },
         layout: { x: 80, y: 80, width: 180, height: 320 },
       },
     ],
     [
       { id: 'e_brief_char', source: 'n_brief', target: 'n_character' },
       { id: 'e_brief_scene', source: 'n_brief', target: 'n_scene' },
-      { id: 'e_scene_f1', source: 'n_scene', target: 'n_frame_1' },
-      { id: 'e_scene_f2', source: 'n_scene', target: 'n_frame_2' },
+      { id: 'e_scene_c1a', source: 'n_scene', target: 'n_clip_1a' },
+      { id: 'e_scene_c2a', source: 'n_scene', target: 'n_clip_2a' },
     ],
   );
   const brief = laid.find((node) => node.id === 'n_brief');
   const character = laid.find((node) => node.id === 'n_character');
   const scene = laid.find((node) => node.id === 'n_scene');
-  const frame1 = laid.find((node) => node.id === 'n_frame_1');
-  const frame2 = laid.find((node) => node.id === 'n_frame_2');
+  const clip1a = laid.find((node) => node.id === 'n_clip_1a');
+  const clip2a = laid.find((node) => node.id === 'n_clip_2a');
   assert.ok(brief && character && scene && frame1 && frame2);
   assert.equal(brief.layout?.x, DESIGNER_LAYOUT_ORIGIN_X);
   assert.equal(brief.layout?.y, DESIGNER_LAYOUT_ORIGIN_Y);
@@ -398,28 +398,28 @@ test('autoLayoutDesignerNodes stacks every scene in one column and every clip in
         id: 'n_scene_1',
         type: 'image',
         label: 'Scene 1',
-        config: { pipeline: 'scene', shot_index: 1, inputs: ['n_brief'] },
+        config: { pipeline: 'scene', clip_index: 1, inputs: ['n_brief'] },
         layout: { x: 400, y: 0, width: 280, height: 160 },
       },
       {
         id: 'n_scene_2',
         type: 'image',
         label: 'Scene 2',
-        config: { pipeline: 'scene', shot_index: 2, inputs: ['n_scene_1'] },
+        config: { pipeline: 'scene', clip_index: 2, inputs: ['n_scene_1'] },
         layout: { x: 800, y: 0, width: 280, height: 160 },
       },
       {
         id: 'n_clip_1',
         type: 'video',
         label: 'Clip 1',
-        config: { pipeline: 'clip', shot_index: 1, inputs: ['n_scene_1'] },
+        config: { pipeline: 'clip', clip_index: 1, inputs: ['n_scene_1'] },
         layout: { x: 1200, y: 0, width: 280, height: 160 },
       },
       {
         id: 'n_clip_2',
         type: 'video',
         label: 'Clip 2',
-        config: { pipeline: 'clip', shot_index: 2, inputs: ['n_scene_2'] },
+        config: { pipeline: 'clip', clip_index: 2, inputs: ['n_scene_2'] },
         layout: { x: 1600, y: 200, width: 280, height: 160 },
       },
     ],
@@ -446,42 +446,42 @@ test('autoLayoutDesignerNodes does not put scene frames in the clip column', () 
   const laid = autoLayoutDesignerNodes(
     [
       {
-        id: 'n_frame_1',
+        id: 'n_clip_1a',
         type: 'image',
         label: 'Scene 1: Shot 1: office',
-        config: { role: 'frame', pipeline: 'frame', shot_index: 1 },
+        config: { role: 'clip', pipeline: 'clip', clip_index: 1 },
         layout: { x: 0, y: 0, width: 180, height: 320 },
       },
       {
-        id: 'n_frame_2',
+        id: 'n_clip_2a',
         type: 'image',
         label: 'Scene 2: Shot 1: restaurant',
-        config: { role: 'frame', pipeline: 'frame', shot_index: 2, inputs: ['n_frame_1'] },
+        config: { role: 'clip', pipeline: 'clip', clip_index: 2, inputs: ['n_clip_1a'] },
         layout: { x: 400, y: 0, width: 180, height: 320 },
       },
       {
         id: 'n_clip_1',
         type: 'video',
         label: 'Scene 1: Clip 1: office',
-        config: { role: 'clip', pipeline: 'clip', shot_index: 1, inputs: ['n_frame_1'] },
+        config: { role: 'clip', pipeline: 'clip', clip_index: 1, inputs: ['n_clip_1a'] },
         layout: { x: 800, y: 0, width: 280, height: 160 },
       },
       {
         id: 'n_clip_2',
         type: 'video',
         label: 'Scene 2: Clip 1: restaurant',
-        config: { role: 'clip', pipeline: 'clip', shot_index: 2, inputs: ['n_frame_2'] },
+        config: { role: 'clip', pipeline: 'clip', clip_index: 2, inputs: ['n_clip_2a'] },
         layout: { x: 1200, y: 200, width: 280, height: 160 },
       },
     ],
     [
-      { id: 'e_f1_f2', source: 'n_frame_1', target: 'n_frame_2' },
-      { id: 'e_f1_c1', source: 'n_frame_1', target: 'n_clip_1' },
-      { id: 'e_f2_c2', source: 'n_frame_2', target: 'n_clip_2' },
+      { id: 'e_c1a_c2a', source: 'n_clip_1a', target: 'n_clip_2a' },
+      { id: 'e_c1a_c1', source: 'n_clip_1a', target: 'n_clip_1' },
+      { id: 'e_f2_c2', source: 'n_clip_2a', target: 'n_clip_2' },
     ],
   );
-  const frame1 = laid.find((node) => node.id === 'n_frame_1');
-  const frame2 = laid.find((node) => node.id === 'n_frame_2');
+  const clip1a = laid.find((node) => node.id === 'n_clip_1a');
+  const clip2a = laid.find((node) => node.id === 'n_clip_2a');
   const clip1 = laid.find((node) => node.id === 'n_clip_1');
   const clip2 = laid.find((node) => node.id === 'n_clip_2');
   assert.ok(frame1 && frame2 && clip1 && clip2);

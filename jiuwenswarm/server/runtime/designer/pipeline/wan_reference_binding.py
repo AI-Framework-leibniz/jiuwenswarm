@@ -173,13 +173,13 @@ def clip_is_first_of_setting(
         return False
     meta = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
     scene_card = (
-        str(meta.get("scene_continuity_mode") or "") == "scene_card_plus_clip_shots"
+        str(meta.get("scene_consistency_mode") or "") == "scene_specs_plus_clips"
         or bool(str(cfg.get("scene_node_id") or "").strip())
     )
     if not scene_card:
         return False
     sid = str(cfg.get("setting_id") or "").strip()
-    idx = int(cfg.get("shot_index") or 0) or 0
+    idx = int(cfg.get("clip_index") or 0) or 0
     earlier_same = False
     any_earlier_clip = False
     for node in graph.get("nodes") or []:
@@ -188,7 +188,7 @@ def clip_is_first_of_setting(
         oc = node.get("config") if isinstance(node.get("config"), dict) else {}
         if str(oc.get("role") or "") != "clip":
             continue
-        other_idx = int(oc.get("shot_index") or 0) or 0
+        other_idx = int(oc.get("clip_index") or 0) or 0
         if other_idx <= 0 or (idx and other_idx >= idx):
             continue
         any_earlier_clip = True
@@ -209,13 +209,13 @@ def clip_uses_scene_card(cfg: dict[str, Any] | None, graph: dict[str, Any] | Non
     cfg = cfg if isinstance(cfg, dict) else {}
     graph = graph if isinstance(graph, dict) else {}
     meta = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
-    if str(meta.get("scene_continuity_mode") or "") == "scene_card_plus_clip_shots":
+    if str(meta.get("scene_consistency_mode") or "") == "scene_specs_plus_clips":
         return True
     strategy = str(
-        cfg.get("keyframe_strategy")
+        cfg.get("clip_strategy")
         or ((cfg.get("identity_refs") or {}) if isinstance(cfg.get("identity_refs"), dict) else {}).get(
-            "keyframe_strategy"
+            "clip_strategy"
         )
         or ""
     )
-    return strategy == "clip_from_scene_and_solos" or bool(str(cfg.get("scene_node_id") or "").strip())
+    return strategy == "clip_from_scene_and_character_specs" or bool(str(cfg.get("scene_node_id") or "").strip())

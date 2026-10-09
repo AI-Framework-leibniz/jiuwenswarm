@@ -16,7 +16,7 @@ from urllib.parse import unquote, urlparse
 
 _NEGATIVE_LINE = re.compile(
     r"(?i)("
-    r"already[_\s-]?done|"
+    r"already[_['clips']-]?done|"
     r"already finished|"
     r"already delivered|"
     r"already staged|"
@@ -39,7 +39,7 @@ _NEGATIVE_LINE = re.compile(
 )
 
 _BLOCK_START = re.compile(
-    r"(?i)^(already[_\s-]?done|prior speech|previous clip had|previous wan|"
+    r"(?i)^(already[_['clips']-]?done|prior speech|previous clip had|previous wan|"
     r"character consistency|same-scene consistency gate)\b"
 )
 
@@ -61,7 +61,7 @@ def scrub_negative_wan_prompt(text: str) -> str:
                 continue
             skip_block = False
         if stripped and _NEGATIVE_LINE.search(stripped):
-            sentences = re.split(r"(?<=[.!?])\s+", stripped)
+            sentences = re.split(r"(?<=[.!?])['clips']+", stripped)
             cleaned = [s for s in sentences if s and not _NEGATIVE_LINE.search(s)]
             if not cleaned:
                 continue
@@ -110,7 +110,7 @@ def positive_continuity_clause(
             bits.append(str(anchor["pose"]))
         holds.append(" ".join(bits))
     who_now = ", ".join(names.get(c, c) for c in on[:8]) if on else ""
-    action = str(cfg.get("shot_action") or cfg.get("character_action") or "").strip()
+    action = str(cfg.get("clip_action") or cfg.get("character_action") or "").strip()
     camera = str(cfg.get("camera") or "").strip()
     speech = str(cfg.get("speech_line") or "").strip()
     lines = ["CONTINUITY STATE (this clip continues the same film):"]
@@ -223,7 +223,7 @@ def capture_regenerate_packet(
     return {
         "node_id": str(node.get("id") or ""),
         "prompt": stored_prompt[:4000],
-        "shot_action": str(cfg.get("shot_action") or "")[:500],
+        "clip_action": str(cfg.get("clip_action") or "")[:500],
         "speech_line": str(cfg.get("speech_line") or "")[:280],
         "camera": str(cfg.get("camera") or "")[:160],
         "style_lock": cfg.get("style_lock") if isinstance(cfg.get("style_lock"), dict) else None,
@@ -286,7 +286,7 @@ def apply_regenerate_packet(
     if not use_prior or not packet:
         return prompt, list(reference_paths)
     for key in (
-        "shot_action",
+        "clip_action",
         "speech_line",
         "camera",
         "style_lock",

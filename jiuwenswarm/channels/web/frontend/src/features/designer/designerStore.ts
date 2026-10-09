@@ -43,7 +43,6 @@ function isShotPipelineNodeId(nodeId: string): boolean {
   return (
     nodeId === 'n_frame' ||
     nodeId === 'n_clip' ||
-    nodeId.startsWith('n_frame_') ||
     nodeId.startsWith('n_clip_')
   );
 }

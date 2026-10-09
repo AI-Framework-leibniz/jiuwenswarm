@@ -82,7 +82,7 @@ def hollywood_leaf_instructions(role: str) -> str:
         f"12) {_image_limit_clause()}\n"
         f"13) {_video_limit_clause()}\n"
     )
-    if r in {"character", "character_design"}:
+    if r in {"character", "character"}:
         return (
             shared
             + "ROLE=character sheet. Write ONE positive Qwen-ready studio portrait prompt "

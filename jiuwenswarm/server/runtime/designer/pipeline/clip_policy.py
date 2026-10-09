@@ -94,7 +94,7 @@ def _crowd_lock_for_setting(
     prev = prev_crowd if isinstance(prev_crowd, dict) else {}
     blob = " ".join(
         str(shot.get(k) or "")
-        for k in ("action", "keyframe_prompt", "scene_objects", "comment", "title")
+        for k in ("action", "clip_prompt", "scene_objects", "comment", "title")
     ).lower()
     mentions_crowd = any(
         k in blob
@@ -243,7 +243,7 @@ def apply_compose_solos_setting_policy(analysis: dict[str, Any]) -> dict[str, An
     visible, who is offscreen, and what each visible person is doing.
     """
     out = analysis if isinstance(analysis, dict) else {}
-    shots = [s for s in (out.get("shots") or []) if isinstance(s, dict)]
+    shots = [s for s in (out.get("clips") or []) if isinstance(s, dict)]
     characters = [c for c in (out.get("characters") or []) if isinstance(c, dict)]
     by_id = {str(c.get("id")): c for c in characters if c.get("id")}
     prop_ids = {
@@ -264,7 +264,7 @@ def apply_compose_solos_setting_policy(analysis: dict[str, Any]) -> dict[str, An
     # Do NOT force orphan cast into scene 1 visuals — solo cards still come from characters[].
     out["setting_ensembles"] = ensembles
     # Scene specs are the geography lock for clip R2V (Qwen stills).
-    out["scene_continuity_mode"] = "scene_card_plus_clip_shots"
+    out["scene_consistency_mode"] = "scene_specs_plus_clips"
 
     # Distinct place text per setting_id (from scenes[] or first compose action).
     scenes = [s for s in (out.get("scenes") or []) if isinstance(s, dict)]
@@ -279,7 +279,7 @@ def apply_compose_solos_setting_policy(analysis: dict[str, Any]) -> dict[str, An
     crowd_by_set: dict[str, dict[str, Any]] = {}
     compose_actions_by_set: dict[str, dict[str, str]] = {}
     try:
-        from jiuwenswarm.server.runtime.designer.pipeline.clip_shot_scope import (
+        from jiuwenswarm.server.runtime.designer.pipeline.clip_scope import (
             user_asked_coverage,
         )
 
@@ -287,7 +287,7 @@ def apply_compose_solos_setting_policy(analysis: dict[str, Any]) -> dict[str, An
     except Exception:  # noqa: BLE001
         coverage = False
     for i, shot in enumerate(shots, start=1):
-        shot["shot_index"] = i
+        shot["clip_index"] = i
         sid = str(shot.get("setting_id") or "set_1").strip() or "set_1"
         setting_changed = bool(prev_set) and sid != prev_set
         is_first_of_set = (i == 1) or setting_changed or not prev_set
@@ -303,7 +303,7 @@ def apply_compose_solos_setting_policy(analysis: dict[str, Any]) -> dict[str, An
         featured = roles["featured"]
         actions = _cast_actions_map(shot)
         # If no per-char actions, fall back to shared action line for featured.
-        shared = str(shot.get("action") or shot.get("keyframe_prompt") or "").strip()
+        shared = str(shot.get("action") or shot.get("clip_prompt") or "").strip()
         if shared:
             for cid in visible:
                 actions.setdefault(cid, shared[:240])
@@ -347,7 +347,7 @@ def apply_compose_solos_setting_policy(analysis: dict[str, Any]) -> dict[str, An
             shot["setting_description"] = place
 
         if is_first_of_set:
-            shot["keyframe_strategy"] = "compose_from_solo_refs"
+            shot["clip_strategy"] = "compose_from_character_specs"
             shot["same_setting_prior_edit"] = False
             shot["ensemble_master"] = False
             shot["compose_setting_master"] = True
@@ -369,7 +369,7 @@ def apply_compose_solos_setting_policy(analysis: dict[str, Any]) -> dict[str, An
         else:
             # Same setting: still compose from character solos (not edit prior image).
             # Consistency comes from shared scene_specs + prompt handoff from master KF.
-            shot["keyframe_strategy"] = "compose_from_solo_refs"
+            shot["clip_strategy"] = "compose_from_character_specs"
             shot["same_setting_prior_edit"] = False
             shot["ensemble_master"] = False
             shot["compose_setting_master"] = False
@@ -403,7 +403,7 @@ def apply_compose_solos_setting_policy(analysis: dict[str, Any]) -> dict[str, An
         # Angle orbit only when the user asked for coverage. Otherwise each clip
         # is its own time window, not front/left/right of one empty action.
         view_cycle = ("front", "left", "right", "side", "top", "bottom")
-        view_i = int(shot.get("shot_index") or 1) - 1
+        view_i = int(shot.get("clip_index") or 1) - 1
         relation = str(shot.get("shot_relation") or "").strip().lower()
         raw_view = str(shot.get("view_key") or "").strip().lower()
         if coverage or relation == "angle_variant":
@@ -462,13 +462,13 @@ def apply_compose_solos_setting_policy(analysis: dict[str, Any]) -> dict[str, An
             views.update(dict(bible.get("views") or {}))
             scene_locks[sid]["views"] = views
 
-    out["shots"] = shots
+    out["clips"] = shots
     out["crowd_locks_by_setting"] = crowd_by_set
     out["setting_places"] = setting_place
     out["scene_locks"] = scene_locks
-    out["scene_continuity_mode"] = "scene_card_plus_clip_shots"
-    out["keyframe_policy"] = "scene_card_plus_clip_shots"
-    out["keyframe_policy_notes"] = {
+    out["scene_consistency_mode"] = "scene_specs_plus_clips"
+    out["clip_policy"] = "scene_specs_plus_clips"
+    out["clip_policy_notes"] = {
         "version": "plan_a.scene_card_clip.v17_time_lock",
         "rule": (
             "Scene specs per setting_id (Qwen image) + solo sheets. "

@@ -86,10 +86,10 @@ Use for solo character sheets and scene specs / stills.
   backend (Director / leaf context). Prefer dense shot-ready prose; do not pad.
 - COST: Prefer ~1K resolution (size 1K / 1024x1024 or aspect-matched ~1K). Do not request 2K/4K.
 - EVERY on-screen character gets an identity sheet before any keyframe, including an unnamed group that shares one look.
-- First KF of a setting_id: compose_from_solo_refs — GENERATE the setting AND place ONLY
+- First KF of a setting_id: compose_from_character_specs — GENERATE the setting AND place ONLY
   storyboard on_screen cast with cast_actions. Author a detailed SCENE SPECS (objects,
   lighting, crowd, hierarchical views: front/left/right/side/top/bottom).
-- Later KF same setting_id: ALSO compose_from_solo_refs from character solos, but reuse the
+- Later KF same setting_id: ALSO compose_from_character_specs from character solos, but reuse the
   SCENE PROMPT HANDOFF / scene specs so architecture stays deterministic. Change only view +
   on_screen/doing. Never edit a prior keyframe image as the primary ref.
 - Multi-ref prompting: name each slot ("Image 1 is Pastor… Image 2 is Young Man…").
@@ -118,13 +118,13 @@ Group shots by setting_id / place. For EACH scene block author a SCENE SPECS:
 objects + locations, lighting, crowd size/positions, and hierarchical views
 (front/left/right/side/top/bottom) so coverage is coherent and things do not appear
 from nowhere. For EACH scene:
-1. First keyframe = compose_from_solo_refs: Qwen generates the setting AND places cast
+1. First keyframe = compose_from_character_specs: Qwen generates the setting AND places cast
    from solo identity sheets (NO scene specs node). Include scene specs in the brief.
-2. Later keyframes in the SAME scene = compose_from_solo_refs again with SCENE PROMPT
+2. Later keyframes in the SAME scene = compose_from_character_specs again with SCENE PROMPT
    HANDOFF from the master (reuse architecture; change view/cast only).
 3. New setting_id → new scene specs + compose master, then handoffs again.
 Per shot also list: timeline, camera/view_key, placements, motion, speech_line,
-character_ids, continuity_lock, style_lock, shot_relation, keyframe_strategy,
+character_ids, continuity_lock, style_lock, shot_relation, clip_strategy,
 keyframe_prompt. Diversify angles within a locked geography/style.
 Node labels should read like: character: [Name]; scene [n]: keyframe [n]; scene [n]: clip [n].
 """.strip()
@@ -146,7 +146,7 @@ When correcting leaf agents / drafting node prompts:
 MANAGER_CORRECTION_HINTS = """
 Director one-pass corrections (locks bind ALL agents — leaf rewrites cannot drop them):
 - Reject / rewrite shots that all share the same facing or that omit placement/motion/speech/objects.
-- Require camera_rig + screen_positions + speech_line; stamp setting_id + keyframe_strategy.
+- Require camera_rig + screen_positions + speech_line; stamp setting_id + clip_strategy.
 - BEFORE media calls: gate every frame/keyframe/clip prompt for aspect_lock, style_lock,
   spatial_lock, costume/identity, occupancy, and prior continuity; re-inject missing locks.
 - Stamp image_size from aspect_lock on stills and the user or director video_size/video_resolution on clips.
@@ -160,7 +160,7 @@ def playbook_for_role(role: str) -> str:
     chunks = [STORYBOARD_DETAIL_RULES]
     if role_l in {"storyboard", "brief", "director"}:
         chunks.extend([QWEN_IMAGE_PLAYBOOK, WAN3_VIDEO_PLAYBOOK])
-    if role_l in {"frame", "keyframe", "scene", "character", "character_design", "image"}:
+    if role_l in {"frame", "keyframe", "scene", "character", "character", "image"}:
         chunks.append(QWEN_IMAGE_PLAYBOOK)
     if role_l in {"clip", "video"}:
         chunks.append(WAN3_VIDEO_PLAYBOOK)
@@ -280,13 +280,13 @@ def default_style_lock(prompt: str = "", scene_desc: str = "") -> dict[str, str]
 
 
 _VISUAL_STYLE_LINE_RE = re.compile(
-    r"(?im)^\s*(?:[-*]\s*)?(?:\*\*)?"
-    r"(?:visual\s+style|art\s+style|style|视觉风格|画风)"
-    r"(?:\*\*)?\s*[:：]\s*(.+?)\s*$"
+    r"(?im)^['clips']*(?:[-*]['clips']*)?(?:\*\*)?"
+    r"(?:visual['clips']+style|art['clips']+style|style|视觉风格|画风)"
+    r"(?:\*\*)?['clips']*[:：]['clips']*(.+?)['clips']*$"
 )
 _VISUAL_STYLE_HEADING_RE = re.compile(
-    r"(?im)^\s*#{1,6}\s*(?:visual\s+style|art\s+style|style|视觉风格|画风)"
-    r"\s*$\s*^\s*(?:[-*]\s*)?(.+?)\s*$"
+    r"(?im)^['clips']*#{1,6}['clips']*(?:visual['clips']+style|art['clips']+style|style|视觉风格|画风)"
+    r"['clips']*$['clips']*^['clips']*(?:[-*]['clips']*)?(.+?)['clips']*$"
 )
 
 
@@ -362,16 +362,16 @@ def synchronize_graph_style_from_brief(
     meta["script_analysis"] = analysis
     meta["style_lock"] = dict(style)
     try:
-        from jiuwenswarm.server.runtime.designer.pipeline.production_bible import (
-            build_production_bible,
+        from jiuwenswarm.server.runtime.designer.pipeline.production_specs import (
+            build_production_specs,
         )
 
-        bible = build_production_bible(
+        bible = build_production_specs(
             analysis,
             user_prompt=str(graph.get("description") or meta.get("user_prompt") or ""),
         )
-        analysis["production_bible"] = bible
-        meta["production_bible"] = bible
+        analysis["production_specs"] = bible
+        meta["production_specs"] = bible
     except Exception:  # noqa: BLE001
         pass
     graph["metadata"] = meta
@@ -380,7 +380,7 @@ def synchronize_graph_style_from_brief(
             continue
         cfg = dict(node.get("config") or {})
         role = str(cfg.get("role") or cfg.get("pipeline") or "").lower()
-        if role in {"character", "character_design", "scene", "frame", "keyframe", "clip"}:
+        if role in {"character", "character", "scene", "frame", "keyframe", "clip"}:
             cfg["style_lock"] = dict(style)
             node["config"] = cfg
     return style
@@ -426,8 +426,8 @@ def enrich_shot_for_storyboard(
 ) -> dict[str, Any]:
     """Stamp camera_rig / facing / scene_objects / style_lock onto a shot dict."""
     out = dict(shot)
-    idx = int(out.get("shot_index") or index or 1)
-    out["shot_index"] = idx
+    idx = int(out.get("clip_index") or index or 1)
+    out["clip_index"] = idx
     camera = str(out.get("camera") or "").strip()
     rig = out.get("camera_rig") if isinstance(out.get("camera_rig"), dict) else None
     if not rig:
@@ -533,7 +533,7 @@ def wan3_clip_prompt_prefix(
 def enrich_shot_wan_fields(shot: dict[str, Any]) -> dict[str, Any]:
     """Ensure placement / motion / speech fields exist for Wan-direct clips."""
     out = dict(shot)
-    action = str(out.get("action") or out.get("keyframe_prompt") or "").strip()
+    action = str(out.get("action") or out.get("clip_prompt") or "").strip()
     out.setdefault("screen_positions", str(out.get("screen_positions") or out.get("facing") or "")[:160])
     out.setdefault(
         "object_placements",

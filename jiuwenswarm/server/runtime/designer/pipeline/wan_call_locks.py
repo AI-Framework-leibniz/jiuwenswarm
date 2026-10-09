@@ -175,7 +175,7 @@ def apply_wan_call_locks(
     *,
     cfg: dict[str, Any] | None = None,
     graph: dict[str, Any] | None = None,
-    shot_index: int = 0,
+    clip_index: int = 0,
 ) -> str:
     """Rewrite the video call into a short image-binding prompt.
 
@@ -213,21 +213,21 @@ def apply_wan_call_locks(
         if not camera:
             # Film-shot essays often put Camera on the same line as "Film shot N".
             m = re.search(
-                r"(?i)\bcamera\b\s*[:.]?\s*(.+?)(?:\.\s*action\b|\.\s*focus\b|$)",
+                r"(?i)\bcamera\b['clips']*[:.]?['clips']*(.+?)(?:\.['clips']*action\b|\.['clips']*focus\b|$)",
                 user_text,
             )
             if m:
                 camera = m.group(1).strip()[:240]
     else:
         candidate = prompt
-        action = str(director_cfg.get("shot_action") or "")
+        action = str(director_cfg.get("clip_action") or "")
         camera = str(director_cfg.get("camera") or "")
 
     approved, notes = director_approve_video_prompt(
         candidate,
         cfg=director_cfg,
         graph=graph if isinstance(graph, dict) else {},
-        shot_index=shot_index,
+        clip_index=clip_index,
         action=action,
         camera=camera,
     )

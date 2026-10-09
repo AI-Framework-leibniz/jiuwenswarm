@@ -197,7 +197,7 @@ def _tools_for_role(
     can_music: bool = False,
 ) -> list[str]:
     base = ["call_model", "read_upstream", "write_artifact"]
-    if role in {"character", "character_design", "scene", "frame", "keyframe", "image"}:
+    if role in {"character", "character", "scene", "frame", "keyframe", "image"}:
         tools = ["call_model", "read_upstream", "call_image_model"]
     elif role in {"clip", "video"}:
         tools = ["call_model", "read_upstream", "call_video_model"]
@@ -217,7 +217,7 @@ def _tools_for_role(
     if can_vision and role in {
         "director",
         "character",
-        "character_design",
+        "character",
         "scene",
         "frame",
         "keyframe",
@@ -299,7 +299,7 @@ def decide_modality_plan(graph: DesignerExecutionGraph) -> dict[str, Any]:
         )
         if can_vision and role in {
             "character",
-            "character_design",
+            "character",
             "scene",
             "frame",
             "keyframe",
@@ -405,7 +405,7 @@ def collect_rateable_image_paths(
         nid = str(node.get("id") or "")
         role = str(node_pipeline(node) or node_role(node) or "")
         if role not in {
-            "character_design",
+            "character",
             "character",
             "scene",
             "frame",

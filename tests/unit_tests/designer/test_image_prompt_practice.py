@@ -141,7 +141,7 @@ def test_ensure_rewrites_lock_essay_character() -> None:
 
     essay = "ONE person. CLOTHING LOCK: red dress. No room, no furniture."
     cfg = {
-        "role": "character_design",
+        "role": "character",
         "character_name": "Sam",
         "costume_lock": "red dress",
         "style_lock": {"look": "photoreal cinematic"},
@@ -166,7 +166,7 @@ def test_continue_line_does_not_paste_prior_wan() -> None:
     cfg = {
         "cast_names": ["Mother"],
         "on_screen": ["Mother"],
-        "shot_action": "Mother nods once.",
+        "clip_action": "Mother nods once.",
         "costume_lock": "Mother: dusty rose blouse",
         "previous_clip_wan_prompt": prior,
         "previous_clip_action": "Mother listens",
@@ -178,7 +178,7 @@ def test_continue_line_does_not_paste_prior_wan() -> None:
     assert cue
     assert "listening carefully" not in cue.lower()
     assert "continue after:" not in cue.lower()
-    text = compose_practice_prompt(cfg=cfg, graph={}, action=cfg["shot_action"])
+    text = compose_practice_prompt(cfg=cfg, graph={}, action=cfg["clip_action"])
     assert "listening carefully" not in text.lower()
     assert "same setting" in text.lower() or "same placement" in text.lower()
     assert "STYLE LOCK" not in text

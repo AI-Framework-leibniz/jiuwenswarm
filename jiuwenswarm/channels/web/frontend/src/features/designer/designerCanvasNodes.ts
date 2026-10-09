@@ -310,7 +310,7 @@ const AUTO_LAYOUT_RANK: Record<string, number> = {
   brief: 0,
   text: 1,
   character: 2,
-  character_design: 2,
+  character: 2,
   scene: 3,
   storyboard: 4,
   table: 5,
@@ -443,7 +443,7 @@ function autoLayoutColumnPlan(
 }
 
 function nodeShotIndex(node: DesignerGraphNode): number {
-  const raw = (node.config as Record<string, unknown> | undefined)?.shot_index;
+  const raw = (node.config as Record<string, unknown> | undefined)?.clip_index;
   const value = typeof raw === 'number' ? raw : Number(raw);
   if (Number.isFinite(value) && value > 0) return value;
   const fromLabel = String(node.label ?? '').match(/(\d+)\s*$/);
