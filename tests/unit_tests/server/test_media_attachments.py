@@ -73,3 +73,83 @@ def test_store_image_item_filename_suffix(
     stored_path = Path(stored[0]["path"])
     assert stored_path.name == expected_name
     assert stored_path.read_bytes() == payload
+
+
+def test_chat_media_still_ignores_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(media_attachments, "get_agent_sessions_dir", lambda: tmp_path)
+    params = {
+        "media_items": [
+            {
+                "type": "video",
+                "mimeType": "video/mp4",
+                "filename": "clip.mp4",
+                "base64Data": base64.b64encode(b"mp4").decode("ascii"),
+            }
+        ]
+    }
+    media_attachments.normalize_chat_media_attachments(params, session_id="sess-video")
+    assert "media_items" not in params
+
+
+def test_session_media_stores_video_and_image_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(media_attachments, "get_agent_sessions_dir", lambda: tmp_path)
+    params = {
+        "media_items": [
+            {
+                "type": "image",
+                "mimeType": "image/png",
+                "filename": "still.png",
+                "base64Data": base64.b64encode(b"png").decode("ascii"),
+            },
+            {
+                "type": "video",
+                "mimeType": "video/mp4",
+                "filename": "clip.mp4",
+                "base64Data": base64.b64encode(b"mp4").decode("ascii"),
+            },
+        ]
+    }
+    media_attachments.normalize_session_media_attachments(params, session_id="design_1")
+    stored = params["media_items"]
+    assert {item["type"] for item in stored} == {"image", "video"}
+    upload_dir = tmp_path / "design_1" / "uploads"
+    assert {Path(item["path"]).parent for item in stored} == {upload_dir}
+    assert (upload_dir / "clip.mp4").read_bytes() == b"mp4"
+
+
+def test_session_media_keeps_file_already_in_uploads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(media_attachments, "get_agent_sessions_dir", lambda: tmp_path)
+    upload_dir = tmp_path / "design_1" / "uploads"
+    upload_dir.mkdir(parents=True)
+    source = upload_dir / "clip.mp4"
+    source.write_bytes(b"already")
+    params = {
+        "media_items": [
+            {
+                "type": "video",
+                "filename": "clip.mp4",
+                "mime_type": "video/mp4",
+                "path": str(source),
+            }
+        ]
+    }
+    media_attachments.normalize_session_media_attachments(params, session_id="design_1")
+    assert Path(params["media_items"][0]["path"]) == source.resolve()
+    assert list(upload_dir.iterdir()) == [source]
+
+
+def test_resolve_listed_session_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sessions = tmp_path / "agent" / "sessions"
+    monkeypatch.setattr(media_attachments, "get_agent_sessions_dir", lambda: sessions)
+    target = sessions / "design_1" / "uploads" / "still.png"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"png")
+    resolved = media_attachments.resolve_listed_session_file(
+        "agent/sessions/design_1/uploads/still.png"
+    )
+    assert resolved == target.resolve()
+    assert media_attachments.resolve_listed_session_file("agent/sessions/../../secret.txt") is None

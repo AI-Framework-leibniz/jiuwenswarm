@@ -5,7 +5,9 @@
 
 覆盖：
 - ``media.persist``：浏览器上传图片 base64 解码后落盘
-  ``agent/sessions/<sid>/uploads``（复用 ``normalize_chat_media_attachments``）；
+  ``agent/sessions/<sid>/uploads``（复用 ``normalize_chat_media_attachments``）。
+  ``include_av`` 时同一目录再接收视频和音频（``normalize_session_media_attachments``），
+  设计画布与工作区共用这一套会话文件；
 - ``media.discard``：删除尚未发送的会话 uploads 副本（只允许该目录内的普通文件）；
 - ``document.persist`` / ``document.formats``：文档本地路径黑名单校验与格式
   列表（复用 ``persist_and_parse_documents`` / ``forbidden_formats``，不落盘）；
@@ -41,6 +43,7 @@ from jiuwenswarm.server.runtime.attachments.document_attachments import (
 from jiuwenswarm.server.runtime.attachments.media_attachments import (
     discard_session_upload,
     normalize_chat_media_attachments,
+    normalize_session_media_attachments,
 )
 from jiuwenswarm.server.runtime.attachments.upload_storage import unique_upload_path
 from jiuwenswarm.server.runtime.gateway_adapter.base import (
@@ -149,12 +152,21 @@ class WorkspaceFileAdapter(GatewayAdapter):
     async def _handle_media_persist(self, request: AgentRequest) -> AgentResponse:
         params = request.params if isinstance(request.params, dict) else {}
         normalized = dict(params)
+        session_id = request.session_id
+        raw_session_id = params.get("session_id")
+        if isinstance(raw_session_id, str) and raw_session_id.strip():
+            session_id = raw_session_id.strip()
+        normalize = (
+            normalize_session_media_attachments
+            if params.get("include_av")
+            else normalize_chat_media_attachments
+        )
         try:
             # 落盘为小 IO（base64 图片 ≤10MB×≤8 张），但放线程池避免阻塞事件循环
             await asyncio.to_thread(
-                normalize_chat_media_attachments,
+                normalize,
                 normalized,
-                request.session_id,
+                session_id,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("[WorkspaceFileAdapter] media.persist failed: %s", exc)

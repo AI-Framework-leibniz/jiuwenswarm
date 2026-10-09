@@ -52,11 +52,127 @@
   gap: 8px;
 }
 
+.designer-session-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.designer-session-switcher__select,
+.designer-session-switcher__new {
+  height: 32px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  background: var(--color-surface-card);
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.designer-session-switcher__select {
+  max-width: 180px;
+  padding: 0 8px;
+}
+
+.designer-session-switcher__new {
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.designer-session-switcher__new:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .designer-page__workspace {
   position: relative;
   flex: 1 1 0%;
   min-width: 0;
   min-height: 0;
+}
+
+.designer-page__workspace.is-trajectory-open .designer-canvas-host {
+  right: 336px;
+}
+
+.designer-trajectory {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  width: 304px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--color-surface-card) 96%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--effect-shadow-lg);
+  overflow: hidden;
+}
+
+.designer-trajectory__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.designer-trajectory__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--color-text-primary);
+}
+
+.designer-trajectory__close,
+.designer-trajectory__empty {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.designer-trajectory__close {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.designer-trajectory__empty {
+  margin: 0;
+  padding: 16px 14px;
+  line-height: 1.5;
+}
+
+.designer-trajectory__list {
+  margin: 0;
+  padding: 8px 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.designer-trajectory__item {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.designer-trajectory__item.is-error .designer-trajectory__summary {
+  color: var(--color-text-danger, #b42318);
+}
+
+.designer-trajectory__time {
+  color: var(--color-text-secondary);
+}
+
+.designer-trajectory__summary {
+  min-width: 0;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
 }
 
 .designer-run-control {

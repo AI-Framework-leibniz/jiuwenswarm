@@ -795,6 +795,7 @@ def build_smart_video_graph(
     from jiuwenswarm.server.runtime.designer.node_labels import (
         derive_shot_name,
         derive_story_name,
+        usable_story_title,
         label_brief,
         label_character,
         label_clip,
@@ -904,7 +905,11 @@ def build_smart_video_graph(
 
     graph_id = new_graph_id()
     now = utc_now_ms()
-    graph_title = title.strip() if isinstance(title, str) and title.strip() else prompt_text[:80]
+    graph_title = (
+        usable_story_title(story_name, prompt_text)
+        or usable_story_title(title, prompt_text)
+        or "设计项目"
+    )
 
     nodes: list[dict[str, Any]] = [
         {

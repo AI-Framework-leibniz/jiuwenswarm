@@ -2902,6 +2902,70 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             label="designer.workspace.get",
         )
 
+    async def _designer_workspace_session_create(ws, req_id, params, session_id, user_id=None):
+        from jiuwenswarm.common.schema.message import ReqMethod
+        from jiuwenswarm.gateway.routing.e2a_proxy import proxy_unary_request
+
+        await proxy_unary_request(
+            channel=channel,
+            agent_client=_resolve(agent_client),
+            ws=ws,
+            req_id=req_id,
+            params=params if isinstance(params, dict) else {},
+            session_id=session_id,
+            user_id=user_id,
+            req_method=ReqMethod.DESIGNER_WORKSPACE_SESSION_CREATE,
+            label="designer.workspace.session.create",
+        )
+
+    async def _designer_workspace_session_compose(ws, req_id, params, session_id, user_id=None):
+        from jiuwenswarm.common.schema.message import ReqMethod
+        from jiuwenswarm.gateway.routing.e2a_proxy import proxy_unary_request
+
+        await proxy_unary_request(
+            channel=channel,
+            agent_client=_resolve(agent_client),
+            ws=ws,
+            req_id=req_id,
+            params=params if isinstance(params, dict) else {},
+            session_id=session_id,
+            user_id=user_id,
+            req_method=ReqMethod.DESIGNER_WORKSPACE_SESSION_COMPOSE,
+            label="designer.workspace.session.compose",
+        )
+
+    async def _designer_trajectory_get(ws, req_id, params, session_id, user_id=None):
+        from jiuwenswarm.common.schema.message import ReqMethod
+        from jiuwenswarm.gateway.routing.e2a_proxy import proxy_unary_request
+
+        await proxy_unary_request(
+            channel=channel,
+            agent_client=_resolve(agent_client),
+            ws=ws,
+            req_id=req_id,
+            params=params if isinstance(params, dict) else {},
+            session_id=session_id,
+            user_id=user_id,
+            req_method=ReqMethod.DESIGNER_TRAJECTORY_GET,
+            label="designer.trajectory.get",
+        )
+
+    async def _designer_workspace_assets(ws, req_id, params, session_id, user_id=None):
+        from jiuwenswarm.common.schema.message import ReqMethod
+        from jiuwenswarm.gateway.routing.e2a_proxy import proxy_unary_request
+
+        await proxy_unary_request(
+            channel=channel,
+            agent_client=_resolve(agent_client),
+            ws=ws,
+            req_id=req_id,
+            params=params if isinstance(params, dict) else {},
+            session_id=session_id,
+            user_id=user_id,
+            req_method=ReqMethod.DESIGNER_WORKSPACE_ASSETS,
+            label="designer.workspace.assets",
+        )
+
     async def _designer_graph_get(ws, req_id, params, session_id, user_id=None):
         from jiuwenswarm.common.schema.message import ReqMethod
         from jiuwenswarm.gateway.routing.e2a_proxy import proxy_unary_request
@@ -5259,6 +5323,10 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
 
     channel.register_method("designer.workspace.create", _designer_workspace_create)
     channel.register_method("designer.workspace.get", _designer_workspace_get)
+    channel.register_method("designer.workspace.session.create", _designer_workspace_session_create)
+    channel.register_method("designer.workspace.session.compose", _designer_workspace_session_compose)
+    channel.register_method("designer.workspace.assets", _designer_workspace_assets)
+    channel.register_method("designer.trajectory.get", _designer_trajectory_get)
     channel.register_method("designer.graph.get", _designer_graph_get)
     channel.register_method("designer.graph.list", _designer_graph_list)
     channel.register_method("designer.graph.save", _designer_graph_save)
