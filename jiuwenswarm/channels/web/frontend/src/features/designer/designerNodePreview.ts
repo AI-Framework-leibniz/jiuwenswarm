@@ -24,7 +24,7 @@ export function storyboardClipPreviews(
         clipNo: String(clip.clip_no || '').trim(),
         timeline: String(clip.timeline || '').trim(),
         action: String(clip.character_action || '').trim(),
-        picture: String(clip.scene_change || camera || '').trim(),
+        picture: camera,
       };
     })
     .filter((clip) => clip.clipNo || clip.timeline || clip.action || clip.picture);
