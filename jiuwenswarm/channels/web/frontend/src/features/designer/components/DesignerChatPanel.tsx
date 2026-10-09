@@ -1,4 +1,4 @@
-import { Loader2, Paperclip, SendHorizontal, X } from 'lucide-react';
+import { Loader2, SendHorizontal, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { chatDesignerGraph } from '../designerEntry';
@@ -294,17 +294,7 @@ export function DesignerChatPanel() {
               event.target.value = '';
             }}
           />
-          <button
-            type="button"
-            className="designer-chat-panel__attach"
-            disabled={chatBusy}
-            onClick={() => fileInputRef.current?.click()}
-            aria-label={t('designer.chat.attach')}
-            title={t('designer.chat.attachHint')}
-            data-testid="designer-chat-panel-attach"
-          >
-            <Paperclip size={16} aria-hidden />
-          </button>
+          {/* Canvas chat sidebar: hide attach control; landing prompt keeps its own attach UI. */}
           <textarea
             className="designer-chat-panel__input"
             placeholder={t('designer.chat.inputPlaceholder')}

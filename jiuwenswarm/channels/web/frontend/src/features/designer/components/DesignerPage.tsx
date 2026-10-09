@@ -26,17 +26,43 @@ type DesignerPageProps = {
   onToggleSidebarCollapse?: () => void;
 };
 
-function formatModifiedAt(timestamp: number | undefined, locale: string): string {
+function startOfLocalDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function formatModifiedAt(
+  timestamp: number | undefined,
+  locale: string,
+  yesterdayLabel: string,
+): string {
   if (!timestamp || !Number.isFinite(timestamp)) return '';
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat(locale, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
+
+  const time = new Intl.DateTimeFormat(locale, {
     hour: '2-digit',
     minute: '2-digit',
   }).format(date);
+  const now = new Date();
+  const dayDiff = Math.round(
+    (startOfLocalDay(now).getTime() - startOfLocalDay(date).getTime()) / 86_400_000,
+  );
+  if (dayDiff === 0) return time;
+  if (dayDiff === 1) return `${yesterdayLabel} ${time}`;
+
+  const isZh = locale.toLowerCase().startsWith('zh');
+  if (date.getFullYear() === now.getFullYear()) {
+    if (isZh) return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
+    return `${new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(date)} ${time}`;
+  }
+  if (isZh) {
+    return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
+  }
+  return `${new Intl.DateTimeFormat(locale, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(date)} ${time}`;
 }
 
 export function DesignerPage({
@@ -154,101 +180,105 @@ export function DesignerPage({
   const projectTitle =
     domainGraph?.title?.trim() ||
     (showLoading || showEmpty || showError ? '' : t('designer.subtitle'));
-  const modifiedLabel = formatModifiedAt(domainGraph?.updated_at, i18n.language);
+  const modifiedLabel = formatModifiedAt(
+    domainGraph?.updated_at,
+    i18n.language,
+    t('designer.toolbar.yesterday'),
+  );
   const canvasInteractive =
     showCanvas && !bootstrapInProgress && !isDesignerPreviewGraph(domainGraph);
 
   return (
     <div className="designer-page app-section" data-testid="designer-page">
-      <header className="designer-page__toolbar" data-testid="designer-page-toolbar">
-        {onToggleSidebarCollapse ? (
-          <button
-            type="button"
-            className="designer-page__sidebar-collapse"
-            onClick={onToggleSidebarCollapse}
-            aria-label={sidebarCollapsed ? t('common.expand') : t('common.collapse')}
-            aria-pressed={!sidebarCollapsed}
-            title={sidebarCollapsed ? t('common.expand') : t('common.collapse')}
-            data-testid="designer-page-sidebar-collapse"
-            data-variant={sidebarCollapsed ? 'expand' : 'collapse'}
-          >
-            <PanelCollapseIcon aria-hidden />
-          </button>
-        ) : null}
-        <div className="designer-page__heading">
-          <h1 className="designer-page__title" data-testid="designer-page-title">
-            {projectTitle || t('designer.subtitle')}
-          </h1>
-          {modifiedLabel ? (
-            <span className="designer-page__modified" data-testid="designer-page-modified">
-              {modifiedLabel}
-            </span>
+      <div className="designer-page__main">
+        <header className="designer-page__toolbar" data-testid="designer-page-toolbar">
+          {onToggleSidebarCollapse ? (
+            <button
+              type="button"
+              className="designer-page__sidebar-collapse"
+              onClick={onToggleSidebarCollapse}
+              aria-label={sidebarCollapsed ? t('common.expand') : t('common.collapse')}
+              aria-pressed={!sidebarCollapsed}
+              title={sidebarCollapsed ? t('common.expand') : t('common.collapse')}
+              data-testid="designer-page-sidebar-collapse"
+              data-variant={sidebarCollapsed ? 'expand' : 'collapse'}
+            >
+              <PanelCollapseIcon aria-hidden />
+            </button>
           ) : null}
-        </div>
-        <div className="designer-page__toolbar-actions">
-          <span className="designer-page__zoom" data-testid="designer-page-zoom">
-            {zoomPercent}%
-          </span>
-          <span className="designer-page__toolbar-split" aria-hidden />
-          <button
-            type="button"
-            className="designer-page__toolbar-icon-btn"
-            aria-label={t('designer.dock.layout')}
-            title={t('designer.dock.layoutHint')}
-            data-testid="designer-page-layout"
-            disabled={!canvasInteractive || !domainGraph?.nodes.length}
-            onClick={requestAutoLayout}
-          >
-            <LayoutGrid size={18} aria-hidden />
-          </button>
-          <button
-            type="button"
-            className={`designer-page__toolbar-text-btn${minimapVisible ? ' is-active' : ''}`}
-            aria-label={t('designer.toolbar.minimap')}
-            aria-pressed={minimapVisible}
-            title={t('designer.toolbar.minimap')}
-            data-testid="designer-page-minimap-toggle"
-            disabled={!canvasInteractive}
-            onClick={toggleMinimap}
-          >
-            <MapIcon size={16} aria-hidden />
-            <span>{t('designer.toolbar.minimap')}</span>
-          </button>
-          <button
-            type="button"
-            className={`designer-page__toolbar-outline-btn${chatSidebarOpen ? ' is-active' : ''}`}
-            aria-label={t('designer.toolbar.openChat')}
-            aria-pressed={chatSidebarOpen}
-            title={t('designer.toolbar.openChat')}
-            data-testid="designer-page-chat-toggle"
-            onClick={toggleChatSidebar}
-          >
-            <MessageSquare size={16} aria-hidden />
-            <span>{t('designer.toolbar.openChat')}</span>
-          </button>
-          <DesignerRunControl
-            graph={showCanvas ? domainGraph : null}
-            disabled={!canvasInteractive}
-          />
-        </div>
-      </header>
-      {runError ? (
-        <div
-          className="app-toast-wrapper app-toast-wrapper--top-center"
-          data-testid="designer-run-error-toast"
-        >
-          <div className="app-connection-toast" role="alert" data-testid="designer-error">
-            {runError}
+          <div className="designer-page__heading">
+            <h1 className="designer-page__title" data-testid="designer-page-title">
+              {projectTitle || t('designer.subtitle')}
+            </h1>
+            {modifiedLabel ? (
+              <span className="designer-page__modified" data-testid="designer-page-modified">
+                {modifiedLabel}
+              </span>
+            ) : null}
           </div>
-        </div>
-      ) : null}
-      {runWarning ? (
-        <p className="designer-page__warning" data-testid="designer-warning">
-          {runWarning}
-        </p>
-      ) : null}
+          <div className="designer-page__toolbar-actions">
+            <span className="designer-page__zoom" data-testid="designer-page-zoom">
+              {zoomPercent}%
+            </span>
+            <span className="designer-page__toolbar-split" aria-hidden />
+            <button
+              type="button"
+              className="designer-page__toolbar-icon-btn"
+              aria-label={t('designer.dock.layout')}
+              title={t('designer.dock.layoutHint')}
+              data-testid="designer-page-layout"
+              disabled={!canvasInteractive || !domainGraph?.nodes.length}
+              onClick={requestAutoLayout}
+            >
+              <LayoutGrid size={18} aria-hidden />
+            </button>
+            <button
+              type="button"
+              className={`designer-page__toolbar-text-btn${minimapVisible ? ' is-active' : ''}`}
+              aria-label={t('designer.toolbar.minimap')}
+              aria-pressed={minimapVisible}
+              title={t('designer.toolbar.minimap')}
+              data-testid="designer-page-minimap-toggle"
+              disabled={!canvasInteractive}
+              onClick={toggleMinimap}
+            >
+              <MapIcon size={16} aria-hidden />
+              <span>{t('designer.toolbar.minimap')}</span>
+            </button>
+            <button
+              type="button"
+              className={`designer-page__toolbar-outline-btn${chatSidebarOpen ? ' is-active' : ''}`}
+              aria-label={t('designer.toolbar.openChat')}
+              aria-pressed={chatSidebarOpen}
+              title={t('designer.toolbar.openChat')}
+              data-testid="designer-page-chat-toggle"
+              onClick={toggleChatSidebar}
+            >
+              <MessageSquare size={16} aria-hidden />
+              <span>{t('designer.toolbar.openChat')}</span>
+            </button>
+            <DesignerRunControl
+              graph={showCanvas ? domainGraph : null}
+              disabled={!canvasInteractive}
+            />
+          </div>
+        </header>
+        {runError ? (
+          <div
+            className="app-toast-wrapper app-toast-wrapper--top-center"
+            data-testid="designer-run-error-toast"
+          >
+            <div className="app-connection-toast" role="alert" data-testid="designer-error">
+              {runError}
+            </div>
+          </div>
+        ) : null}
+        {runWarning ? (
+          <p className="designer-page__warning" data-testid="designer-warning">
+            {runWarning}
+          </p>
+        ) : null}
 
-      <div className="designer-page__workspace">
         <div className="designer-page__canvas-area">
           {showCanvas && domainGraph ? <DesignerCanvas graph={domainGraph} /> : null}
 
@@ -266,10 +296,10 @@ export function DesignerPage({
           {showEmpty ? <DesignerEmptyState variant="empty" /> : null}
           {showError ? <DesignerEmptyState variant="error" errorMessage={loadError} /> : null}
         </div>
-
-        {assetsSidebarOpen ? <DesignerAssetsSidebar /> : null}
-        {chatSidebarOpen ? <DesignerChatPanel /> : null}
       </div>
+
+      {assetsSidebarOpen ? <DesignerAssetsSidebar /> : null}
+      {chatSidebarOpen ? <DesignerChatPanel /> : null}
 
       {viewerOpen ? (
         <DesignerMaterialViewer

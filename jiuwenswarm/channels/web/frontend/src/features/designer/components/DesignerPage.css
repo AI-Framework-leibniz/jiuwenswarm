@@ -3,9 +3,19 @@
   display: flex;
   flex: 1 1 0%;
   min-height: 0;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: stretch;
   overflow: hidden;
   background: var(--color-surface-shell);
+}
+
+.designer-page__main {
+  display: flex;
+  flex: 1 1 0%;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .designer-page__toolbar {
@@ -141,15 +151,6 @@
   cursor: not-allowed;
 }
 
-.designer-page__workspace {
-  position: relative;
-  display: flex;
-  flex: 1 1 0%;
-  min-width: 0;
-  min-height: 0;
-  align-items: stretch;
-}
-
 .designer-page__canvas-area {
   position: relative;
   flex: 1 1 0%;
@@ -160,6 +161,7 @@
 .designer-assets-sidebar {
   display: flex;
   flex: 0 0 280px;
+  align-self: stretch;
   width: 280px;
   min-width: 240px;
   max-width: 320px;
@@ -500,7 +502,7 @@
 
 .designer-page__canvas .react-flow__minimap.designer-canvas__minimap {
   margin-right: 12px;
-  margin-bottom: 132px;
+  margin-bottom: 96px;
   border: 1px solid var(--color-border-default);
 }
 
@@ -508,7 +510,7 @@
   display: flex;
   flex-direction: row;
   margin-right: 12px;
-  margin-bottom: 80px;
+  margin-bottom: 56px;
   box-shadow: none;
   border: 1px solid var(--color-border-default);
   border-radius: 8px;
@@ -516,7 +518,7 @@
 }
 
 .designer-page__canvas .react-flow__controls.designer-canvas__controls--below-minimap {
-  margin-bottom: 80px;
+  margin-bottom: 56px;
 }
 
 .designer-page__canvas .react-flow__controls.designer-canvas__controls .react-flow__controls-button {
@@ -696,6 +698,7 @@
 .designer-chat-panel {
   display: flex;
   flex: 0 0 360px;
+  align-self: stretch;
   width: 360px;
   min-width: 280px;
   max-width: 420px;
