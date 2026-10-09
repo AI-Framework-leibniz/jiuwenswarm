@@ -1148,8 +1148,11 @@
   justify-content: flex-start;
   gap: 4px;
   height: 22px;
-  padding: 0 2px;
-  margin-bottom: 2px;
+  padding: 0 2px 0 0;
+  margin: 0 0 6px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
 }
 
 .designer-node__card {
