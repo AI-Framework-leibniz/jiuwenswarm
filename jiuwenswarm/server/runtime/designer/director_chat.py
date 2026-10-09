@@ -1,6 +1,11 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""Invisible Designer leader: chat-driven graph edits and output refine."""
+"""Director chat: canvas follow-up turns handled by the same Director that composed the graph.
+
+Each step is a standalone function over an explicit graph snapshot so it can later be
+registered as a team-leader tool: ``director_chat_context`` → ``plan_chat_turn`` →
+``edit_graph`` → ``sync_documents``. ``run_director_chat`` chains them for one turn.
+"""
 
 from __future__ import annotations
 
@@ -61,7 +66,10 @@ _ADD_HINT = re.compile(
 _CONNECT_HINT = re.compile(r"(接到|连到|connect(?:\s+to)?)", re.I)
 _VIDEO_HINT = re.compile(r"(视频|镜头|clip|video)", re.I)
 
-_LEADER_SYSTEM = """You are the invisible Designer Leader. Reply with a JSON object only.
+_DIRECTOR_CHAT_SYSTEM = """You are the Designer Director. You authored this project's brief, storyboard and
+execution graph; now you handle the user's follow-up requests on the canvas. Reply with a JSON object only.
+director_context holds your earlier decisions (director skill, scenario skill, brief notes,
+spatial and language locks). Keep edits consistent with them unless the user asks to change them.
 Canvas node type and config.role must be one of: text, table, image, video, audio.
 Character/Scene/Keyframe/Clip/Film are pipelines, never node kinds.
 Do not rebuild the whole graph. Patch only what the user asked.
@@ -125,7 +133,7 @@ _ACTION_DEPENDENT_FIELDS = (
     "spatial_lock", "continuity_lock", "director_task",
 )
 
-_LEADER_CONFIG_FIELDS = {
+_CHAT_EDITABLE_CONFIG_FIELDS = {
     "prompt", "shot_index", "shot_action", "camera", "timeline", "shot_title",
     "character_id", "character_ids", "setting_id", "on_screen", "offscreen",
     "cast_actions", "scene_specs", "speech_line", "continuity_lock",
@@ -236,10 +244,10 @@ def _action_review_fields(config: dict[str, Any]) -> list[str]:
     return fields
 
 
-def _leader_node_context(node: DesignerGraphNode) -> dict[str, Any]:
+def _chat_node_context(node: DesignerGraphNode) -> dict[str, Any]:
     """Expose the execution prompt at the same config path accepted by chat edits."""
     config = node.get("config") or {}
-    editable_config = {key: value for key, value in config.items() if key in _LEADER_CONFIG_FIELDS}
+    editable_config = {key: value for key, value in config.items() if key in _CHAT_EDITABLE_CONFIG_FIELDS}
     prompt = (config.get("generate") or {}).get("prompt") or config.get("prompt")
     if prompt:
         editable_config["prompt"] = prompt
@@ -335,7 +343,7 @@ def _shot_removal_patch(graph: DesignerExecutionGraph, patch: dict[str, Any], sh
     return {**patch, "remove_node_ids": sorted(set(patch.get("remove_node_ids", [])) | removed)}
 
 
-def apply_leader_plan(
+def apply_chat_plan(
     graph: DesignerExecutionGraph,
     plan: dict[str, Any],
 ) -> tuple[DesignerExecutionGraph, list[str], str]:
@@ -362,10 +370,10 @@ def apply_leader_plan(
 
 def _sanitize_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(plan, dict) or plan.get("intent") not in {"edit_graph", "refine_node", "answer"}:
-        raise DesignerGraphValidationError("Leader returned an invalid editing plan; please retry")
+        raise DesignerGraphValidationError("Director returned an invalid editing plan; please retry")
     for key, kind in (("patch", dict), ("prompt_updates", list), ("run_node_ids", list), ("edit_documents", bool)):
         if key in plan and not isinstance(plan[key], kind):
-            raise DesignerGraphValidationError(f"Leader returned invalid {key}")
+            raise DesignerGraphValidationError(f"Director returned invalid {key}")
     shot_ids = plan.get("remove_shot_ids", [])
     if not isinstance(shot_ids, list) or any(not isinstance(item, str) or not item.strip() for item in shot_ids):
         raise DesignerGraphValidationError("remove_shot_ids must be an array of current clip/frame IDs")
@@ -393,13 +401,38 @@ def _sanitize_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-async def _llm_leader_plan(
+_DIRECTOR_CONTEXT_TEXT_LIMITS = (
+    ("director_skill", ("director_skill_excerpt", "active_director_skill"), 2000),
+    ("scenario_skill", ("scenario_skill_excerpt",), 2500),
+    ("brief_notes", ("director_brief_notes",), 1500),
+)
+
+
+def director_chat_context(graph: DesignerExecutionGraph) -> dict[str, Any]:
+    """Bootstrap-time Director decisions that later chat turns must stay consistent with."""
+    meta = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
+    context: dict[str, Any] = {}
+    for name, keys, limit in _DIRECTOR_CONTEXT_TEXT_LIMITS:
+        text = next((str(meta.get(key) or "").strip() for key in keys if str(meta.get(key) or "").strip()), "")
+        if text:
+            context[name] = text[:limit]
+    spatial_lock = meta.get("spatial_lock")
+    if isinstance(spatial_lock, dict) and spatial_lock:
+        context["spatial_lock"] = spatial_lock
+    language_lock = str(meta.get("language_lock") or "").strip()
+    if language_lock:
+        context["language_lock"] = language_lock
+    return context
+
+
+async def plan_chat_turn(
     graph: DesignerExecutionGraph,
     message: str,
     *,
-    selected_node_id: str = "",
     documents: dict[str, ChatDocument],
+    selected_node_id: str = "",
 ) -> dict[str, Any]:
+    """Ask the Director model for a sanitized edit plan; does not mutate the graph."""
     from jiuwenswarm.server.runtime.designer.model_tools import (
         DesignerLlmError,
         LLM_API_ERROR,
@@ -411,6 +444,7 @@ async def _llm_leader_plan(
     meta = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
     snapshot = {
         "selected_node_id": selected_node_id,
+        "director_context": director_chat_context(graph),
         "user_canvas_edits": list(meta.get("user_canvas_edits") or [])[-20:],
         "description": graph.get("description", ""),
         "documents": [{"node_id": doc.node_id, "pipeline": doc.pipeline, "text": doc.text} for doc in documents.values()],
@@ -420,7 +454,7 @@ async def _llm_leader_plan(
             for index in sorted({node_shot_index(node) for node in graph["nodes"]
                                  if node_pipeline(node) in {"frame", "clip"}})
         ],
-        "nodes": [_leader_node_context(node) for node in graph["nodes"]],
+        "nodes": [_chat_node_context(node) for node in graph["nodes"]],
         "edges": [
             {"id": edge.get("id"), "source": edge.get("source"), "target": edge.get("target")}
             for edge in graph.get("edges") or []
@@ -430,14 +464,14 @@ async def _llm_leader_plan(
     try:
         result = await call_model_tool(
             prompt=json.dumps(snapshot, ensure_ascii=False),
-            system=_LEADER_SYSTEM,
+            system=_DIRECTOR_CHAT_SYSTEM,
             max_tokens=16384,
         )
         text = model_text_or_raise(result)
     except DesignerLlmError:
         raise
     except Exception as exc:  # noqa: BLE001
-        logger.info("Leader chat model call failed", exc_info=True)
+        logger.info("Director chat model call failed", exc_info=True)
         raise DesignerLlmError(
             f"Chat model request failed while planning canvas edits: {exc}",
             code=LLM_API_ERROR,
@@ -452,7 +486,61 @@ async def _llm_leader_plan(
     return plan
 
 
-async def run_leader_chat(
+def edit_graph(
+    graph: DesignerExecutionGraph,
+    plan: dict[str, Any],
+    message: str,
+    *,
+    pending_documents: bool = False,
+) -> tuple[DesignerExecutionGraph, list[str], str]:
+    """Apply a sanitized plan to a copy of ``graph`` within the user's requested edit scope."""
+    if plan.get("intent") == "answer" and any(plan.get(key) for key in ("patch", "remove_shot_ids", "prompt_updates", "edit_documents")):
+        raise DesignerGraphValidationError("An answer cannot also modify the workflow")
+
+    patch = plan.get("patch") or {}
+    if pending_documents and (
+        plan.get("edit_documents") or plan.get("prompt_updates") or plan.get("remove_shot_ids")
+        or "description" in patch
+        or any(patch.get(key) for key in ("remove_node_ids", "remove_edge_ids", "upsert_edges"))
+        or any(set(node) - {"id", "label", "layout"} for node in patch.get("upsert_nodes", []))
+    ):
+        raise ChatDocumentConflict("大纲或分镜有待选择版本，请先保留原版或采用新版，再重试编辑。")
+    next_graph, run_ids, summary = apply_chat_plan(deepcopy(graph), plan)
+    return restore_graph_attribute_scope(graph, next_graph, message), run_ids, summary
+
+
+async def sync_documents(
+    graph: DesignerExecutionGraph,
+    next_graph: DesignerExecutionGraph,
+    documents: dict[str, ChatDocument],
+    message: str,
+    *,
+    edit_documents: bool,
+    progress: ProgressFn | None = None,
+) -> tuple[DesignerExecutionGraph, dict[str, str], bool]:
+    """Bring brief/storyboard texts in line with ``next_graph``; returns (graph, texts, changed)."""
+    text_edits = []
+    if edit_documents or graph_content_changed(graph, next_graph):
+        validate_shot_topology(next_graph)
+        remaining_ids = {node["id"] for node in next_graph["nodes"]}
+        remaining_documents = {
+            key: doc for key, doc in documents.items() if key in remaining_ids and doc.text
+        }
+        if remaining_documents:
+            _emit(progress, ACTIVITY_KIND_STAGE, "Director · synchronizing the complete brief and storyboard")
+            next_graph, text_edits = await plan_document_edits(graph, next_graph, remaining_documents, message)
+    next_graph, texts, changed = prepare_document_update(graph, next_graph, documents, text_edits)
+    next_graph = restore_graph_attribute_scope(graph, next_graph, message)
+    texts = restore_document_attribute_scope(
+        graph,
+        {key: doc.text for key, doc in documents.items()},
+        texts,
+        message,
+    )
+    return next_graph, texts, changed
+
+
+async def run_director_chat(
     graph: DesignerExecutionGraph,
     message: str,
     *,
@@ -463,44 +551,22 @@ async def run_leader_chat(
     pending_documents: bool = False,
 ) -> dict[str, Any]:
     text = str(message or "").strip()
-    _emit(progress, ACTIVITY_KIND_THINKING, "reading the canvas and current documents")
-    plan = await _llm_leader_plan(graph, text, selected_node_id=selected_node_id, documents=documents)
-    _emit(progress, ACTIVITY_KIND_THINKING, plan.get("thinking") or "preparing workflow edits")
+    _emit(progress, ACTIVITY_KIND_THINKING, "Director · reading the canvas and current documents")
+    plan = await plan_chat_turn(graph, text, selected_node_id=selected_node_id, documents=documents)
+    _emit(progress, ACTIVITY_KIND_THINKING, plan.get("thinking") or "Director · preparing workflow edits")
     if not message_asks_to_run(text, run_new_nodes=run_new_nodes):
         plan["run_node_ids"] = []
-    if plan.get("intent") == "answer" and any(plan.get(key) for key in ("patch", "remove_shot_ids", "prompt_updates", "edit_documents")):
-        raise DesignerGraphValidationError("An answer cannot also modify the workflow")
-
-    patch = plan.get("patch") or {}
-    if pending_documents and (
-        plan["edit_documents"] or plan["prompt_updates"] or plan.get("remove_shot_ids")
-        or "description" in patch
-        or any(patch.get(key) for key in ("remove_node_ids", "remove_edge_ids", "upsert_edges"))
-        or any(set(node) - {"id", "label", "layout"} for node in patch.get("upsert_nodes", []))
-    ):
-        raise ChatDocumentConflict("大纲或分镜有待选择版本，请先保留原版或采用新版，再重试编辑。")
-    next_graph, run_ids, summary = apply_leader_plan(deepcopy(graph), plan)
-    next_graph = restore_graph_attribute_scope(graph, next_graph, text)
-    text_edits = []
-    if plan["edit_documents"] or graph_content_changed(graph, next_graph):
-        validate_shot_topology(next_graph)
-        remaining_ids = {node["id"] for node in next_graph["nodes"]}
-        remaining_documents = {
-            key: doc for key, doc in documents.items() if key in remaining_ids and doc.text
-        }
-        if remaining_documents:
-            _emit(progress, ACTIVITY_KIND_STAGE, "synchronizing the complete brief and storyboard")
-            next_graph, text_edits = await plan_document_edits(graph, next_graph, remaining_documents, text)
-    next_graph, texts, changed = prepare_document_update(graph, next_graph, documents, text_edits)
-    next_graph = restore_graph_attribute_scope(graph, next_graph, text)
-    texts = restore_document_attribute_scope(
+    next_graph, run_ids, summary = edit_graph(graph, plan, text, pending_documents=pending_documents)
+    next_graph, texts, changed = await sync_documents(
         graph,
-        {key: doc.text for key, doc in documents.items()},
-        texts,
+        next_graph,
+        documents,
         text,
+        edit_documents=bool(plan.get("edit_documents")),
+        progress=progress,
     )
     if changed:
-        _emit(progress, ACTIVITY_KIND_TOOL_CALL, "validated workflow edits; preparing to save", tool="designer_graph_patch")
+        _emit(progress, ACTIVITY_KIND_TOOL_CALL, "Director · validated workflow edits; preparing to save", tool="designer_graph_patch")
     return {
         "intent": plan["intent"],
         "summary": summary,
