@@ -3,7 +3,7 @@
 
 Clothing locks alone can dominate prompts and wash out where people stand, how they
 pose, who they look at, and who talks to whom. These locks are shot-local (and
-setting-aware) and must be injected into BOTH keyframes and clips at equal
+setting-aware) and must be injected into BOTH clip specs and clips at equal
 priority with clothing — without changing soft clip concurrency or hard compose waits.
 """
 
@@ -236,7 +236,7 @@ def build_relationship_lock(
     seen: set[str] = set()
     uniq: list[str] = []
     for b in bits:
-        key = re.sub(r"['clips']+", " ", b).strip().lower()
+        key = re.sub(r"\s+", " ", b).strip().lower()
         if key and key not in seen:
             seen.add(key)
             uniq.append(b)
@@ -292,8 +292,8 @@ def staging_lock_clause(
     setting_id: str = "",
     for_clip: bool = False,
 ) -> str:
-    """Prompt block for keyframes and clips."""
-    where = "this clip (match storyboard contact poses — solos are identity only)" if for_clip else "this keyframe"
+    """Prompt block for clip specs and clips."""
+    where = "this clip (match storyboard contact poses — character specs are identity only)" if for_clip else "this clip spec"
     scope = f"shot {clip_index}" if clip_index else "this shot"
     if setting_id:
         scope += f" / setting `{setting_id}`"

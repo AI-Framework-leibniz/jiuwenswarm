@@ -1,5 +1,5 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""Structured clothing / wardrobe locks for cast consistency across keyframes + clips.
+"""Structured clothing / wardrobe locks for cast consistency across clip specs + clips.
 
 costume_lock must name garment slots (top/shirt, bottom/trousers, footwear, outerwear,
 accessories) with style + color — not a vague one-liner — and the same lock is injected
@@ -16,7 +16,7 @@ _COLOR = (
     r"olive|maroon|burgundy|teal|coral|pastel|black|white|grey|gray|blue|red|green|"
     r"brown|tan|pink|purple|yellow|orange|gold|silver|denim)"
 )
-_COLOR_PHRASE = rf"(?:{_COLOR}(?:[['clips']\-]+{_COLOR})*)"
+_COLOR_PHRASE = rf"(?:{_COLOR}(?:[\s\-]+{_COLOR})*)"
 
 _ACCESSORY_RE = re.compile(
     r"\b(?P<item>glasses|eyeglasses|sunglasses|watch|belt|scarf|hat|cap|tie|necklace|"
@@ -27,7 +27,7 @@ _ACCESSORY_RE = re.compile(
 
 def _clean_bit(*parts: str) -> str:
     raw = " ".join(p.strip() for p in parts if p and str(p).strip())
-    return re.sub(r"['clips']+", " ", raw).strip(" -,").lower()
+    return re.sub(r"\s+", " ", raw).strip(" -,").lower()
 
 
 def _window_before(blob: str, end: int, *, span: int = 48) -> str:
@@ -84,7 +84,7 @@ _DRESS_STYLES = ("midi", "maxi", "mini", "cocktail", "evening", "casual")
 
 def extract_clothing_parts(text: str) -> dict[str, str]:
     """Parse garment slots from free-text character description / costume_lock."""
-    blob = re.sub(r"['clips']+", " ", (text or "").strip())
+    blob = re.sub(r"\s+", " ", (text or "").strip())
     parts: dict[str, str] = {}
     if not blob:
         return parts
@@ -103,8 +103,8 @@ def extract_clothing_parts(text: str) -> dict[str, str]:
         )
 
     m = re.search(
-        r"\b(?P<item>shirt|blouse|tee|t[['clips']\-]?shirt|top|sweater|jumper|hoodie|"
-        r"tank[['clips']\-]?top|camisole|henley|cardigan)\b",
+        r"\b(?P<item>shirt|blouse|tee|t[\s\-]?shirt|top|sweater|jumper|hoodie|"
+        r"tank[\s\-]?top|camisole|henley|cardigan)\b",
         blob,
         re.I,
     )
@@ -118,7 +118,7 @@ def extract_clothing_parts(text: str) -> dict[str, str]:
 
     m = re.search(
         r"\b(?P<item>trousers|pants|jeans|slacks|chinos|shorts|skirt|leggings|"
-        r"cargo[['clips']\-]?pants)\b",
+        r"cargo[\s\-]?pants)\b",
         blob,
         re.I,
     )
@@ -166,7 +166,7 @@ def format_clothing_slots(parts: dict[str, str] | None, *, fallback: str = "") -
     bits = [f"{key}={parts[key]}" for key in order if key in parts]
     if bits:
         return "; ".join(bits)
-    fb = re.sub(r"['clips']+", " ", (fallback or "").strip())
+    fb = re.sub(r"\s+", " ", (fallback or "").strip())
     return fb[:280] if fb else ""
 
 
@@ -256,11 +256,11 @@ def clothing_lock_clause(
     *,
     for_clip: bool = False,
 ) -> str:
-    """Prompt block injected into keyframes and clips."""
-    text = re.sub(r"['clips']+", " ", (costume_lock or "").strip())
+    """Prompt block injected into clip specs and clips."""
+    text = re.sub(r"\s+", " ", (costume_lock or "").strip())
     if not text:
         return ""
-    where = "this clip (match Image 1 + identity sheets)" if for_clip else "this keyframe"
+    where = "this clip (match Image 1 + character specs)" if for_clip else "this clip spec"
     return (
         f"CLOTHING LOCK ({where}): {text[:720]}\n"
         + clothing_hold_rule()

@@ -600,7 +600,7 @@ async def test_classify_reference_images_marks_a_product_as_an_object(
     system = str(seen.get("system") or "")
     assert "suppress_companions" not in system
     assert "solo_subject" not in system
-    assert "keyframe_complete" not in system
+    assert "still_complete" not in system
     body = str(seen.get("prompt") or "")
     assert "char_1" in body
     assert "set_1" in body
@@ -838,7 +838,7 @@ async def test_analyze_creative_brief_sends_reference_images(
             "text": (
                 '{"characters":[{"id":"char_1","name":"Hero","description":"from image 1"}],'
                 '"scenes":[{"id":"scene_1","name":"Street","description":"urban"}],'
-                '"shots":[{"clip_index":1,"title":"Walk","action":"walks","camera":"medium",'
+                '"clips":[{"clip_index":1,"title":"Walk","action":"walks","camera":"medium",'
                 '"character_ids":["char_1"],"clip_prompt":"Hero walks","timeline":"0.0-5.0s"}],'
                 '"cast_layout":"single","target_clip_count":1,"prefer_combined_cast":false,'
                 '"prefer_split_cast":false,'
@@ -886,7 +886,7 @@ async def test_clip_passes_user_video_as_file_not_first_frame(
     from jiuwenswarm.server.runtime.designer.handlers.common import file_output_ref
     from jiuwenswarm.server.runtime.designer.handlers.types import NodeExecutionContext
 
-    frame = tmp_path / "keyframe.png"
+    frame = tmp_path / "clip_still.png"
     video = tmp_path / "ref.mp4"
     out = tmp_path / "clip.mp4"
     frame.write_bytes(_png_bytes())

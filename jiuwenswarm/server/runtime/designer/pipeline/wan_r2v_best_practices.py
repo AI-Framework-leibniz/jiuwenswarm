@@ -23,7 +23,7 @@ _POSE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b(?:kneel(?:s|ing)?|knelt)\b", re.I), "kneeling_on_surface"),
     (re.compile(r"\b(?:lie|lies|lying|lay|reclining)\b", re.I), "reclining_on_surface"),
     (re.compile(r"\b(?:lean(?:s|ing)?|leant|leaned)\b", re.I), "leaning_on_support"),
-    (re.compile(r"\b(?:stand(?:s|ing)?|stood)['clips']+(?:at|by|beside|near|behind|in front of)\b", re.I), "standing_beside_support"),
+    (re.compile(r"\b(?:stand(?:s|ing)?|stood)\s+(?:at|by|beside|near|behind|in front of)\b", re.I), "standing_beside_support"),
     (re.compile(r"\b(?:hold(?:s|ing)?|held|grasp(?:s|ing)?|clutch(?:es|ing)?)\b", re.I), "holding_prop"),
     (re.compile(r"\b(?:walk(?:s|ing)?|exit(?:s|ing)?|enter(?:s|ing)?|leave|leaves|leaving)\b", re.I), "standing_and_moving"),
     (re.compile(r"\b(?:crouch(?:es|ing)?|squat(?:s|ting)?)\b", re.I), "crouching_on_surface"),
@@ -51,7 +51,7 @@ def contact_anti_penetration_clause(*, for_clip: bool = True) -> str:
         "If posture is seated/kneeling/reclining/leaning: visible contact with the "
         "support surface (seat, floor, edge, rail) — weight rests ON the surface, "
         "not floating and not sunk THROUGH it. "
-        "Solo identity sheets may show standing studio poses; when the shot requires "
+        "Solo character specs may show standing studio poses; when the shot requires "
         "contact with set geometry, REPOSE the body for This shot (do not paste the "
         "standing sheet pose into the room). "
         "Hands/props: grasp exteriors; do not bury limbs inside objects. "
@@ -92,7 +92,7 @@ def wan_reference_media_rules(*, prior_ending_count: int = 0) -> str:
     else:
         lines.append(
             "- First clip of a setting: no prior ending still — play the storyboard shot "
-            "using identity solos + scene specs."
+            "using identity character specs + scene specs."
         )
     return "\n".join(lines)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from jiuwenswarm.server.runtime.designer.pipeline.director_contract import (
     _cid_list,
-    _explicit_shot_count_from_prompt,
+    _explicit_clip_count_from_prompt,
     enrich_analysis_heuristically,
     infer_shot_budget,
 )
@@ -22,13 +22,13 @@ PROMPT_3 = (
 
 
 def test_explicit_shot_count_cn_三分镜():
-    assert _explicit_shot_count_from_prompt(PROMPT_3) == 3
+    assert _explicit_clip_count_from_prompt(PROMPT_3) == 3
     assert infer_shot_budget(PROMPT_3, {}) == 3
 
 
 def test_explicit_shot_count_en():
-    assert _explicit_shot_count_from_prompt("Make a 3-shot vertical video") == 3
-    assert _explicit_shot_count_from_prompt("four-shot sequence") == 4
+    assert _explicit_clip_count_from_prompt("Make a 3-shot vertical video") == 3
+    assert _explicit_clip_count_from_prompt("four-shot sequence") == 4
 
 
 def test_resolve_cast_names_to_ids():
@@ -99,7 +99,7 @@ def test_enrich_keeps_on_screen_names_mapped():
     assert out["clips"][0]["on_screen"] == ["char_1"]
     assert out["clips"][1]["on_screen"] == ["char_1"]
     assert set(out["clips"][2]["on_screen"]) == {"char_1", "char_2"}
-    # Early beats must not pull later-meet cast just because solos exist.
+    # Early beats must not pull later-meet cast just because character specs exist.
     assert "char_2" not in out["clips"][0]["on_screen"]
     assert "char_2" not in out["clips"][1]["on_screen"]
 

@@ -17,7 +17,7 @@ def test_looks_like_lock_essay() -> None:
     )
 
 
-def test_compose_scene_plate_positive() -> None:
+def test_compose_scene_spec_positive() -> None:
     from jiuwenswarm.server.runtime.designer.pipeline.image_prompt_practice import (
         compose_scene_specs_prompt,
     )
@@ -47,7 +47,7 @@ def test_compose_scene_plate_positive() -> None:
     assert "forbid" not in low
 
 
-def test_scene_plate_skips_ids_placeholders_and_planner_rules() -> None:
+def test_scene_spec_skips_ids_placeholders_and_planner_rules() -> None:
     from jiuwenswarm.server.runtime.designer.pipeline.image_prompt_practice import (
         compose_scene_specs_prompt,
     )

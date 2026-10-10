@@ -112,19 +112,19 @@ def test_upload_uri_wins_over_a_stale_generated_output(tmp_path) -> None:
 
 
 def test_material_upload_is_the_clip_input(tmp_path) -> None:
-    keyframe = tmp_path / "keyframe.png"
+    clip_still = tmp_path / "clip_still.png"
     material = tmp_path / "material.png"
-    keyframe.write_bytes(b"kf")
+    clip_still.write_bytes(b"kf")
     material.write_bytes(b"mat")
     graph = {
         "nodes": [
             {
                 "id": "n_clip_1",
                 "type": "image",
-                "config": {"role": "frame", "clip_index": 1},
+                "config": {"role": "clip", "clip_index": 1},
                 "output_ref": {
                     "kind": "image",
-                    "uri": keyframe.resolve().as_uri(),
+                    "uri": clip_still.resolve().as_uri(),
                     "mime_type": "image/png",
                 },
             },
@@ -159,15 +159,15 @@ def test_material_upload_is_the_clip_input(tmp_path) -> None:
 
     refs = collect_clip_reference_images(ctx, 1, clip)
     assert refs == [material.resolve()]
-    assert keyframe.resolve() not in refs
+    assert clip_still.resolve() not in refs
 
 
 def test_user_stills_join_r2v_refs_without_replacing_them(tmp_path) -> None:
-    solo = tmp_path / "solo.png"
+    character_spec = tmp_path / "character_spec.png"
     scene = tmp_path / "scene.png"
     first = tmp_path / "extra-a.png"
     second = tmp_path / "extra-b.png"
-    for path in (solo, scene, first, second):
+    for path in (character_spec, scene, first, second):
         path.write_bytes(b"img")
     graph = {
         "nodes": [
@@ -180,7 +180,7 @@ def test_user_stills_join_r2v_refs_without_replacing_them(tmp_path) -> None:
                 },
                 "output_ref": {
                     "kind": "image",
-                    "uri": solo.resolve().as_uri(),
+                    "uri": character_spec.resolve().as_uri(),
                     "mime_type": "image/png",
                 },
             },
@@ -234,7 +234,7 @@ def test_user_stills_join_r2v_refs_without_replacing_them(tmp_path) -> None:
     ctx = NodeExecutionContext(graph=graph, run_id="run_1", node_id="n_clip_1", run=run)
 
     assert collect_clip_reference_images(ctx, 1, graph["nodes"][2]) == [
-        solo.resolve(),
+        character_spec.resolve(),
         first.resolve(),
         second.resolve(),
         scene.resolve(),
@@ -365,11 +365,11 @@ def test_upstream_images_follow_edges_and_keep_old_attachments(tmp_path) -> None
 def test_wired_user_image_joins_clip_refs_before_the_scene(tmp_path) -> None:
     from jiuwenswarm.server.runtime.designer.handlers.clip import build_clip_prompt
 
-    solo = tmp_path / "solo.png"
+    character_spec = tmp_path / "character_spec.png"
     scene = tmp_path / "scene.png"
     officer = tmp_path / "officer.png"
     unconnected = tmp_path / "unconnected.png"
-    for path in (solo, scene, officer, unconnected):
+    for path in (character_spec, scene, officer, unconnected):
         path.write_bytes(b"img")
     officer_ref = {
         "kind": "image",
@@ -384,7 +384,7 @@ def test_wired_user_image_joins_clip_refs_before_the_scene(tmp_path) -> None:
                 "config": {"role": "character", "character_ids": ["char_1"]},
                 "output_ref": {
                     "kind": "image",
-                    "uri": solo.resolve().as_uri(),
+                    "uri": character_spec.resolve().as_uri(),
                     "mime_type": "image/png",
                 },
             },
@@ -455,7 +455,7 @@ def test_wired_user_image_joins_clip_refs_before_the_scene(tmp_path) -> None:
     )
 
     refs = collect_clip_reference_images(ctx, 2, graph["nodes"][4])
-    assert refs == [solo.resolve(), officer.resolve(), scene.resolve()]
+    assert refs == [character_spec.resolve(), officer.resolve(), scene.resolve()]
     assert unconnected.resolve() not in refs
     prompt = build_clip_prompt(graph, graph["nodes"][4], ctx)
     assert "Image 5" in prompt
@@ -465,18 +465,18 @@ def test_wired_user_image_joins_clip_refs_before_the_scene(tmp_path) -> None:
 def test_attach_order_names_every_edge_input(tmp_path) -> None:
     from jiuwenswarm.server.runtime.designer.handlers.clip import attach_order_clause
 
-    solo = tmp_path / "solo.png"
+    character_spec = tmp_path / "character_spec.png"
     officer = tmp_path / "officer.png"
     scene = tmp_path / "scene.png"
-    for path in (solo, officer, scene):
+    for path in (character_spec, officer, scene):
         path.write_bytes(b"img")
     flow = [
-        ("character", "Character 1", solo),
+        ("character", "Character 1", character_spec),
         ("image", "Image 5", officer),
         ("scene", "Scene 1", scene),
     ]
-    clause = attach_order_clause([solo, officer, scene], flow)
-    assert "Image 1 = Character 1 (solo.png)" in clause
+    clause = attach_order_clause([character_spec, officer, scene], flow)
+    assert "Image 1 = Character 1 (character_spec.png)" in clause
     assert "Image 2 = Image 5 (officer.png)" in clause
     assert "Image 3 = Scene 1 (scene.png)" in clause
     assert "canvas edges" in clause

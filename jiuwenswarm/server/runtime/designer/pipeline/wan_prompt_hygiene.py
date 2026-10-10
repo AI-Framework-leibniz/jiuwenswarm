@@ -16,7 +16,7 @@ from urllib.parse import unquote, urlparse
 
 _NEGATIVE_LINE = re.compile(
     r"(?i)("
-    r"already[_['clips']-]?done|"
+    r"already[_\s-]?done|"
     r"already finished|"
     r"already delivered|"
     r"already staged|"
@@ -39,7 +39,7 @@ _NEGATIVE_LINE = re.compile(
 )
 
 _BLOCK_START = re.compile(
-    r"(?i)^(already[_['clips']-]?done|prior speech|previous clip had|previous wan|"
+    r"(?i)^(already[_\s-]?done|prior speech|previous clip had|previous wan|"
     r"character consistency|same-scene consistency gate)\b"
 )
 
@@ -61,7 +61,7 @@ def scrub_negative_wan_prompt(text: str) -> str:
                 continue
             skip_block = False
         if stripped and _NEGATIVE_LINE.search(stripped):
-            sentences = re.split(r"(?<=[.!?])['clips']+", stripped)
+            sentences = re.split(r"(?<=[.!?])\s+", stripped)
             cleaned = [s for s in sentences if s and not _NEGATIVE_LINE.search(s)]
             if not cleaned:
                 continue

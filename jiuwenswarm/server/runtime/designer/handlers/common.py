@@ -598,10 +598,10 @@ def node_ids_output_image_paths(ctx: NodeExecutionContext, node_ids: list[str]) 
 
 
 def collect_frame_reference_images(ctx: NodeExecutionContext, node: dict) -> list[Path]:
-    """Continuity refs for keyframes: on_screen solo sheets only (+ optional user refs).
+    """Continuity refs for clip stills: on_screen character spec sheets only (+ optional user refs).
 
     A file the user attached on this node replaces those generated stills.
-    Scene consistency comes from scene_specs + prompt handoff text — not prior KF images.
+    Scene consistency comes from scene_specs + prompt handoff text — not prior clip images.
     Never attach scene specs or off-screen cast sheets.
     """
     attached = uploaded_material_image_paths(node)
@@ -627,7 +627,7 @@ def collect_frame_reference_images(ctx: NodeExecutionContext, node: dict) -> lis
         )
         if str(x).strip()
     ]
-    # Prefer preferred list when it already matches on_screen; otherwise resolve solos by cid.
+    # Prefer preferred list when it already matches on_screen; otherwise resolve character specs by cid.
     paths = node_ids_output_image_paths(ctx, preferred) if preferred else []
     if on_screen:
         solo_by_cid: dict[str, str] = {}
@@ -678,8 +678,8 @@ def collect_frame_reference_images(ctx: NodeExecutionContext, node: dict) -> lis
 
     user_paths = user_reference_image_paths(ctx.graph if isinstance(ctx.graph, dict) else None)
 
-    # Do NOT pull empty NODE_ROLE_Scene specs or prior keyframe images into refs.
-    # Continuity is scene_specs + prompt handoff; visual identity is on_screen solos only.
+    # Do NOT pull empty NODE_ROLE_Scene specs or prior clip images into refs.
+    # Continuity is scene_specs + prompt handoff; visual identity is on_screen character specs only.
     ordered = [*user_paths, *paths]
 
     merged: list[Path] = []

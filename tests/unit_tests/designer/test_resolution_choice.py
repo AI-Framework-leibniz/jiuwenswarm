@@ -34,8 +34,6 @@ def _graph(prompt: str, *, director: str = "") -> dict:
         "nodes": [
             {"id": "char", "type": "image", "config": {"role": "character"}},
             {"id": "scene", "type": "image", "config": {"role": "scene"}},
-            {"id": "frame", "type": "image", "config": {"role": "frame"}},
-            {"id": "keyframe", "type": "image", "config": {"role": "keyframe"}},
             {"id": "clip", "type": "video", "config": {"role": "clip"}},
             {"id": "video", "type": "video", "config": {"role": "video"}},
         ],
@@ -106,7 +104,7 @@ def test_user_resolution_wins_on_every_image_and_video_node(monkeypatch) -> None
     assert clip["video_resolution"] == "720P"
     assert clip["video_size"] == "1280*720"
     assert "480P" not in str(clip.get("prompt") or "")
-    for node_id in ("char", "scene", "frame", "keyframe"):
+    for node_id in ("char", "scene"):
         cfg = _cfg(graph, node_id)
         assert cfg.get("video_resolution") in {None, "", "720P"}
         assert cfg.get("video_resolution") != "480P"
@@ -135,7 +133,7 @@ def test_model_default_used_when_user_and_director_are_silent(monkeypatch) -> No
     clip = _cfg(graph, "clip")
     assert clip["video_resolution"] == "1080P"
     assert clip["video_size"] == "1920*1080"
-    for node_id in ("char", "scene", "frame", "keyframe", "clip", "video"):
+    for node_id in ("char", "scene", "clip", "video"):
         text = str(_cfg(graph, node_id).get("prompt") or "") + str(
             _cfg(graph, node_id).get("axis_clause") or ""
         )

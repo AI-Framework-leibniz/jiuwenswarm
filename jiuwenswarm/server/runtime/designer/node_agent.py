@@ -38,8 +38,6 @@ _MEDIA_MATERIALIZE_ROLES = {
     "character",
     "character",
     "scene",
-    "frame",
-    "keyframe",
     "clip",
     "compose",
     "speech",
@@ -51,13 +49,11 @@ _AUDIO_URI_SUFFIXES = (".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg")
 _MEDIA_URI_SUFFIXES = _IMAGE_URI_SUFFIXES + _VIDEO_URI_SUFFIXES + _AUDIO_URI_SUFFIXES
 
 # Role → required media family for handler materialization.
-# Clip/compose must not treat a keyframe PNG as "done" (agents often attach stills).
+# Clip/compose must not treat a character/scene image as "done" (agents often attach stills).
 _ROLE_REQUIRED_MEDIA: dict[str, str] = {
     "character": "image",
     "character": "image",
     "scene": "image",
-    "frame": "image",
-    "keyframe": "image",
     "clip": "video",
     "compose": "video",
     "speech": "audio",
@@ -155,7 +151,7 @@ def _result_has_media(result: NodeResult | None, *, required: str | None = None)
 
 
 def _upstream_image_uri_keys(ctx: NodeExecutionContext | None) -> set[str]:
-    """Character/scene sheet URIs — must not satisfy a frame/keyframe node."""
+    """Character/scene sheet URIs — must not be mistaken for this node's own output."""
     if ctx is None:
         return set()
     keys: set[str] = set()
@@ -176,7 +172,7 @@ def _upstream_image_uri_keys(ctx: NodeExecutionContext | None) -> set[str]:
             except OSError:
                 continue
             keys.add(resolved.as_uri().lower())
-            keys.add(str(resolved).replace("['clips']", "/").lower())
+            keys.add(str(resolved).replace("\\", "/").lower())
             keys.add(resolved.name.lower())
     return keys
 
@@ -186,7 +182,7 @@ def _result_satisfies_required_media(
     node: DesignerGraphNode,
     ctx: NodeExecutionContext | None = None,
 ) -> bool:
-    """Role-aware media check: frames need their own keyframe, not cast/scene refs."""
+    """Role-aware media check: scene/character nodes need their own image, not upstream refs."""
     required = _required_media_family(node)
     if not _result_has_media(result, required=required):
         return False
@@ -198,13 +194,11 @@ def _result_satisfies_required_media(
         "scene",
         "character",
         "character",
-        "frame",
-        "keyframe",
     }:
         primary = result.output_ref if result is not None else None
         if _ref_media_family(primary) != "image":
             return False
-    if required != "image" or role not in {"frame", "keyframe"}:
+    if required != "image" or role not in {"scene", "character"}:
         return True
     refs: list[Any] = []
     if result is not None and result.output_ref is not None:
@@ -222,11 +216,11 @@ def _result_satisfies_required_media(
         label = str(ref.get("label") or "").lower()
         if "designer_frame_" in uri_l or "designer_frame_" in label:
             return True
-        name = Path(uri_l.replace("['clips']", "/").split("/")[-1]).name
-        keys = {uri_l, uri_l.replace("['clips']", "/"), name}
+        name = Path(uri_l.replace("\\", "/").split("/")[-1]).name
+        keys = {uri_l, uri_l.replace("\\", "/"), name}
         if upstream and keys & upstream:
             continue
-        # Non-upstream image counts as this node's keyframe.
+        # Non-upstream image counts as this node's own output.
         return True
     return False
 
@@ -556,7 +550,7 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         extra["hollywood_instructions"] = hollywood_leaf_instructions(role)
         extra["media_prompt_limits"] = limits
         kind = "video" if role in {"clip", "video"} else "image"
-        if role in {"scene", "character", "character", "frame", "keyframe", "clip", "video"}:
+        if role in {"scene", "character", "character", "clip", "video"}:
             lim = resolve_prompt_limit("video" if kind == "video" else "image")
             extra["prompt_char_limit"] = lim.max_chars
             extra["prompt_limit_guidance"] = lim.guidance()
@@ -651,7 +645,7 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         "for prior outputs. Prefer tool-produced file URIs in designer_node_complete.\n"
         "LOCKS (must keep in every tool prompt before image/video calls): "
         "obey PRODUCTION LOCK BIBLE + costume_lock, positioning_lock, language_lock, "
-        "speech_line, occupancy, spatial_lock, and solo identity sheets — never invent "
+        "speech_line, occupancy, spatial_lock, and character specs — never invent "
         "new faces/wardrobe/architecture. Every clip uses character sheets plus the "
         "scene specs, and keeps the film STYLE LOCK.\n"
         "SAME-SCENE PROMPT GATE: the video prompt MUST agree with THIS storyboard shot "
@@ -931,15 +925,13 @@ class DesignerGraphToolkit:
             "scene",
             "character",
             "character",
-            "frame",
-            "keyframe",
         }:
             try:
                 from jiuwenswarm.server.runtime.designer.pipeline.wan_call_locks import (
-                    apply_keyframe_call_locks,
+                    apply_image_call_locks,
                 )
 
-                text = apply_keyframe_call_locks(text, cfg=cfg, graph=self.ctx.graph)
+                text = apply_image_call_locks(text, cfg=cfg, graph=self.ctx.graph)
             except Exception:  # noqa: BLE001
                 pass
         try:

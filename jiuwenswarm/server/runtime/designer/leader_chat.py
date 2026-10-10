@@ -58,12 +58,12 @@ _ADD_HINT = re.compile(
     r"(加|添加|新增|add |new |删|去掉|remove|delete|connect|接到|连到)",
     re.I,
 )
-_CONNECT_HINT = re.compile(r"(接到|连到|connect(?:['clips']+to)?)", re.I)
+_CONNECT_HINT = re.compile(r"(接到|连到|connect(?:\s+to)?)", re.I)
 _VIDEO_HINT = re.compile(r"(视频|镜头|clip|video)", re.I)
 
 _LEADER_SYSTEM = """You are the invisible Designer Leader. Reply with a JSON object only.
 Canvas node type and config.role must be one of: text, table, image, video, audio.
-Character/Scene/Keyframe/Clip/Film are pipelines, never node kinds.
+Character/Scene/Clip/Film are pipelines, never node kinds.
 Do not rebuild the whole graph. Patch only what the user asked.
 Do not create audio nodes. Audio generation is not implemented; users add and upload audio on the canvas.
 Do not wire a new node into clip/compose unless the user asked to connect it.
@@ -137,7 +137,7 @@ _LEADER_CONFIG_FIELDS = {
 
 
 _DONT_RUN = re.compile(
-    r"(先别|(?:不要|别|不用|无需|暂不|不需要|先不)['clips']*(?:重新)?(?:生成|运行|重跑|跑)|without (?:running|generating)|don'?t (?:run|generate)|do not (?:run|generate))",
+    r"(先别|(?:不要|别|不用|无需|暂不|不需要|先不)\s*(?:重新)?(?:生成|运行|重跑|跑)|without (?:running|generating)|don'?t (?:run|generate)|do not (?:run|generate))",
     re.I,
 )
 

@@ -19,6 +19,7 @@ from jiuwenswarm.common.schema.designer_graph import (
     DesignerGraphNode,
     DesignerNodeState,
     NODE_ROLE_BRIEF,
+    NODE_ROLE_CHARACTER,
     NODE_ROLE_CLIP,
     NODE_ROLE_COMPOSE,
     NODE_ROLE_SCENE,
@@ -536,7 +537,7 @@ class GraphExecutor:
             meta = dict(graph.get("metadata") or {})
             # Lock before nodes run so a saved graph with the lock off cannot
             # drop image nodes when the storyboard finishes.
-            meta["freeze_shot_topology"] = True
+            meta["freeze_clip_topology"] = True
             graph["metadata"] = meta
             self._store.save_graph(graph)
         run["status"] = RUN_STATUS_RUNNING
@@ -732,7 +733,7 @@ class GraphExecutor:
         ):
             raise ValueError("Graph edits are unavailable during single-node generation")
         meta = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
-        locked = bool(meta.get("freeze_shot_topology"))
+        locked = bool(meta.get("freeze_clip_topology"))
         failed = False
         for run in self._live_runs.values():
             if str(run.get("graph_id") or "") != str(graph_id):
@@ -1587,7 +1588,7 @@ class GraphExecutor:
             self._cleanup_run(run_id)
 
     def reconcile_loaded_graph(self, graph: DesignerExecutionGraph) -> DesignerExecutionGraph:
-        """Expand per-shot keyframe nodes when a completed storyboard already exists."""
+        """Expand per-shot clip nodes when a completed storyboard already exists."""
         graph_id = str(graph.get("graph_id") or "")
         run = None
         for live in self._live_runs.values():
@@ -1644,9 +1645,9 @@ class GraphExecutor:
         )
         if uses_scene_specs_plus_clips and not current_clip_ids:
             meta = dict(meta)
-            meta["freeze_shot_topology"] = True
+            meta["freeze_clip_topology"] = True
             graph["metadata"] = meta
-        if len(current_clip_ids) != shot_count and not bool(meta.get("freeze_shot_topology")):
+        if len(current_clip_ids) != shot_count and not bool(meta.get("freeze_clip_topology")):
             from jiuwenswarm.server.runtime.designer.smart_graph import (
                 apply_runtime_delegate,
                 build_smart_video_graph,
@@ -1680,6 +1681,39 @@ class GraphExecutor:
                 for i, row in enumerate(shot_rows, start=1)
             ]
             analysis["target_clip_count"] = shot_count
+            # Storyboard-driven rebuild must keep cast/set from the live graph when
+            # analysis was never LLM-filled (handler graphs / tests).
+            if not any(isinstance(c, dict) for c in (analysis.get("characters") or [])):
+                analysis["characters"] = [
+                    {
+                        "id": str(node.get("id") or f"char_{i}"),
+                        "name": str(node.get("label") or f"Character {i}"),
+                    }
+                    for i, node in enumerate(
+                        (
+                            n
+                            for n in (graph.get("nodes") or [])
+                            if node_pipeline(n) == NODE_ROLE_CHARACTER
+                        ),
+                        start=1,
+                    )
+                ] or [{"id": "char_1", "name": "Lead"}]
+            if not any(isinstance(s, dict) for s in (analysis.get("scenes") or [])):
+                analysis["scenes"] = [
+                    {
+                        "id": str(node.get("id") or f"set_{i}"),
+                        "setting_id": str(node.get("id") or f"set_{i}"),
+                        "name": str(node.get("label") or f"Scene {i}"),
+                    }
+                    for i, node in enumerate(
+                        (
+                            n
+                            for n in (graph.get("nodes") or [])
+                            if node_pipeline(n) == NODE_ROLE_SCENE
+                        ),
+                        start=1,
+                    )
+                ] or [{"id": "set_1", "setting_id": "set_1", "name": "Scene"}]
             rebuilt = build_smart_video_graph(
                 project_id=str(graph.get("project_id") or "project"),
                 prompt=str(graph.get("description") or ""),
@@ -1697,7 +1731,7 @@ class GraphExecutor:
             ):
                 if key in meta and meta.get(key) is not None:
                     rmeta[key] = meta.get(key)
-            rmeta["freeze_shot_topology"] = True
+            rmeta["freeze_clip_topology"] = True
             rmeta["script_analysis"] = analysis
             rebuilt["metadata"] = rmeta
             carry_user_references(meta, rebuilt)
@@ -1719,7 +1753,7 @@ class GraphExecutor:
                 callback(deepcopy(saved))
             return saved, remaining, execution_predecessors(saved)
 
-        if bool(meta.get("freeze_shot_topology")):
+        if bool(meta.get("freeze_clip_topology")):
             synced = apply_shot_generate_prompts(graph, prompts)
             if synced is graph:
                 return graph, remaining, execution_predecessors(graph)
@@ -1788,7 +1822,7 @@ class GraphExecutor:
         ):
             if key in meta and meta.get(key) is not None:
                 rmeta[key] = meta.get(key)
-        rmeta["freeze_shot_topology"] = True
+        rmeta["freeze_clip_topology"] = True
         rebuilt["metadata"] = rmeta
         carry_user_references(meta, rebuilt)
         saved = self._store.save_graph(

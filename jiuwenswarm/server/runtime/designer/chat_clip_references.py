@@ -19,17 +19,17 @@ from jiuwenswarm.common.schema.designer_graph import (
 )
 
 _SHOT_REFERENCE = re.compile(
-    r"(?:\bshot['clips']*#?['clips']*|分镜['clips']*#?['clips']*|镜头['clips']*#?['clips']*)([1-9]\d*)(?![0-9A-Za-z_])",
+    r"(?:\bshot\s*#?\s*|分镜\s*#?\s*|镜头\s*#?\s*)([1-9]\d*)(?![0-9A-Za-z_])",
     re.I,
 )
 _CONTINUITY_REFERENCE = re.compile(
-    r"(?:承接|延续|接续|continu(?:ing|es?)['clips']+from)['clips']*(?:shot|分镜|镜头)['clips']*#?['clips']*([1-9]\d*)",
+    r"(?:承接|延续|接续|continu(?:ing|es?)\s+from)\s*(?:shot|分镜|镜头)\s*#?\s*([1-9]\d*)",
     re.I,
 )
 # Duration units after a captured number — not a shot index (e.g. 每个镜头 5 秒).
 # Chinese units must not require \b: 秒的节奏 has no word boundary after 秒.
 _DURATION_AFTER = re.compile(
-    r"^['clips']*(?:"
+    r"^\s*(?:"
     r"秒钟|秒|"
     r"seconds?\b|secs?\b|s\b|"
     r"分钟|"
@@ -39,12 +39,12 @@ _DURATION_AFTER = re.compile(
 )
 # Distributive quantifiers immediately before 镜头/shot/分镜.
 _DISTRIBUTIVE_BEFORE = re.compile(
-    r"(?:每个|每一|各|每|each|every|per)['clips']*$",
+    r"(?:每个|每一|各|每|each|every|per)\s*$",
     re.I,
 )
 _REMOVED_SHOT_MARKER = re.compile(r"\[\[REMOVED_SHOT:[^\]]+\]\]")
 _SHOT_HEADING_TITLE = re.compile(
-    r"(?:shot|分镜|镜头)['clips']*#?['clips']*([1-9]\d*)\b.*",
+    r"(?:shot|分镜|镜头)\s*#?\s*([1-9]\d*)\b.*",
     re.I,
 )
 
@@ -131,7 +131,7 @@ def missing_shot_tombstones(
 
 
 def _collapse_blank_lines(text: str) -> str:
-    text = re.sub(r"[ ['clips']]+\n", "\n", text)
+    text = re.sub(r"[ \s]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
@@ -159,7 +159,7 @@ def _drop_missing_shot_sections(text: str, missing: set[int]) -> str:
     skip_level = 0
     for line in lines:
         stripped = line.strip()
-        heading = re.match(r"^(#{1,6})['clips']+(.+)$", stripped)
+        heading = re.match(r"^(#{1,6})\s+(.+)$", stripped)
         bold = (
             stripped.startswith("**")
             and stripped.endswith("**")
@@ -214,10 +214,10 @@ def _neutralize_inline_missing_refs(text: str, missing: set[int]) -> str:
 
     out = _CONTINUITY_REFERENCE.sub(replace_continuity, out)
     # Clean orphaned chain arrows left after dropping a missing index.
-    out = re.sub(r"[→\-–—]+(?:['clips']*[→\-–—]+)+", "→", out)
-    out = re.sub(r"(?:^|[['clips'],，、])[→\-–—]+", " ", out)
-    out = re.sub(r"[→\-–—]+(?:['clips']|$)", " ", out)
-    out = re.sub(r"[ ['clips']]{2,}", " ", out)
+    out = re.sub(r"[→\-–—]+(?:\s*[→\-–—]+)+", "→", out)
+    out = re.sub(r"(?:^|[\s,，、])[→\-–—]+", " ", out)
+    out = re.sub(r"[→\-–—]+(?:\s|$)", " ", out)
+    out = re.sub(r"[ \s]{2,}", " ", out)
     return out
 
 

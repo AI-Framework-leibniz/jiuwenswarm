@@ -36,7 +36,7 @@ def _same_setting(a: dict[str, Any] | None, b: dict[str, Any] | None) -> bool:
 
 
 def _short(text: str, *, limit: int = 180) -> str:
-    raw = re.sub(r"['clips']+", " ", str(text or "").strip())
+    raw = re.sub(r"\s+", " ", str(text or "").strip())
     return raw[:limit]
 
 
@@ -366,7 +366,7 @@ def prompt_restates_forbidden_speech(prompt: str, cfg: dict[str, Any] | None) ->
     quotes = re.findall(r'["“”]([^"“”]{4,200})["“”]', body)
     candidates = list(quotes)
     # Also check "says: …" clauses without quotes.
-    for m in re.finditer(r"(?i)\bsays?['clips']*:['clips']*(.+?)(?:\.|$)", body):
+    for m in re.finditer(r"(?i)\bsays?\s*:\s*(.+?)(?:\.|$)", body):
         candidates.append(m.group(1).strip())
     for cand in candidates:
         if any(speech_already_delivered(cand, p) for p in forbid):

@@ -226,7 +226,7 @@ async def test_director_storyboard_materializes_enriched_speech_into_clip_config
                             "description": "red sweater; dark trousers; black boots",
                         }
                     ],
-                    "shots": shots,
+                    "clips": shots,
                     "language_lock": "en",
                     "include_speech": True,
                     "include_music": True,

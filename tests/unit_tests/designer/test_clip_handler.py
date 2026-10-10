@@ -116,7 +116,7 @@ def test_build_clip_prompt_reads_upstream_brief_and_storyboard(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_clip_handler_sends_scene_plate_and_storyboard_as_multimodal(
+async def test_clip_handler_sends_scene_spec_and_storyboard_as_multimodal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from jiuwenswarm.common.schema.designer_graph import (
@@ -215,7 +215,7 @@ async def test_clip_handler_sends_scene_plate_and_storyboard_as_multimodal(
 
 
 @pytest.mark.asyncio
-async def test_clip_handler_sends_character_and_keyframe_as_references(
+async def test_clip_handler_sends_character_and_scene_as_references(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from jiuwenswarm.common.schema.designer_graph import (
@@ -230,7 +230,7 @@ async def test_clip_handler_sends_character_and_keyframe_as_references(
     )
     from jiuwenswarm.server.runtime.designer.handlers.common import file_output_ref
 
-    frame = tmp_path / "keyframe.png"
+    frame = tmp_path / "clip_still.png"
     character = tmp_path / "character.png"
     scene = tmp_path / "scene.png"
     story = tmp_path / "storyboard.md"
@@ -472,7 +472,7 @@ async def test_clip_handler_allows_text_only_when_notes_replace_stills(
 
 
 @pytest.mark.asyncio
-async def test_clip_handler_uses_scene_plate_and_storyboard_duration_for_shot(
+async def test_clip_handler_uses_scene_spec_and_storyboard_duration_for_shot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from jiuwenswarm.common.schema.designer_graph import (
@@ -483,12 +483,17 @@ async def test_clip_handler_uses_scene_plate_and_storyboard_duration_for_shot(
     )
     from jiuwenswarm.server.runtime.designer.handlers.common import file_output_ref
 
+    monkeypatch.setattr(
+        "jiuwenswarm.server.runtime.designer.pipeline.model_capacity.configured_video_model_id",
+        lambda: "wan3.0-video",
+    )
     scene = tmp_path / "scene.png"
     story = tmp_path / "storyboard.md"
     scene.write_bytes(b"png-scene")
     story.write_text(
         "## 分镜表\n"
         "| 镜号 | 时间轴 | 镜头视角 | 运镜 | 人物变化 | 场景变化 |\n"
+        "| --- | --- | --- | --- | --- | --- |\n"
         "| 1 | 0.0-2.0s | 全景/平视 | 缓摇 | 未入画 | 站台 |\n"
         "| 2 | 2.0-5.0s | 中景/平视 | 跟移 | 主体入画 | 出站 |\n",
         encoding="utf-8",

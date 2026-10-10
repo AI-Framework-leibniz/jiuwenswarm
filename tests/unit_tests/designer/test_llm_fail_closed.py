@@ -197,7 +197,7 @@ def test_smart_graph_rejects_missing_llm_analysis_sections() -> None:
             }
         ],
     }
-    for missing in ("characters", "scenes", "shots"):
+    for missing in ("characters", "scenes", "clips"):
         analysis = {key: value for key, value in complete.items() if key != missing}
         with pytest.raises(DesignerLlmError, match=missing):
             build_smart_video_graph(

@@ -480,7 +480,7 @@ def test_compose_also_waits_for_connected_audio_nodes(tmp_path):
     assert not _is_ready("n_compose", run, preds, graph)
 
 
-def test_hard_keyframe_dep_still_blocks_until_complete():
+def test_hard_clip_still_dep_blocks_until_complete():
     from jiuwenswarm.common.schema.designer_graph import NODE_STATUS_PENDING, NODE_STATUS_RUNNING
     from jiuwenswarm.server.runtime.designer.executor import _is_ready
 

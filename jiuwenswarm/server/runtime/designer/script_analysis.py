@@ -37,7 +37,7 @@ def _clamp_list(items: list[Any], limit: int) -> list[Any]:
 
 
 def _title_case_label(raw: str) -> str:
-    cleaned = re.sub(r"['clips']+", " ", raw.strip())
+    cleaned = re.sub(r"\s+", " ", raw.strip())
     if not cleaned:
         return ""
     return cleaned[:1].upper() + cleaned[1:]
@@ -48,7 +48,7 @@ def infer_primary_subject_name(prompt: str) -> str:
     text = _strip_prompt_filler(_strip_reference_appendix(prompt))
     match = re.search(
         rf"\b((?:young|old|elderly|little|small|tall|beautiful|handsome|pretty|"
-        rf"sad|happy|angry|scared|lonely|brave)['clips']+)?(({_ROLE_NOUNS}))\b",
+        rf"sad|happy|angry|scared|lonely|brave)\s+)?(({_ROLE_NOUNS}))\b",
         text,
         flags=re.I,
     )
@@ -57,7 +57,7 @@ def infer_primary_subject_name(prompt: str) -> str:
         label = _title_case_label(phrase)
         if label:
             return label
-    art = re.search(rf"\b(?:a|an|the)['clips']+(({_ROLE_NOUNS}))\b", text, flags=re.I)
+    art = re.search(rf"\b(?:a|an|the)\s+(({_ROLE_NOUNS}))\b", text, flags=re.I)
     if art:
         label = _title_case_label(art.group(1))
         if label:
@@ -73,7 +73,7 @@ def infer_primary_subject_name(prompt: str) -> str:
 def _strip_reference_appendix(text: str) -> str:
     """Drop attachment roster so it is not treated as a cinematic beat."""
     cleaned = re.split(
-        r"\n+['clips']*(?:User attached reference media|REFERENCE_MEDIA)\b",
+        r"\n+\s*(?:User attached reference media|REFERENCE_MEDIA)\b",
         text or "",
         maxsplit=1,
         flags=re.I,
@@ -84,8 +84,8 @@ def _strip_reference_appendix(text: str) -> str:
 def _strip_prompt_filler(text: str) -> str:
     """Drop leading ask-phrases so storyboard actions are cinematic, not meta."""
     cleaned = re.sub(
-        r"^(?:i['clips']+want(?:['clips']+the)?(?:['clips']+video)?(?:['clips']+of)?|please['clips']+(?:make|create)|"
-        r"create(?:['clips']+a)?(?:['clips']+video)?(?:['clips']+of)?|make(?:['clips']+a)?(?:['clips']+video)?(?:['clips']+of)?)['clips']+",
+        r"^(?:i\s+want(?:\s+the)?(?:\s+video)?(?:\s+of)?|please\s+(?:make|create)|"
+        r"create(?:\s+a)?(?:\s+video)?(?:\s+of)?|make(?:\s+a)?(?:\s+video)?(?:\s+of)?)\s+",
         "",
         text.strip(),
         flags=re.I,
@@ -98,7 +98,7 @@ def _contextual_character_name(role: str, clause: str, *, another: bool = False)
     cl = clause.lower()
     base = _title_case_label(role)
     if another or re.search(r"\b(?:another|second|other)\b", cl):
-        if re.search(r"\b(?:leaves?|gets?['clips']+up|exits?|walks?['clips']+out|departs?)\b", cl):
+        if re.search(r"\b(?:leaves?|gets?\s+up|exits?|walks?\s+out|departs?)\b", cl):
             return f"{base} leaving"
         return f"{base} 2"
     return base
@@ -207,13 +207,13 @@ def resolve_cast_token_list(
     return out
 
 
-_LEADING_ARTICLE = re.compile(r"^(?:the|a|an|his|her|their)['clips']+", re.I)
+_LEADING_ARTICLE = re.compile(r"^(?:the|a|an|his|her|their)\s+", re.I)
 _ROLE_STEMS = frozenset(_ROLE_NOUNS.split("|"))
 
 
 def _cast_identity_key(name: str) -> str:
     """Fold 'The father' / 'Father' / \"Father's\" onto one key. Keep 'Man 2' distinct."""
-    key = re.sub(r"['clips']+", " ", str(name or "").strip().lower())
+    key = re.sub(r"\s+", " ", str(name or "").strip().lower())
     key = _LEADING_ARTICLE.sub("", key)
     key = re.sub(r"['’]s\b", "", key).strip()
     return key
@@ -231,7 +231,7 @@ def _role_stem(name: str) -> str:
 
 def _is_cast_variant(key: str) -> bool:
     """Numbered or exiting duplicates are different people, not article aliases."""
-    return bool(re.search(r"(?:^|['clips'])(?:\d+|leaving)$", key))
+    return bool(re.search(r"(?:^|\s)(?:\d+|leaving)$", key))
 
 
 def _heuristic_characters(prompt: str) -> list[dict[str, str]]:
@@ -292,7 +292,7 @@ def _heuristic_characters(prompt: str) -> list[dict[str, str]]:
 
     for match in re.finditer(
         # Allow 0–2 adjectives before a role noun from _ROLE_NOUNS.
-        rf"\b(?:a|an|the|his|her|their)['clips']+(?:[A-Za-z-]+['clips']+){{0,2}}((?:{_ROLE_NOUNS}))\b",
+        rf"\b(?:a|an|the|his|her|their)\s+(?:[A-Za-z-]+\s+){{0,2}}((?:{_ROLE_NOUNS}))\b",
         text,
         flags=re.I,
     ):
@@ -304,26 +304,26 @@ def _heuristic_characters(prompt: str) -> list[dict[str, str]]:
         end_i = min(len(text), match.end() + 80)
         clause = text[start_i:end_i].split(".")[0].strip(" ,.;")
         nxt = re.search(
-            rf"\b(?:a|an|the|another|a second|the other|his|her|their)['clips']+"
-            rf"(?:[A-Za-z-]+['clips']+){{0,2}}(?:{_ROLE_NOUNS})\b",
+            rf"\b(?:a|an|the|another|a second|the other|his|her|their)\s+"
+            rf"(?:[A-Za-z-]+\s+){{0,2}}(?:{_ROLE_NOUNS})\b",
             clause[len(match.group(0)) :],
             flags=re.I,
         )
         if nxt:
             clause = clause[: len(match.group(0)) + nxt.start()].strip(" ,.;")
-        if re.match(r"^(?:the|a|an)['clips']+man['clips']+is['clips']+saying\b", clause, flags=re.I):
+        if re.match(r"^(?:the|a|an)\s+man\s+is\s+saying\b", clause, flags=re.I):
             continue
         label = _contextual_character_name(role, clause, another=False)
         # Prefer fuller phrase when adjectives present ("Young Man").
         full = match.group(0).strip()
         full_label = _title_case_label(
-            re.sub(r"^(?:a|an|the|his|her|their)['clips']+", "", full, flags=re.I)
+            re.sub(r"^(?:a|an|the|his|her|their)\s+", "", full, flags=re.I)
         )
         if full_label and len(full_label.split()) <= 4:
             label = full_label
         # "a date" (appointment) is not a character; "his partner/date" is.
         if role.lower() == "date" and not re.search(
-            r"\b(?:his|her|their)['clips']+date\b", match.group(0), flags=re.I
+            r"\b(?:his|her|their)\s+date\b", match.group(0), flags=re.I
         ):
             continue
         if _cast_identity_key(label) in used and role.lower() == "man":
@@ -334,7 +334,7 @@ def _heuristic_characters(prompt: str) -> list[dict[str, str]]:
 
     # Bare role mentions without article (any role from _ROLE_NOUNS).
     for match in re.finditer(
-        rf"(?:^|[.!?]['clips']+|,['clips']+)((?:[A-Za-z-]+['clips']+){{0,1}}(?:{_ROLE_NOUNS}))\b",
+        rf"(?:^|[.!?]\s+|,\s+)((?:[A-Za-z-]+\s+){{0,1}}(?:{_ROLE_NOUNS}))\b",
         text,
         flags=re.I,
     ):
@@ -354,7 +354,7 @@ def _heuristic_characters(prompt: str) -> list[dict[str, str]]:
             break
 
     for match in re.finditer(
-        rf"\b(?:another|a second|the other)['clips']+((?:{_ROLE_NOUNS}))\b([^.!?\n]{{0,80}})",
+        rf"\b(?:another|a second|the other)\s+((?:{_ROLE_NOUNS}))\b([^.!?\n]{{0,80}})",
         text,
         flags=re.I,
     ):
@@ -408,6 +408,30 @@ def _focus_character_ids(chunk: str, characters: list[dict[str, Any]]) -> list[s
     return list(dict.fromkeys(focus))
 
 
+_NON_STORY_BEAT_RE = re.compile(
+    r"(?i)^(?:"
+    r"visual style|style lock|style:|logo|watermark|no logo|no watermark|"
+    r"no text|aspect(?:\s+ratio)?|color grade|film look|"
+    r"do not (?:add|include|show) (?:any )?(?:text|logo|watermark|subtitles?)"
+    r")\b"
+)
+
+
+def _is_non_story_beat(text: str) -> bool:
+    """True for style/logo/meta lines that are not a story action."""
+    raw = re.sub(r"\s+", " ", str(text or "").strip())
+    if not raw:
+        return True
+    if not _NON_STORY_BEAT_RE.search(raw):
+        return False
+    return not re.search(
+        r"\b(?:walks?|sits?|stands?|says?|looks?|enters?|leaves?|holds?|opens?|"
+        r"runs?|speaks?|turns?|smiles?|cries?)\b",
+        raw,
+        flags=re.I,
+    )
+
+
 def _split_prompt_beats(prompt: str) -> list[str]:
     """Split into cinematic beats; avoid treating continuity 'while still…' as a new shot."""
     text = _strip_prompt_filler(_strip_reference_appendix(prompt))
@@ -418,12 +442,12 @@ def _split_prompt_beats(prompt: str) -> list[str]:
     split_re = re.compile(
         r"(?:"
         r"\b(?:and then|after that|finally|afterward|afterwards|之后|然后|接着)\b"
-        r"|\bnext(?:ly)?['clips']*,"
-        r"|\bnext['clips']+(?:we|shot|scene|beat|the camera)\b"
-        r"|\bwhile['clips']+(?:another|a second|the other)\b"
-        r"|(?<=[.!?])['clips']+"
-        r"|\b(?:the camera['clips']+(?:then['clips']+)?)?pans?['clips']+to\b"
-        r"|\bcut(?:s)?['clips']+to\b"
+        r"|\bnext(?:ly)?\s*,"
+        r"|\bnext\s+(?:we|shot|scene|beat|the camera)\b"
+        r"|\bwhile\s+(?:another|a second|the other)\b"
+        r"|(?<=[.!?])\s+"
+        r"|\b(?:the camera\s+(?:then\s+)?)?pans?\s+to\b"
+        r"|\bcut(?:s)?\s+to\b"
         r")",
         flags=re.I,
     )
@@ -445,8 +469,8 @@ def _split_prompt_beats(prompt: str) -> list[str]:
             merged
             and len(part) < 70
             and re.match(
-                r"^(?:this|that|the same)['clips']+(?:man|woman|person)\b|"
-                r"^to['clips']+her\b|"
+                r"^(?:this|that|the same)\s+(?:man|woman|person)\b|"
+                r"^to\s+her\b|"
                 r"^listening\b",
                 part,
                 flags=re.I,
@@ -475,14 +499,14 @@ def _split_prompt_beats(prompt: str) -> list[str]:
 
     out: list[str] = []
     for p in merged:
-        key = re.sub(r"['clips']+", " ", p.lower())[:80]
-        if out and key in re.sub(r"['clips']+", " ", out[-1].lower()):
+        key = re.sub(r"\s+", " ", p.lower())[:80]
+        if out and key in re.sub(r"\s+", " ", out[-1].lower()):
             continue
         out.append(p)
     return out
 
 
-def _heuristic_shots(prompt: str, characters: list[dict[str, str]]) -> list[dict[str, Any]]:
+def _heuristic_clips(prompt: str, characters: list[dict[str, str]]) -> list[dict[str, Any]]:
     """Split prompt into camera/action beats with focus cast per beat."""
     chunks = _split_prompt_beats(prompt)
     shots: list[dict[str, Any]] = []
@@ -514,10 +538,10 @@ def _heuristic_shots(prompt: str, characters: list[dict[str, str]]) -> list[dict
     # Respect explicit N-shot / N分镜 ceiling when present.
     try:
         from jiuwenswarm.server.runtime.designer.pipeline.director_contract import (
-            _explicit_shot_count_from_prompt,
+            _explicit_clip_count_from_prompt,
         )
 
-        shot_ceiling = _explicit_shot_count_from_prompt(prompt)
+        shot_ceiling = _explicit_clip_count_from_prompt(prompt)
     except Exception:  # noqa: BLE001
         shot_ceiling = 0
     covered = {cid for s in shots for cid in s.get("character_ids") or []}
@@ -586,8 +610,8 @@ def _heuristic_scenes(prompt: str) -> list[dict[str, str]]:
     lower = prompt.lower()
     # Capture the place word itself — no genre templates.
     place_re = re.compile(
-        r"\b(?:in|at|on|inside|outside|near|from)['clips']+(?:a|an|the|his|her|their)?['clips']*"
-        r"([a-z][a-z\-]*(?:['clips']+[a-z][a-z\-]*){0,2})\b",
+        r"\b(?:in|at|on|inside|outside|near|from)\s+(?:a|an|the|his|her|their)?\s*"
+        r"([a-z][a-z\-]*(?:\s+[a-z][a-z\-]*){0,2})\b",
         flags=re.I,
     )
     stop = {
@@ -610,7 +634,7 @@ def _heuristic_scenes(prompt: str) -> list[dict[str, str]]:
     }
     scenes: list[dict[str, str]] = []
     for match in place_re.finditer(lower):
-        phrase = re.sub(r"['clips']+", " ", match.group(1).strip())
+        phrase = re.sub(r"\s+", " ", match.group(1).strip())
         words = [w for w in phrase.split() if w not in stop]
         if not words:
             continue
@@ -637,7 +661,7 @@ def _heuristic_scenes(prompt: str) -> list[dict[str, str]]:
     return _clamp_list(scenes, _MAX_SCENES)
 
 
-def _select_shots_for_budget(
+def _select_clips_for_budget(
     shots: list[dict[str, Any]],
     budget: int,
     characters: list[dict[str, Any]],
@@ -700,10 +724,10 @@ def _director_pipeline_decisions(
     # Explicit N-shot / N分镜 language is a HARD ceiling (and floor when larger).
     try:
         from jiuwenswarm.server.runtime.designer.pipeline.director_contract import (
-            _explicit_shot_count_from_prompt,
+            _explicit_clip_count_from_prompt,
         )
 
-        explicit = _explicit_shot_count_from_prompt(prompt or "")
+        explicit = _explicit_clip_count_from_prompt(prompt or "")
         if explicit >= 1:
             budget = explicit
     except Exception:  # noqa: BLE001
@@ -711,12 +735,14 @@ def _director_pipeline_decisions(
     budget = max(1, budget)
 
     multi = any(len(s.get("character_ids") or []) >= 2 for s in shots if isinstance(s, dict))
-    solo = any(len(s.get("character_ids") or []) == 1 for s in shots if isinstance(s, dict))
+    has_single_character = any(
+        len(s.get("character_ids") or []) == 1 for s in shots if isinstance(s, dict)
+    )
     if n_chars <= 1:
         cast_layout = "single"
         prefer_combined = False
         prefer_split = False
-    elif multi and solo:
+    elif multi and has_single_character:
         cast_layout = "hybrid"
         prefer_combined = True
         prefer_split = True
@@ -744,7 +770,7 @@ def _heuristic_lean_shot(
     story_name: str = "",
     setting_id: str = "set_1",
 ) -> dict[str, Any]:
-    """One full-narrative beat: no LLM → one scene card + one clip (no keyframe)."""
+    """One full-narrative beat: no LLM → one scene spec + one clip."""
     from jiuwenswarm.server.runtime.designer.node_labels import derive_clip_name
 
     all_ids = [str(c.get("id")) for c in characters if str(c.get("id") or "").strip()]
@@ -839,22 +865,22 @@ def heuristic_analysis(prompt: str) -> dict[str, Any]:
     explicit = 0
     try:
         from jiuwenswarm.server.runtime.designer.pipeline.director_contract import (
-            _explicit_shot_count_from_prompt,
+            _explicit_clip_count_from_prompt,
         )
 
-        explicit = int(_explicit_shot_count_from_prompt(prompt) or 0)
+        explicit = int(_explicit_clip_count_from_prompt(prompt) or 0)
     except Exception:  # noqa: BLE001
         explicit = 0
 
     primary_setting = str((scenes[0] or {}).get("id") or "set_1") if scenes else "set_1"
 
-    # No LLM: default to ONE scene card + ONE clip (Wan reference mode: solos + scene refs).
+    # No LLM: default to ONE scene spec + ONE clip (Wan reference mode: character specs + scene refs).
     # Explicit N-shot / N分镜 is the only general multi-shot escape hatch.
     if explicit >= 2:
-        shots = _heuristic_shots(prompt, characters)
+        shots = _heuristic_clips(prompt, characters)
         decisions = _director_pipeline_decisions(prompt, characters, shots)
         decisions["target_clip_count"] = max(1, explicit)
-        shots = _select_shots_for_budget(
+        shots = _select_clips_for_budget(
             shots, int(decisions["target_clip_count"]), characters
         )
         for i, shot in enumerate(shots, start=1):
@@ -885,13 +911,13 @@ def heuristic_analysis(prompt: str) -> dict[str, Any]:
         "story_name": story_name,
         "characters": characters,
         "scenes": scenes,
-        "shots": shots,
+        "clips": shots,
         "style_lock": default_style_lock(prompt),
         "audio": audio,
         "scene_consistency_mode": "scene_specs_plus_clips",
         "summary": (
             f"{len(characters)} characters, {len(scenes)} scenes, {len(shots)} shots, "
-            f"cast={decisions['cast_layout']}, lean={explicit < 2}, scene_cards=on"
+            f"cast={decisions['cast_layout']}, lean={explicit < 2}, scene_specs=on"
         ),
         **decisions,
     }
@@ -908,12 +934,12 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     if not raw:
         return None
 
-    fence = re.search(r"```(?:json)?['clips']*([['clips']\S]*?)['clips']*```", raw, flags=re.IGNORECASE)
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw, flags=re.IGNORECASE)
     if fence:
         raw = fence.group(1).strip()
     elif raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?['clips']*", "", raw, flags=re.IGNORECASE)
-        raw = re.sub(r"['clips']*```['clips']*$", "", raw).strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"\s*```\s*$", "", raw).strip()
 
     def _as_dict(value: Any) -> dict[str, Any] | None:
         return value if isinstance(value, dict) else None
@@ -942,7 +968,7 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
         if in_str:
             if esc:
                 esc = False
-            elif ch == "['clips']":
+            elif ch == "\\":
                 esc = True
             elif ch == '"':
                 in_str = False
@@ -1181,7 +1207,7 @@ def _normalize_llm_analysis(
             entry["irreversible"] = irreversible[:160]
         if isinstance(sh.get("cast_states"), dict) and sh.get("cast_states"):
             entry["cast_states"] = sh["cast_states"]
-        if strategy in {"compose_from_character_specs", "edit_prior_keyframe"}:
+        if strategy in {"compose_from_character_specs", "edit_prior_clip"}:
             entry["clip_strategy"] = strategy
         from jiuwenswarm.server.runtime.designer.node_labels import derive_clip_name
 
@@ -1249,10 +1275,10 @@ def _normalize_llm_analysis(
     explicit = 0
     try:
         from jiuwenswarm.server.runtime.designer.pipeline.director_contract import (
-            _explicit_shot_count_from_prompt,
+            _explicit_clip_count_from_prompt,
         )
 
-        explicit = int(_explicit_shot_count_from_prompt(user_prompt) or 0)
+        explicit = int(_explicit_clip_count_from_prompt(user_prompt) or 0)
     except Exception:  # noqa: BLE001
         explicit = 0
     # The user's explicit N-shot is the only ceiling. Otherwise keep every shot.
@@ -1290,7 +1316,7 @@ def _normalize_llm_analysis(
     if explicit < 1 and len(norm_shots) > ceiling:
         ceiling = len(norm_shots)
     decisions["target_clip_count"] = ceiling
-    norm_shots = _select_shots_for_budget(norm_shots, ceiling, norm_chars)
+    norm_shots = _select_clips_for_budget(norm_shots, ceiling, norm_chars)
     layout_decisions = _director_pipeline_decisions(user_prompt, norm_chars, norm_shots)
     for key in ("cast_layout", "prefer_combined_cast", "prefer_split_cast"):
         if key in layout_decisions:
@@ -1303,17 +1329,17 @@ def _normalize_llm_analysis(
     if len(norm_shots) > int(decisions["target_clip_count"]):
         norm_shots = norm_shots[: int(decisions["target_clip_count"])]
     from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
-        ensure_shot_start_end_states,
+        ensure_clip_start_end_states,
     )
 
-    norm_shots = ensure_shot_start_end_states(norm_shots)
+    norm_shots = ensure_clip_start_end_states(norm_shots)
     out: dict[str, Any] = {
         "schema_version": "designer-script-analysis.v1",
         "source": "llm",
         "story_name": story_name,
         "characters": norm_chars,
         "scenes": norm_scenes,
-        "shots": norm_shots,
+        "clips": norm_shots,
         "style_lock": style_lock,
         "audio": audio,
         "scene_consistency_mode": "scene_specs_plus_clips",
@@ -1380,8 +1406,8 @@ async def analyze_creative_brief(
             "into actions and do not restage the whole story from a new camera "
             "(angle coverage only if the user asked for multi-cam / same-moment angles). "
             "New setting_id / hard cut / wardrobe / on-screen cast change → new shot. "
-            "Qwen KF: lock identity+wardrobe; first setting KF = compose_from_character_specs, "
-            "later same setting = edit_prior_keyframe; prefer ≤2–3 people with refs. "
+            "Qwen image: lock identity+wardrobe; first setting clip = compose_from_character_specs, "
+            "later same setting = edit_prior_clip; prefer ≤2–3 people with refs. "
             "Clip prompt = this shot's motion and camera only. "
             "Explicit user N-shot / N分镜 is the only shot ceiling. "
             "Do not drop shots to fit a fixed count. "
@@ -1430,7 +1456,7 @@ async def analyze_creative_brief(
             '{"story_name":"short film title any language",'
             '"style_lock":{"look":"...","medium":"..."},'
             '"characters":[{"id":"char_1","name":"...","description":"..."}],'
-            '"shots":[{"clip_index":1,"title":"2-4 word beat name NEVER Shot N",'
+            '"clips":[{"clip_index":1,"title":"2-4 word beat name NEVER Shot N",'
             '"action":"...","camera":"...","on_screen":["char_1"],'
             '"offscreen":[],"cast_actions":{"char_1":"..."},"featured_cast_ids":["char_1"],'
             '"ensemble_cast_ids":["char_1"],"setting_id":"set_1","clip_prompt":"...","timeline":"0-5s",'
@@ -1462,7 +1488,7 @@ async def analyze_creative_brief(
                     "requested duration without repetition. "
                     '{"style_lock":{"look":"...","medium":"..."},'
                     '"characters":[{"id":"char_1","name":"...","description":"..."}],'
-                    '"shots":[{"clip_index":1,"action":"...","camera":"...",'
+                    '"clips":[{"clip_index":1,"action":"...","camera":"...",'
                     '"character_ids":["char_1"],"ensemble_cast_ids":["char_1"],'
                     '"featured_cast_ids":["char_1"],"setting_id":"set_1",'
                     '"clip_prompt":"...","timeline":"0-5s"}]}'

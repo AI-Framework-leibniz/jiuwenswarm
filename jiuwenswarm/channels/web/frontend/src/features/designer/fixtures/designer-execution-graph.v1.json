@@ -39,7 +39,7 @@
     {
       "id": "n_scene",
       "type": "image",
-      "label": "Scene 1: Place",
+      "label": "Scene 1",
       "config": {
         "role": "scene",
         "inputs": ["n_brief", "n_storyboard"]

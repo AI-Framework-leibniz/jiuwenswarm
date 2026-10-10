@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 _LOCK_MARKERS = (
-    "PRIOR KEYFRAME PROMPT",
+    "PRIOR CLIP PROMPT",
     "PRIOR SHOT CONSISTENCY",
     "PREVIOUS CLIP HAD",
     "YOUR ASSIGNMENT",
@@ -34,7 +34,7 @@ _LOCK_MARKERS = (
     "WAN R2V PROMPT FORMULA",
     "WAN REFERENCE MEDIA RULES",
     "[WAN REFERENCE MODE",
-    "KEYFRAME CAST LOCK",
+    "CLIP CAST LOCK",
     "R2V CAST LOCK",
     "CHARACTER CONSISTENCY",
     "SAME-SCENE CONSISTENCY GATE",
@@ -42,12 +42,12 @@ _LOCK_MARKERS = (
 )
 
 _EXIT_RE = re.compile(
-    r"\b(?:walk(?:s|ed|ing)?['clips']+away|leave(?:s|ing)?|left|exit(?:s|ed|ing)?|"
+    r"\b(?:walk(?:s|ed|ing)?\s+away|leave(?:s|ing)?|left|exit(?:s|ed|ing)?|"
     r"depart(?:s|ed|ing)?|gone)\b",
     re.I,
 )
 _ONSET_RE = re.compile(
-    r"\b(?:start(?:s|ed|ing)?|begin(?:s|ning)?)['clips']+(?:to['clips']+)?\w+",
+    r"\b(?:start(?:s|ed|ing)?|begin(?:s|ning)?)\s+(?:to\s+)?\w+",
     re.I,
 )
 # Domain-agnostic finished beats: gaze / turn / reach / check / speak onset, etc.
@@ -55,15 +55,15 @@ _BEAT_RE = re.compile(
     r"\b(?:"
     r"turn(?:s|ed|ing)?|look(?:s|ed|ing)?|gaze(?:s|d)?|glance(?:s|d)?|"
     r"face(?:s|d|ing)?|check(?:s|ed|ing)?|reach(?:es|ed|ing)?|"
-    r"pick(?:s|ed|ing)?['clips']+up|open(?:s|ed|ing)?|grab(?:s|bed|bing)?|"
-    r"point(?:s|ed|ing)?|nod(?:s|ded|ding)?|stand(?:s|ing)?['clips']+up|"
-    r"sit(?:s|ting)?['clips']+down|arrive(?:s|d|ing)?|enter(?:s|ed|ing)?"
+    r"pick(?:s|ed|ing)?\s+up|open(?:s|ed|ing)?|grab(?:s|bed|bing)?|"
+    r"point(?:s|ed|ing)?|nod(?:s|ded|ding)?|stand(?:s|ing)?\s+up|"
+    r"sit(?:s|ting)?\s+down|arrive(?:s|d|ing)?|enter(?:s|ed|ing)?"
     r")\b",
     re.I,
 )
 _CROWD_WORD_RE = re.compile(
     r"\b(?:crowd|colleagues?|coworkers?|extras?|bystanders?|people|"
-    r"office['clips']+floor|staff|workers|passers[- ]?by)\b",
+    r"office\s+floor|staff|workers|passers[- ]?by)\b",
     re.I,
 )
 
@@ -224,7 +224,7 @@ def narrative_from_wan_prompt(text: str, *, limit: int = 2500) -> str:
         lines.append(line)
     cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
     if not cleaned:
-        cleaned = re.sub(r"['clips']+", " ", raw)[:limit]
+        cleaned = re.sub(r"\s+", " ", raw)[:limit]
     return cleaned[:limit]
 
 def seat_anchors_from_cfg(cfg: dict[str, Any] | None) -> dict[str, dict[str, str]]:
@@ -491,11 +491,11 @@ def _hold_from_beat_note(note: str) -> str:
         return ""
     # "Name already finished: <clause> — …" → "Name is already past: <clause>."
     m = re.match(
-        r"(?i)^(?:shot['clips']+\d+:['clips']*)?(?P<body>.+?)['clips']*(?:—|-)['clips']*open this shot",
+        r"(?i)^(?:shot\s+\d+:\s*)?(?P<body>.+?)\s*(?:—|-)\s*open this shot",
         raw,
     )
     body = (m.group("body") if m else raw).strip().rstrip(".")
-    body = re.sub(r"(?i)\balready finished:['clips']*", "already past: ", body)
+    body = re.sub(r"(?i)\balready finished:\s*", "already past: ", body)
     body = re.sub(r"(?i)\bmotion onset already happened.*", "already mid-action", body)
     if not body:
         return ""
@@ -582,7 +582,7 @@ def infer_crowd_state(
             # Explicit off-camera rule wins.
             if re.search(r"(?i)\b(?:off[- ]?camera|elsewhere|out of frame|corridor|hallway)\b", rule):
                 disposition = "off_camera"
-            elif re.search(r"(?i)\b(?:empty|cleared|deserted|no['clips']+crowd|nobody)\b", rule):
+            elif re.search(r"(?i)\b(?:empty|cleared|deserted|no\s+crowd|nobody)\b", rule):
                 disposition = "empty"
             elif re.search(r"(?i)\b(?:background|distant|far)\b", rule):
                 disposition = "background_hold"
@@ -664,7 +664,7 @@ def stamp_continuity_story_fields(
 
 
 def cap_r2v_reference_paths(paths: list[Path], *, max_refs: int = 5) -> list[Path]:
-    """Keep on-screen solos + last scene specs within Wan's 5-ref cap."""
+    """Keep on-screen character specs + last scene specs within Wan's 5-ref cap."""
     unique: list[Path] = []
     seen: set[str] = set()
     for path in paths or []:

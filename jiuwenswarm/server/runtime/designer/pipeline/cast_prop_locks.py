@@ -4,7 +4,7 @@
 General rules (no scene-genre branches):
   1. Brand mascots / logos are props — never featured human heroes.
   2. Props appear only as on-device UI (phone/laptop/app), not free-flying bodies.
-  3. setting_id change ⇒ compose_from_character_specs; same setting ⇒ edit_prior_keyframe.
+  3. setting_id change ⇒ compose_from_character_specs; same setting ⇒ edit_prior_clip.
   4. Within a setting, humans who did not exit stay in occupancy.must_appear.
   5. New setting starts from this shot's storyboard cast (no cross-set occupancy leak).
 """
@@ -15,11 +15,11 @@ import re
 from typing import Any
 
 _MASCOT_RE = re.compile(
-    r"\b(?:mascot|logo|brand['clips']+mark|app['clips']+icon|emblem|watermark|icon)\b",
+    r"\b(?:mascot|logo|brand\s+mark|app\s+icon|emblem|watermark|icon)\b",
     re.I,
 )
 _CREATURE_PROP_RE = re.compile(
-    r"\b(?:fuzzy|cute|little)['clips']+(?:\w+['clips']+){0,2}(?:mascot|critter|creature)\b",
+    r"\b(?:fuzzy|cute|little)\s+(?:\w+\s+){0,2}(?:mascot|critter|creature)\b",
     re.I,
 )
 _HUMAN_RE = re.compile(
@@ -33,18 +33,18 @@ _DEVICE_UI_RE = re.compile(
     re.I,
 )
 _LEAVE_RE = re.compile(
-    r"\b(?:leav(?:e|es|ing)|exit(?:s|ing)?|walks?['clips']+out|walks?['clips']+away|"
-    r"already['clips']+gone|gone\b|off[_['clips']-]?screen)\b",
+    r"\b(?:leav(?:e|es|ing)|exit(?:s|ing)?|walks?\s+out|walks?\s+away|"
+    r"already\s+gone|gone\b|off[_\s-]?screen)\b",
     re.I,
 )
 _FALSE_LEAVE_RE = re.compile(
     r"\b(?:"
-    r"(?:just['clips']+)?before['clips']+(?:leaving|exiting|departing)|"
-    r"about['clips']+to['clips']+(?:leave|exit|depart)|"
-    r"ready['clips']+to['clips']+(?:leave|exit|go['clips']+home)|"
-    r"get(?:ting)?['clips']+off['clips']+work|off['clips']+work|leaving['clips']+work|"
-    r"end['clips']+of['clips']+(?:the['clips']+)?(?:day|shift)|clock(?:ing)?['clips']+out|"
-    r"on['clips']+(?:his|her|their)['clips']+way['clips']+(?:out|home)"
+    r"(?:just\s+)?before\s+(?:leaving|exiting|departing)|"
+    r"about\s+to\s+(?:leave|exit|depart)|"
+    r"ready\s+to\s+(?:leave|exit|go\s+home)|"
+    r"get(?:ting)?\s+off\s+work|off\s+work|leaving\s+work|"
+    r"end\s+of\s+(?:the\s+)?(?:day|shift)|clock(?:ing)?\s+out|"
+    r"on\s+(?:his|her|their)\s+way\s+(?:out|home)"
     r")\b",
     re.I,
 )
@@ -384,7 +384,7 @@ def _stamp_props_and_occupancy(
         "must_not_appear": sorted(exited),
         "featured": list(shot.get("featured_cast_ids") or shot["character_ids"]),
         "rule": (
-            "Keep every must_appear human from the prior same-setting keyframe unless "
+            "Keep every must_appear human from the prior same-setting clip unless "
             "storyboard marks them exiting. Props/logos stay on-device UI only. "
             "New setting_id does not inherit prior-setting occupancy."
         ),
@@ -410,7 +410,7 @@ def enforce_setting_transitions(analysis: dict[str, Any]) -> list[str]:
             shot["compose_setting_master"] = True
             shot["ensemble_master"] = False
         else:
-            shot["clip_strategy"] = "edit_prior_keyframe"
+            shot["clip_strategy"] = "edit_prior_clip"
             shot["same_setting_prior_edit"] = True
             shot["compose_setting_master"] = False
         prev_set = sid
@@ -436,7 +436,7 @@ def occupancy_clause_for_clip(
     props = str(shot.get("prop_presentation") or "").strip()
     bits = [
         "R2V CAST LOCK: show ONLY people bound as character1, character2, … "
-        "(on-screen solos). Off-screen / already-exited people must not appear. "
+        "(on-screen character specs). Off-screen / already-exited people must not appear. "
         "Do not attach a peopled scene master as the last environment ref. "
         "Place people by STAGING LOCK / SEAT HOLDS / previous Wan story state. "
         "Do not restage finished exits, walk-aways, or onsets. "

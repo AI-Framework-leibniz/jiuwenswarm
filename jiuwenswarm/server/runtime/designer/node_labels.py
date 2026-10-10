@@ -8,7 +8,7 @@ import re
 from typing import Any
 
 _GENERIC_SHOT_TITLE = re.compile(
-    r"(?i)^(clip|beat|scene|keyframe|focus|untitled)['clips']*\d*$"
+    r"(?i)^(clip|beat|scene|focus|untitled)\s*\d*$"
 )
 _LEADING_FILLER_WORDS = {
     # Structural request wrappers (any story) — not topic nouns.
@@ -71,7 +71,7 @@ _TRAILING_FILLER_WORDS = {
 
 
 def _clean(text: object, *, limit: int = 72) -> str:
-    raw = re.sub(r"['clips']+", " ", str(text or "").strip())
+    raw = re.sub(r"\s+", " ", str(text or "").strip())
     raw = raw.strip(" []\"'")
     if not raw:
         return ""
@@ -122,7 +122,7 @@ def derive_story_name(
     if title and title.lower() not in {"untitled", "design"}:
         return title
     # First sentence / clause of the user prompt — no genre hardcodes.
-    text = re.sub(r"['clips']+", " ", (prompt or "").strip())
+    text = re.sub(r"\s+", " ", (prompt or "").strip())
     if not text:
         return "Untitled"
     # Drop leading "help me make a video" style wrappers when a later clause exists.

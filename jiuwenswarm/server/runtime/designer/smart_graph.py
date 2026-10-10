@@ -2,14 +2,14 @@
 """Build prompt-aware Designer graphs from cast/shot analysis.
 
 Quality layout (default, forward-only):
-  Brief → Storyboard → solo cast sheets
+  Brief → Storyboard → character spec sheets
   → Scene specs per setting_id (room only, no people)
-  → Shots-as-shots: every shot is Wan R2V from on-screen solos plus that empty plate
+  → Clips: every clip is Wan R2V from on-screen character specs plus scene specs
   → optional Speech/Music → Film (ffmpeg assemble)
 
-``scene_consistency_mode = scene_specs_plus_clips``. Solo sheets are identity
-locks. Director prunes any node that cannot reach ``n_compose`` and re-edits
-Brief / Storyboard / locks afterward.
+``scene_consistency_mode = scene_specs_plus_clips``. Character spec sheets are
+identity locks. Director prunes any node that cannot reach ``n_compose`` and
+re-edits Brief / Storyboard / locks afterward.
 """
 
 from __future__ import annotations
@@ -67,9 +67,10 @@ def default_spatial_lock(scene: dict[str, Any] | None = None) -> dict[str, str]:
             "Never invent an empty environment plate; never borrow architecture from another setting_id."
         ),
         "crowd_rule": (
-            "No scene specs. Scene master prompt + solos define the scene. Later "
-            "same-setting keyframes reuse the scene specs; keep extras silhouette unless "
-            "storyboard exits them. Featured cast are distinct people — never clone faces."
+            "No crowd generated separately. Scene master prompt + character specs define "
+            "the scene. Later same-setting clips reuse the scene specs; keep extras "
+            "silhouette unless storyboard exits them. Featured cast are distinct people — "
+            "never clone faces."
         ),
     }
 
@@ -259,7 +260,7 @@ def _write_storyboard_markdown(
     style_lock: dict[str, Any] | None = None,
 ) -> str:
     id_to_name = {str(c.get("id")): str(c.get("name") or c.get("id")) for c in characters}
-    # Hierarchical: scenes (setting_id) → keyframes/shots.
+    # Hierarchical: scenes (setting_id) → clips/shots.
     by_set: dict[str, list[dict[str, Any]]] = {}
     order: list[str] = []
     for shot in shots:
@@ -280,10 +281,10 @@ def _write_storyboard_markdown(
         if style_lock
         else "",
         "",
-        "Hierarchy: **Scene (setting_id)** → **Keyframes/shots**.",
-        "Different scenes = different places. First keyframe of each scene authors the "
-        "**scene specs + master prompt** (compose scene + only on-screen cast) — not an "
-        "empty plate. Later same-scene keyframes **compose again from character solos** "
+        "Hierarchy: **Scene (setting_id)** → **Clips/shots**.",
+        "Different scenes = different places. First clip of each scene authors the "
+        "**scene specs + master prompt** (compose scene + only on-screen cast). "
+        "Later same-scene clips **compose again from character specs** "
         "using that shared scene prompt/view locks (architecture locked). "
         "Never borrow another setting_id. Not every cast member is in every scene.",
         "",
@@ -359,7 +360,7 @@ def _write_storyboard_markdown(
 
 
 def _shot_budget(analysis: dict[str, Any], shots: list[dict[str, Any]]) -> int:
-    """Honor explicit target_clip_count as a HARD ceiling — never invent extra keyframes."""
+    """Honor explicit target_clip_count as a HARD ceiling — never invent extra clips."""
     n = len(shots) or 1
     try:
         target = int(analysis.get("target_clip_count") or 0)
@@ -368,7 +369,7 @@ def _shot_budget(analysis: dict[str, Any], shots: list[dict[str, Any]]) -> int:
     # Also honor user-prompt N-shot / N分镜 language stamped on analysis.
     try:
         from jiuwenswarm.server.runtime.designer.pipeline.director_contract import (
-            _explicit_shot_count_from_prompt,
+            _explicit_clip_count_from_prompt,
         )
 
         prompt = str(
@@ -376,7 +377,7 @@ def _shot_budget(analysis: dict[str, Any], shots: list[dict[str, Any]]) -> int:
             or analysis.get("summary")
             or ""
         )
-        explicit = _explicit_shot_count_from_prompt(prompt)
+        explicit = _explicit_clip_count_from_prompt(prompt)
         if explicit >= 1:
             target = explicit if target < 1 else min(target, explicit)
     except Exception:  # noqa: BLE001
@@ -445,10 +446,10 @@ def _plan_cast_sheets(
     *,
     prompt: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, list[str]], str]:
-    """Plan solo cast postcard nodes and per-shot node refs.
+    """Plan character spec nodes and per-shot node refs.
 
-    Identity rule: one solo sheet per character (canonical look). Combined
-    multi-person sheets are not used — quality path always composes from solos.
+    Identity rule: one character spec sheet per character (canonical look). Combined
+    multi-person sheets are not used — quality path always composes from character specs.
     """
     id_to_char = {str(c.get("id")): c for c in characters if str(c.get("id") or "")}
     sheets: list[dict[str, Any]] = []
@@ -552,12 +553,10 @@ def ensure_combined_cast_reach_compose(graph: DesignerExecutionGraph) -> list[st
 
     sink_roles = {
         NODE_ROLE_SCENE,
-            "keyframe",
         NODE_ROLE_CLIP,
         NODE_ROLE_COMPOSE,
         NODE_ROLE_STORYBOARD,
         "scene",
-        "frame",
         "clip",
         "compose",
         "storyboard",
@@ -639,7 +638,7 @@ def ensure_combined_cast_reach_compose(graph: DesignerExecutionGraph) -> list[st
 
 
 def _cameras_compatible(a: str, b: str) -> bool:
-    """True when sequential keyframe edit is safer than a full recompose."""
+    """True when sequential clip edit is safer than a full recompose."""
     la = (a or "").strip().lower()
     lb = (b or "").strip().lower()
     if not la or not lb:
@@ -746,7 +745,7 @@ def build_smart_video_graph(
     Creative nodes are always stamped as LLM agents (``delegate=agent``).
     """
     from jiuwenswarm.server.runtime.designer.pipeline.clip_policy import (
-        apply_compose_solos_setting_policy,
+        apply_compose_character_specs_setting_policy,
     )
 
     prompt_text = prompt.strip()
@@ -814,7 +813,7 @@ def build_smart_video_graph(
         for name, values in (
             ("characters", characters),
             ("scenes", scenes),
-            ("shots", shots),
+            ("clips", shots),
         )
         if not values
     ]
@@ -839,20 +838,20 @@ def build_smart_video_graph(
     analysis["characters"] = characters
     analysis["scenes"] = scenes
     analysis["clips"] = shots
-    analysis = apply_compose_solos_setting_policy(analysis)
+    analysis = apply_compose_character_specs_setting_policy(analysis)
     characters = list(analysis.get("characters") or characters)
     scenes = list(analysis.get("scenes") or scenes)
     shots = list(analysis.get("clips") or shots)
     try:
         from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
-            ensure_shot_start_end_states,
+            ensure_clip_start_end_states,
         )
 
-        shots = ensure_shot_start_end_states(shots)
+        shots = ensure_clip_start_end_states(shots)
         analysis["clips"] = shots
     except Exception:  # noqa: BLE001
         pass
-    # Continuity: scene specs + on-screen solos; storyboard start/end owns continuity.
+    # Continuity: scene specs + on-screen character specs; storyboard start/end owns continuity.
     analysis["scene_consistency_mode"] = "scene_specs_plus_clips"
     from jiuwenswarm.server.runtime.designer.pipeline.axis_locks import (
         infer_aspect_lock,
@@ -1030,7 +1029,7 @@ def build_smart_video_graph(
                     "tools": ["call_image_model", "read_upstream", "call_model"],
                     "delegate": "agent",
                     "director_task": (
-                        f"Solo identity sheet for {display}. "
+                        f"Solo character specs for {display}. "
                         "Write a positive Qwen-ready studio portrait from the locks "
                         "(face, wardrobe, style, aspect) — no LOCK banners or negatives. "
                         "Then call_image_model with that prompt only."
@@ -1043,7 +1042,7 @@ def build_smart_video_graph(
         edges.append(_edge(f"e_brief_{nid}", "n_brief", nid))
 
     # Spatial lock text (weak env hint only). Scene specs are built per setting_id;
-    # shots use them as Wan reference images (last env ref) with solos as character1…
+    # clips use them as Wan reference images (last env ref) with character specs as character1…
     scene_base = scenes[0] if scenes else {"id": "scene_1", "name": "Setting", "description": ""}
     spatial_lock = default_spatial_lock(scene_base if isinstance(scene_base, dict) else None)
     prior_lock = analysis.get("spatial_lock") if isinstance(analysis.get("spatial_lock"), dict) else {}
@@ -1072,7 +1071,7 @@ def build_smart_video_graph(
     def _lock_line_for(sid: str) -> str:
         lock = spatial_by_setting.get(sid) or spatial_lock
         return (
-            f"SPATIAL LOCK (text hint only — not an empty plate): setting={lock.get('setting')}; "
+            f"SPATIAL LOCK (text hint only — keep scene specs as reference): setting={lock.get('setting')}; "
             f"{lock.get('architecture')}; {lock.get('static_rule')} "
             f"{lock.get('crowd_rule')}"
         )
@@ -1394,7 +1393,7 @@ def build_smart_video_graph(
         shot_spatial = spatial_by_setting.get(setting_id) or spatial_lock
         lock_line = _lock_line_for(setting_id)
         clip_strategy = "clip_from_scene_and_character_specs"
-        # Storyboard-owned consistency: deps = storyboard + on-screen solos + scene only.
+        # Storyboard-owned consistency: deps = storyboard + on-screen character specs + scene only.
         # No prior-shot edge — same-setting shots can run concurrently.
         clip_inputs = ["n_storyboard", *focus_char_nodes]
         if scene_nid:
@@ -1843,7 +1842,7 @@ def build_smart_video_graph(
             "scene_masters": dict(scene_master_by_setting),
             "scene_locks": dict(scene_locks_meta),
             # Storyboard must not rebuild the node set (that spawned extra nodes).
-            "freeze_shot_topology": True,
+            "freeze_clip_topology": True,
             "combined_cast": False,
             "cast_layout": cast_layout,
             "spatial_lock": spatial_lock,

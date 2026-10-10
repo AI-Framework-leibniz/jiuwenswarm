@@ -48,7 +48,7 @@ def test_apply_node_activity_keeps_structured_agent_progress() -> None:
     state = apply_node_activity(
         {"status": NODE_STATUS_RUNNING},
         kind=ACTIVITY_KIND_THINKING,
-        text="planning the keyframe",
+        text="planning the clip",
         at=1,
     )
     state = apply_node_activity(
@@ -63,7 +63,7 @@ def test_apply_node_activity_keeps_structured_agent_progress() -> None:
     assert normalized["activity_log"] == [
         {
             "kind": ACTIVITY_KIND_THINKING,
-            "text": "planning the keyframe",
+            "text": "planning the clip",
             "at": 1,
         },
         {

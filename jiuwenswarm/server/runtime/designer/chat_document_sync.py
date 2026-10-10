@@ -124,9 +124,9 @@ def apply_document_edits(
     return texts
 
 
-_SECONDS = r"(\d+(?:\.\d+)?)['clips']*(?:seconds?|secs?|s|秒)?"
-_TIMELINE = re.compile(rf"['clips']*{_SECONDS}['clips']*(?:[-–—~～至]|to)['clips']*{_SECONDS}['clips']*", re.I)
-_SHOT_NUMBER = re.compile(r"(?:Shot['clips']*)?(\d+)", re.I)
+_SECONDS = r"(\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s|秒)?"
+_TIMELINE = re.compile(rf"\s*{_SECONDS}\s*(?:[-–—~～至]|to)\s*{_SECONDS}\s*", re.I)
+_SHOT_NUMBER = re.compile(r"(?:Shot\s*)?(\d+)", re.I)
 
 
 def timeline_seconds(value: str) -> tuple[Decimal, Decimal]:
@@ -171,7 +171,7 @@ def _candidate_shots(text: str) -> list[StoryboardShot]:
         return shots
     hierarchical = "\n".join(prose)
     shots = parse_storyboard_shots(hierarchical)
-    if len(shots) != len(re.findall(r"(?im)^['clips']*###['clips']+Shot['clips']+\d+\b", hierarchical)):
+    if len(shots) != len(re.findall(r"(?im)^\s*###\s+Shot\s+\d+\b", hierarchical)):
         raise DesignerGraphValidationError("Could not parse every storyboard shot heading")
     return shots
 
@@ -453,7 +453,7 @@ def prepare_document_update(
                         )
         meta = graph.setdefault("metadata", {})
         if set(nodes) != {node["id"] for node in before.get("nodes", [])}:
-            meta.update(user_topology_edit=True, freeze_shot_topology=True)
+            meta.update(user_topology_edit=True, freeze_clip_topology=True)
         analysis = meta.get("script_analysis")
         if isinstance(analysis, dict) and "clips" in analysis:
             analysis["clips"] = _sync_shots(analysis["clips"], before, graph)

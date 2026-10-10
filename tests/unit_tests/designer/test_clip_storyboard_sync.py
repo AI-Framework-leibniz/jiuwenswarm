@@ -29,7 +29,7 @@ class _FakeCtx:
         self.run = {}
 
 
-def test_contaminated_filter_allows_scene_bible_and_long_text():
+def test_contaminated_filter_allows_scene_specs_and_long_text():
     assert not _looks_like_contaminated_prompt(
         "Film shot 1. Action: pastor speaks. SCENE SPECS scene=church; STAGING LOCK: left."
     )

@@ -197,7 +197,7 @@ def _tools_for_role(
     can_music: bool = False,
 ) -> list[str]:
     base = ["call_model", "read_upstream", "write_artifact"]
-    if role in {"character", "character", "scene", "frame", "keyframe", "image"}:
+    if role in {"character", "scene", "image"}:
         tools = ["call_model", "read_upstream", "call_image_model"]
     elif role in {"clip", "video"}:
         tools = ["call_model", "read_upstream", "call_video_model"]
@@ -217,10 +217,7 @@ def _tools_for_role(
     if can_vision and role in {
         "director",
         "character",
-        "character",
         "scene",
-        "frame",
-        "keyframe",
         "clip",
         "compose",
         "image",
@@ -263,7 +260,7 @@ def decide_modality_plan(graph: DesignerExecutionGraph) -> dict[str, Any]:
         global_mod = "multimodal"
         reason = (
             "Vision tool/model available — director may inspect images "
-            "(and keyframes standing in for shots) when rating."
+            "when rating."
         )
     else:
         global_mod = "text_only"
@@ -301,8 +298,6 @@ def decide_modality_plan(graph: DesignerExecutionGraph) -> dict[str, Any]:
             "character",
             "character",
             "scene",
-            "frame",
-            "keyframe",
             "clip",
             "compose",
         }:
@@ -408,8 +403,6 @@ def collect_rateable_image_paths(
             "character",
             "character",
             "scene",
-            "frame",
-            "keyframe",
             "image",
         }:
             continue

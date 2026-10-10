@@ -196,11 +196,11 @@ async def test_clip_execute_does_not_attach_prior_last_frame(
     from jiuwenswarm.server.runtime.designer.handlers.common import file_output_ref
     from jiuwenswarm.server.runtime.designer.handlers.types import NodeExecutionContext
 
-    solo = tmp_path / "dad.png"
+    character_spec = tmp_path / "dad.png"
     scene = tmp_path / "room.png"
     last = tmp_path / "shot1_lastframe.jpg"
     video = tmp_path / "out.mp4"
-    solo.write_bytes(b"png-dad")
+    character_spec.write_bytes(b"png-dad")
     scene.write_bytes(b"png-room")
     last.write_bytes(b"jpg-last")
     video.write_bytes(b"fake-mp4")
@@ -262,7 +262,7 @@ async def test_clip_execute_does_not_attach_prior_last_frame(
             "node_states": {
                 "n_character": {
                     "status": "completed",
-                    "output_ref": file_output_ref(solo, kind=NODE_TYPE_IMAGE, mime_type="image/png"),
+                    "output_ref": file_output_ref(character_spec, kind=NODE_TYPE_IMAGE, mime_type="image/png"),
                 },
                 "n_scene_1": {
                     "status": "completed",
@@ -297,7 +297,7 @@ async def test_clip_execute_does_not_attach_prior_last_frame(
     await ClipNodeHandler().execute(clip, ctx)
     refs = [Path(x).resolve() for x in (seen.get("reference_images") or [])]
     assert last.resolve() not in refs
-    assert solo.resolve() in refs
+    assert character_spec.resolve() in refs
     assert scene.resolve() in refs
     assert seen.get("first_frame") in (None, "")
     prompt = str(seen.get("prompt") or "")
@@ -309,7 +309,7 @@ async def test_clip_execute_does_not_attach_prior_last_frame(
 
 
 @pytest.mark.asyncio
-async def test_first_clip_uses_solos_and_empty_scene_not_first_frame(
+async def test_first_clip_uses_character_specs_and_scene_spec_not_first_frame(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from jiuwenswarm.common.schema.designer_graph import (
@@ -324,10 +324,10 @@ async def test_first_clip_uses_solos_and_empty_scene_not_first_frame(
     from jiuwenswarm.server.runtime.designer.handlers.common import file_output_ref
     from jiuwenswarm.server.runtime.designer.handlers.types import NodeExecutionContext
 
-    solo = tmp_path / "dad.png"
+    character_spec = tmp_path / "dad.png"
     scene = tmp_path / "composed.png"
     video = tmp_path / "out.mp4"
-    solo.write_bytes(b"png-dad")
+    character_spec.write_bytes(b"png-dad")
     scene.write_bytes(b"png-scene")
     video.write_bytes(b"fake-mp4")
     graph = normalize_execution_graph(
@@ -375,7 +375,7 @@ async def test_first_clip_uses_solos_and_empty_scene_not_first_frame(
             "node_states": {
                 "n_character": {
                     "status": "completed",
-                    "output_ref": file_output_ref(solo, kind=NODE_TYPE_IMAGE, mime_type="image/png"),
+                    "output_ref": file_output_ref(character_spec, kind=NODE_TYPE_IMAGE, mime_type="image/png"),
                 },
                 "n_scene_1": {
                     "status": "completed",
@@ -411,7 +411,7 @@ async def test_first_clip_uses_solos_and_empty_scene_not_first_frame(
     await ClipNodeHandler().execute(clip, ctx)
     refs = [Path(x).resolve() for x in (seen.get("reference_images") or [])]
     assert seen.get("first_frame") in (None, "")
-    assert solo.resolve() in refs
+    assert character_spec.resolve() in refs
     assert scene.resolve() in refs
     assert seen.get("force_reference_mode") is True
     prompt = str(seen.get("prompt") or "")
@@ -488,7 +488,7 @@ def test_smart_graph_scene_card_is_empty_plate() -> None:
     assert "do not show" not in clip2_prompt.lower()
     assert "do not redo" not in clip2_prompt.lower()
     assert "do not restart" not in clip2_prompt.lower()
-    assert graph["metadata"].get("freeze_shot_topology") is True
+    assert graph["metadata"].get("freeze_clip_topology") is True
     brief = next(n for n in graph["nodes"] if n.get("id") == "n_brief")
     assert "prewritten" not in (brief.get("config") or {})
     assert "draft_prewritten" not in (brief.get("config") or {})

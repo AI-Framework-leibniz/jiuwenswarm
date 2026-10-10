@@ -6,8 +6,8 @@ Fixes observed offline failures without prompt-specific hardcodes:
   - cast dedupe (Name / Name 2)
   - identity micro-attrs (facial hair, glasses) locked across shots
   - setting_type taxonomy + cross-setting bleed forbids
-  - same-setting prior-keyframe continuity (style/set carry)
-  - plain portrait solo sheets (no infographic cards)
+  - same-setting prior-clip continuity (style/set carry)
+  - plain portrait character spec sheets (no infographic cards)
   - architecture-first scene imaging (materials/light; less narrative bleed)
 """
 
@@ -106,12 +106,12 @@ _SETTING_FORBIDS: dict[str, str] = {
 }
 
 _FACIAL_HAIR_RE = re.compile(
-    r"\b(?P<kind>full['clips']+beard|beard|goatee|mustache|moustache|stubble|"
-    r"five[- ]o.?clock['clips']+shadow)\b",
+    r"\b(?P<kind>full\s+beard|beard|goatee|mustache|moustache|stubble|"
+    r"five[- ]o.?clock\s+shadow)\b",
     re.I,
 )
 _GLASSES_RE = re.compile(r"\b(?:glasses|spectacles|eyeglasses)\b", re.I)
-_TRAILING_NUM_RE = re.compile(r"^(?P<base>.+?)['clips']*(?:[_-]|['clips']+)(?P<num>\d+)$")
+_TRAILING_NUM_RE = re.compile(r"^(?P<base>.+?)\s*(?:[_-]|\s+)(?P<num>\d+)$")
 
 
 def infer_style_lock(prompt: str, scene_desc: str = "") -> dict[str, str]:
@@ -128,9 +128,9 @@ def _strip_planning_place_mentions(text: str) -> str:
     are not treated as the current location.
     """
     return re.sub(
-        r"\b(?:book(?:s|ing)?|search(?:es|ing)?['clips']+for|look(?:s|ing)?['clips']+up|find(?:s|ing)?|"
-        r"reserve(?:s|ing)?|order(?:s|ing)?|arrange(?:s|ing)?)['clips']+"
-        r"(?:a['clips']+|an['clips']+|the['clips']+)?(?:\w+[-['clips']]+){0,3}\w+",
+        r"\b(?:book(?:s|ing)?|search(?:es|ing)?\s+for|look(?:s|ing)?\s+up|find(?:s|ing)?|"
+        r"reserve(?:s|ing)?|order(?:s|ing)?|arrange(?:s|ing)?)\s+"
+        r"(?:a\s+|an\s+|the\s+)?(?:\w+[-\s]+){0,3}\w+",
         " ",
         text or "",
         flags=re.I,
@@ -154,11 +154,11 @@ def detect_setting_type(text: str) -> str | None:
 
 _SETTING_ARRIVAL_RE = re.compile(
     r"\b(?:"
-    r"arrives?['clips']+(?:at|in)|enters?['clips']+(?:the['clips']+)?|cuts?['clips']+to|meanwhile['clips']+(?:at|in)|"
-    r"now['clips']+(?:at|in)|later['clips']+(?:at|in)|inside['clips']+the|at['clips']+the['clips']+\w+|"
-    r"seated['clips']+(?:at|in)|dining['clips']+(?:at|in)|"
-    r"enjoying['clips']+(?:a['clips']+)?(?:\w+['clips']+){0,3}(?:dinner|meal|date)|"
-    r"ends?['clips']+with\b"
+    r"arrives?\s+(?:at|in)|enters?\s+(?:the\s+)?|cuts?\s+to|meanwhile\s+(?:at|in)|"
+    r"now\s+(?:at|in)|later\s+(?:at|in)|inside\s+the|at\s+the\s+\w+|"
+    r"seated\s+(?:at|in)|dining\s+(?:at|in)|"
+    r"enjoying\s+(?:a\s+)?(?:\w+\s+){0,3}(?:dinner|meal|date)|"
+    r"ends?\s+with\b"
     r")\b",
     re.I,
 )
@@ -258,7 +258,7 @@ def assign_shot_settings(
         )
         # Ignore lock suffixes so "FORBIDDEN BLEED: no restaurant…" cannot flip place.
         blob = re.split(
-            r"['clips'](?:BLOCKING:|IDENTITY LOCK:|FORBIDDEN BLEED:|ASPECT LOCK:)",
+            r"\s(?:BLOCKING:|IDENTITY LOCK:|FORBIDDEN BLEED:|ASPECT LOCK:)",
             blob,
             maxsplit=1,
         )[0]
@@ -287,7 +287,7 @@ def dedupe_characters(characters: list[dict[str, Any]]) -> tuple[list[dict[str, 
         name = str(ch.get("name") or cid).strip()
         m = _TRAILING_NUM_RE.match(name)
         base = (m.group("base") if m else name).strip().lower()
-        base = re.sub(r"['clips']+", " ", base)
+        base = re.sub(r"\s+", " ", base)
         if base in by_base:
             keep = by_base[base]
             keep_id = str(keep["id"])
@@ -322,7 +322,7 @@ def infer_identity_attrs(ch: dict[str, Any]) -> dict[str, str]:
     attrs: dict[str, str] = {}
     m = _FACIAL_HAIR_RE.search(blob)
     if m:
-        kind = re.sub(r"['clips']+", "_", m.group("kind").lower())
+        kind = re.sub(r"\s+", "_", m.group("kind").lower())
         attrs["facial_hair"] = kind
     else:
         attrs["facial_hair"] = "none"
@@ -340,7 +340,7 @@ def infer_identity_attrs(ch: dict[str, Any]) -> dict[str, str]:
         if parts:
             attrs["clothing_parts"] = "; ".join(f"{k}={v}" for k, v in parts.items())[:280]
     except Exception:  # noqa: BLE001
-        if desc and not re.match(r"^(?:the['clips']+)?(?:father|mother|child|son|shot)\b", desc, re.I):
+        if desc and not re.match(r"^(?:the\s+)?(?:father|mother|child|son|shot)\b", desc, re.I):
             attrs["wardrobe"] = desc[:220]
         else:
             attrs["wardrobe"] = str(ch.get("name") or "character")[:80]
@@ -395,7 +395,7 @@ def stamp_identity_attrs(characters: list[dict[str, Any]]) -> None:
             ch["costume_lock"] = str(attrs.get("wardrobe") or ch.get("name") or "")[:240]
         desc = str(ch.get("description") or "")
         if re.match(
-            r"^(?:the['clips']+)?(?:father|mother|child|son|daughter|man|woman).{0,40}:"
+            r"^(?:the\s+)?(?:father|mother|child|son|daughter|man|woman).{0,40}:"
             r"|^\d{1,2}:\d{2}|^(?:close-up|medium|camera)\b",
             desc,
             re.I,
@@ -494,7 +494,7 @@ def apply_plan_a_v2(prompt: str, analysis: dict[str, Any]) -> dict[str, Any]:
             raw_action = str(shot.get("action") or shot.get("clip_prompt") or "")
             # Strip appended BLOCKING / IDENTITY LOCK suffixes for the meta check.
             core = re.split(
-                r"['clips'](?:BLOCKING:|IDENTITY LOCK:|FORBIDDEN BLEED:)",
+                r"\s(?:BLOCKING:|IDENTITY LOCK:|FORBIDDEN BLEED:)",
                 raw_action,
                 maxsplit=1,
             )[0]
@@ -533,13 +533,13 @@ def apply_plan_a_v2(prompt: str, analysis: dict[str, Any]) -> dict[str, Any]:
         out["clips"] = shots
     except Exception:  # noqa: BLE001
         pass
-    # Per setting: compose ALL human cast solos into the scene specs, then edit-prior.
+    # Per setting: compose ALL human cast character specs into the scene specs, then edit-prior.
     try:
         from jiuwenswarm.server.runtime.designer.pipeline.clip_policy import (
-            apply_compose_solos_setting_policy,
+            apply_compose_character_specs_setting_policy,
         )
 
-        out = apply_compose_solos_setting_policy(out)
+        out = apply_compose_character_specs_setting_policy(out)
         # One-pass setting lock only (cast already repaired above — do not re-repair).
         from jiuwenswarm.server.runtime.designer.pipeline.cast_prop_locks import (
             enforce_setting_transitions,
@@ -613,7 +613,7 @@ def apply_plan_a_v2(prompt: str, analysis: dict[str, Any]) -> dict[str, Any]:
         out.setdefault("production_specs", "")
     out["director_contract"] = {
         **(out.get("director_contract") if isinstance(out.get("director_contract"), dict) else {}),
-        "version": "plan_a.v2.compose_solos_setting.v12_cast_prop_locks",
+        "version": "plan_a.v2.compose_character_specs_setting.v12_cast_prop_locks",
         "style_look": style_lock.get("look"),
         "style_medium": style_lock.get("medium"),
         "setting_type": spatial.get("setting_type"),

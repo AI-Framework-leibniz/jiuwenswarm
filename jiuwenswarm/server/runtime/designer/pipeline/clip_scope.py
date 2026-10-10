@@ -29,16 +29,16 @@ _STOP = frozenset(
 )
 
 _MIN_RE = re.compile(
-    r"(?P<n>\d{1,3}(?:\.\d+)?)['clips']*(?:-|–)?['clips']*(?:minutes?|mins?|min|分钟)",
+    r"(?P<n>\d{1,3}(?:\.\d+)?)\s*(?:-|–)?\s*(?:minutes?|mins?|min|分钟)",
     re.I,
 )
 _SEC_RE = re.compile(
-    r"(?P<n>\d{1,4}(?:\.\d+)?)['clips']*(?:-|–)?['clips']*(?:seconds?|secs?|sec|秒钟?)",
+    r"(?P<n>\d{1,4}(?:\.\d+)?)\s*(?:-|–)?\s*(?:seconds?|secs?|sec|秒钟?)",
     re.I,
 )
-_SEC_COMPACT_RE = re.compile(r"\b(?P<n>\d{1,3})['clips']*s\b", re.I)
+_SEC_COMPACT_RE = re.compile(r"\b(?P<n>\d{1,3})\s*s\b", re.I)
 _RANGE_SEC_RE = re.compile(
-    r"(?P<a>\d{1,4}(?:\.\d+)?)['clips']*(?:-|–|to)['clips']*(?P<b>\d{1,4}(?:\.\d+)?)['clips']*"
+    r"(?P<a>\d{1,4}(?:\.\d+)?)\s*(?:-|–|to)\s*(?P<b>\d{1,4}(?:\.\d+)?)\s*"
     r"(?:seconds?|secs?|sec|秒钟?)",
     re.I,
 )
@@ -252,10 +252,10 @@ def looks_like_prior_copy(text: str, prior: str) -> bool:
 
 
 def first_sentence(text: str, *, limit: int = 220) -> str:
-    raw = re.sub(r"['clips']+", " ", str(text or "").strip())
+    raw = re.sub(r"\s+", " ", str(text or "").strip())
     if not raw:
         return ""
-    m = re.split(r"(?<=[.!?。！？])['clips']+", raw, maxsplit=1)
+    m = re.split(r"(?<=[.!?。！？])\s+", raw, maxsplit=1)
     return (m[0] if m else raw)[:limit]
 
 
@@ -365,7 +365,7 @@ def _beat_list_from_prompt(prompt: str, n: int) -> list[str]:
     except Exception:  # noqa: BLE001
         beats = []
     if not beats:
-        parts = re.split(r"(?<=[.!?。！？])['clips']+", str(prompt or "").strip())
+        parts = re.split(r"(?<=[.!?。！？])\s+", str(prompt or "").strip())
         beats = [p.strip() for p in parts if len(p.strip()) > 12]
     beats = [b for b in beats if b and not _duration_only_line(b)]
     if not beats:
@@ -409,10 +409,10 @@ def apply_shot_scope(
         explicit = 0
         try:
             from jiuwenswarm.server.runtime.designer.pipeline.director_contract import (
-                _explicit_shot_count_from_prompt,
+                _explicit_clip_count_from_prompt,
             )
 
-            explicit = int(_explicit_shot_count_from_prompt(prompt) or 0)
+            explicit = int(_explicit_clip_count_from_prompt(prompt) or 0)
         except Exception:  # noqa: BLE001
             explicit = 0
         if explicit >= 1 and explicit * int(wan_max) >= int(asked):

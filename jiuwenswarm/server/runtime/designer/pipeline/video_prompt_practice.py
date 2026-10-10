@@ -97,7 +97,7 @@ def _scene_name(cfg: dict[str, Any]) -> str:
 def _style_phrase(cfg: dict[str, Any]) -> str:
     style = cfg.get("style_lock") if isinstance(cfg.get("style_lock"), dict) else {}
     look = str(style.get("look") or style.get("medium") or "").strip()
-    look = re.split(r"['clips']+[—–-]['clips']+|\bnever\b|\bno style\b", look, maxsplit=1, flags=re.I)[0]
+    look = re.split(r"\s+[—–-]\s+|\bnever\b|\bno style\b", look, maxsplit=1, flags=re.I)[0]
     look = look.strip(" .;")
     return look
 
@@ -265,7 +265,7 @@ def _language_display(code: str) -> str:
     if key in known:
         return known[key]
     # Already a language name (e.g. "English") — keep as-is.
-    if re.fullmatch(r"[A-Za-z][A-Za-z['clips']-]{1,40}", raw):
+    if re.fullmatch(r"[A-Za-z][A-Za-z\s-]{1,40}", raw):
         return raw[0].upper() + raw[1:]
     return raw
 
@@ -377,7 +377,7 @@ def ensure_story_lock_coverage(
             mentioned = lang.lower() in pl
         if not mentioned and lang and len(lang) <= 3:
             mentioned = bool(
-                re.search(rf"(?i)\b(?:in['clips']+)?{re.escape(lang)}\b", pl)
+                re.search(rf"(?i)\b(?:in\s+)?{re.escape(lang)}\b", pl)
             )
         if not mentioned:
             additions.append(lang_sent)
@@ -441,8 +441,8 @@ def _scrub_lock_phrase(text: str) -> str:
     if not value:
         return ""
     value = re.sub(
-        r"(?i)\b(?:positioning(?:['clips']+lock)?|staging(?:['clips']+lock)?|seat['clips']+holds?|"
-        r"continuity['clips']+state|people in frame now)['clips']*:['clips']*",
+        r"(?i)\b(?:positioning(?:\s+lock)?|staging(?:\s+lock)?|seat\s+holds?|"
+        r"continuity\s+state|people in frame now)\s*:\s*",
         "",
         value,
     ).strip()
@@ -544,7 +544,7 @@ def _cast_presence_lines(cfg: dict[str, Any], graph: dict[str, Any] | None, name
     return lines
 
 
-def _scene_bible_lines(cfg: dict[str, Any]) -> list[str]:
+def _scene_specs_lines(cfg: dict[str, Any]) -> list[str]:
     """Positive room details from the scene specs — no lock banner."""
     bible = cfg.get("scene_specs") if isinstance(cfg.get("scene_specs"), dict) else {}
     if not bible:
@@ -699,9 +699,9 @@ def _wardrobe_for(token: str, cfg: dict[str, Any], graph: dict[str, Any] | None)
     if not raw:
         return ""
     # Drop "Name:" prefix and slot= noise into a readable wear phrase.
-    raw = re.sub(rf"(?i)^{re.escape(name)}['clips']*:['clips']*", "", raw).strip()
-    raw = re.sub(r"\b(top|bottom|outfit|footwear|outerwear|accessories)['clips']*=['clips']*", "", raw)
-    raw = re.sub(r"['clips']*;['clips']*", ", ", raw)
+    raw = re.sub(rf"(?i)^{re.escape(name)}\s*:\s*", "", raw).strip()
+    raw = re.sub(r"\b(top|bottom|outfit|footwear|outerwear|accessories)\s*=\s*", "", raw)
+    raw = re.sub(r"\s*;\s*", ", ", raw)
     return raw[:160]
 
 
@@ -748,11 +748,11 @@ def _action_for(token: str, cfg: dict[str, Any], graph: dict[str, Any] | None, f
         # Drop leading "Name …" / "The Name is …" so story sentence can say "is <verb…>".
         if name:
             text = re.sub(
-                rf"(?i)^(?:the['clips']+)?{re.escape(name)}['clips']+(?:is['clips']+|are['clips']+)?",
+                rf"(?i)^(?:the\s+)?{re.escape(name)}\s+(?:is\s+|are\s+)?",
                 "",
                 text,
             ).strip()
-        text = re.sub(r"(?i)^(is|are|was|were)['clips']+", "", text).strip()
+        text = re.sub(r"(?i)^(is|are|was|were)\s+", "", text).strip()
         return text[:180]
 
     for key, value in actions.items():
@@ -771,7 +771,7 @@ def _action_for(token: str, cfg: dict[str, Any], graph: dict[str, Any] | None, f
     # Prefer this character's clause inside a shared "A … while B …" beat.
     beat = str(fallback or cfg.get("clip_action") or "").strip().rstrip(".")
     if beat and name and " while " in beat.lower():
-        for part in re.split(r"(?i)['clips']+while['clips']+", beat):
+        for part in re.split(r"(?i)\s+while\s+", beat):
             if name.casefold() in part.casefold():
                 cleaned = _clean_doing(part)
                 if cleaned:
@@ -979,13 +979,13 @@ def compose_practice_prompt(
         sentences.append(f"{look}.")
 
     text = " ".join(s for s in sentences if s and not _BAD_DIRECTIVE.search(s))
-    text = re.sub(r"[ ['clips']]+", " ", text)
-    text = re.sub(r"['clips']+\.", ".", text)
+    text = re.sub(r"[ \s]+", " ", text)
+    text = re.sub(r"\s+\.", ".", text)
     # Final safety: strip any exited names that leaked via speech/continue text.
     for gone_name in exited_names(cfg, graph):
         if gone_name and gone_name.casefold() not in {n.casefold() for n in names}:
             text = re.sub(rf"(?i)\b{re.escape(gone_name)}\b[^.]*\.?", "", text)
-    text = re.sub(r"['clips']{2,}", " ", text).strip()
+    text = re.sub(r"\s{2,}", " ", text).strip()
     text, _cov_notes = ensure_story_lock_coverage(text, cfg, graph=graph)
     return text[:2200]
 
@@ -1058,8 +1058,8 @@ def resolve_still_call_prompt(cfg: dict[str, Any] | None, fallback: str = "") ->
 
 
 _LOCK_BANNER_LINE = re.compile(
-    r"(?i)^['clips']*(?:style['clips']*lock|costume['clips']*lock|clothing['clips']*lock|wardrobe['clips']*lock|"
-    r"positioning['clips']*lock|scene['clips']*specs|forbid|forbidden|already-?done|on['clips']*screen)\b"
+    r"(?i)^\s*(?:style\s*lock|costume\s*lock|clothing\s*lock|wardrobe\s*lock|"
+    r"positioning\s*lock|scene\s*specs|forbid|forbidden|already-?done|on\s*screen)\b"
 )
 
 
@@ -1074,7 +1074,7 @@ def narrative_seed_from_user_prompt(prompt: str) -> str:
     if not _BAD_DIRECTIVE.search(text) and not _LOCK_BANNER_LINE.search(text):
         return text[:_SEED_CAP]
     chunks: list[str] = []
-    for part in re.split(r"(?<=[.!?])['clips']+|\n+", text):
+    for part in re.split(r"(?<=[.!?])\s+|\n+", text):
         line = part.strip().lstrip("-").strip()
         if not line:
             continue
@@ -1082,9 +1082,9 @@ def narrative_seed_from_user_prompt(prompt: str) -> str:
             continue
         # Inline lock essays (same paragraph as Action:) — cut from the banner on.
         cut = re.split(
-            r"(?i)\b(?:style['clips']*lock|costume['clips']*lock|clothing['clips']*lock|wardrobe['clips']*lock|"
-            r"positioning['clips']*lock|scene['clips']*specs|forbid|forbidden|already-?done|"
-            r"identity['clips']*sheets|strategy['clips']*=)\b",
+            r"(?i)\b(?:style\s*lock|costume\s*lock|clothing\s*lock|wardrobe\s*lock|"
+            r"positioning\s*lock|scene\s*specs|forbid|forbidden|already-?done|"
+            r"identity\s*sheets|strategy\s*=)\b",
             line,
             maxsplit=1,
         )[0].strip(" ,;.—-")
@@ -1127,9 +1127,9 @@ def prompt_respects_practice(
         reasons.append("too_long")
     if _BAD_DIRECTIVE.search(text):
         reasons.append("negative_or_example_or_lock_essay")
-    if not re.search(r"(?i)(?:from['clips']+(?:@)?image['clips']*\d+|(?:@)?image['clips']*\d+['clips']+is\b)", text):
+    if not re.search(r"(?i)(?:from\s+(?:@)?image\s*\d+|(?:@)?image\s*\d+\s+is\b)", text):
         reasons.append("missing_image_binding")
-    if not re.search(r"(?i)scene is as in['clips']+(?:@)?image['clips']*\d+|in the scene from['clips']+(?:@)?image", text):
+    if not re.search(r"(?i)scene is as in\s+(?:@)?image\s*\d+|in the scene from\s+(?:@)?image", text):
         reasons.append("missing_in_scene")
     for name in on_screen_names(cfg, graph):
         if name.casefold() in {n.casefold() for n in exited_names(cfg, graph)}:
@@ -1220,7 +1220,7 @@ def _pull_labeled(prompt: str, prefixes: tuple[str, ...]) -> str:
         for line in lines:
             low = line.lower()
             rest = low[len(prefix):].lstrip() if low.startswith(prefix) else ""
-            if rest and re.match(r"^(?:\d+['clips']*)?:", rest):
+            if rest and re.match(r"^(?:\d+\s*)?:", rest):
                 value = line.split(":", 1)[-1].strip().strip(".")
                 value = re.split(
                     r"(?i)\b(?:no whip|no crash|do not|don't|never|forbid)\b",
@@ -1283,7 +1283,7 @@ def director_prepare_video_prompt(
         reasons = [*reasons, "wired_user_images"]
     if raw and re.search(
         r"(?i)\b(?:costume lock|positioning lock|scene specs|style lock|forbid|already-?done)\b"
-        r"|^['clips']*on screen['clips']*:",
+        r"|^\s*on screen\s*:",
         raw,
         flags=re.M,
     ):

@@ -138,7 +138,7 @@ def build_production_specs(
         _spatial_block(spatial),
         _speech_table(shots, characters),
         "LANDMARK RULE: named landmarks keep the SAME screen-side "
-        "and place vs the scene specs across all same-setting keyframes and clips — "
+        "and place vs the scene specs across all same-setting clip specs and clips — "
         "never teleport a landmark mid-film.",
         "CROWD RULE: if extras exist, keep the SAME silhouette layout across "
         "same-setting shots (do not empty then reinvent a new crowd).",
@@ -322,5 +322,5 @@ def landmark_clause_from_analysis(
     return (
         "LANDMARK LOCK: "
         + "; ".join(bits)
-        + " — do not move/resize/teleport these across same-setting keyframes/clips."
+        + " — do not move/resize/teleport these across same-setting clip specs/clips."
     )

@@ -262,11 +262,11 @@ def collect_clip_reference_images(
     clip_index: int = 1,
     node: DesignerGraphNode | None = None,
 ) -> list[Path]:
-    """Wan reference_images: on-screen solos, then user stills, then the scene card.
+    """Wan reference_images: on-screen character specs, then user stills, then the scene spec.
 
     Design clips always attach these as R2V refs — never as a single first-frame
-    still. Order matches Wan R2V labeling: solos are character1…, uploads and
-    user-wired image nodes follow, and the scene card stays last as the
+    still. Order matches Wan R2V labeling: character specs are character1…, uploads and
+    user-wired image nodes follow, and the scene spec stays last as the
     environment.
     """
     from jiuwenswarm.server.runtime.designer.handlers.common import (
@@ -374,7 +374,7 @@ def collect_clip_reference_images(
 
 
 def _storyboard_narrative_action(shot: dict[str, Any] | None) -> str:
-    """Prefer Comment (keyframe/clip description), then Character action."""
+    """Prefer Comment (clip spec description), then Character action."""
     if not isinstance(shot, dict):
         return ""
     return str(shot.get("comment") or shot.get("character_action") or "").strip()
@@ -386,7 +386,7 @@ def _extract_action_from_generate_prompt(text: str) -> str:
     if not raw:
         return ""
     match = re.search(
-        r"(?i)(?:^|\n)['clips']*(?:Primary action for shot['clips']+\d+['clips']*:|Action)['clips']*:['clips']*(.+?)(?:\n|$)",
+        r"(?i)(?:^|\n)\s*(?:Primary action for shot\s+\d+\s*:|Action)\s*:\s*(.+?)(?:\n|$)",
         raw,
     )
     if match:
@@ -422,8 +422,8 @@ def _looks_like_contaminated_prompt(text: str) -> bool:
     """True only for pasted handoff/assignment dumps — not normal SCENE SPECS / staging."""
     raw = (text or "").upper()
     needles = (
-        "PRIOR KEYFRAME PROMPT",
-        "PREVIOUS KEYFRAME HAD",
+        "PRIOR CLIP PROMPT",
+        "PREVIOUS CLIP HAD",
         "PRIOR SHOT CONSISTENCY",
         "PREVIOUS CLIP HAD",
         "YOUR ASSIGNMENT",
@@ -462,7 +462,7 @@ def _clip_prompt_lead(
 ) -> str:
     attached: list[str] = []
     if has_character:
-        attached.append("on-screen character solo sheets as character1, character2, …")
+        attached.append("on-screen character character specs as character1, character2, …")
     if has_scene:
         attached.append("scene specs last, as the room")
     extras = (
@@ -481,7 +481,7 @@ def _clip_prompt_lead(
         "storyboard shot only. "
         f"{extras}{focus} "
         f"{continue_bit}"
-        "character1/character2 are the solo sheets (face and wardrobe). "
+        "character1/character2 are the character specs (face and wardrobe). "
         "The last image is the scene specs. "
         "Match the film STYLE LOCK. One instance per person. "
         "No subtitles, no cutaways.\n\n"
@@ -743,7 +743,7 @@ def build_clip_prompt(
     else:
         parts.append(
             f"Storyboard shot for shot {clip_index} only "
-            f"(action={action or 'see keyframe'}; camera={camera or 'match keyframe'})."
+            f"(action={action or 'see clip spec'}; camera={camera or 'match clip spec'})."
         )
     override = str((cfg.get("generate") or {}).get("prompt") or "").strip() if isinstance(cfg.get("generate"), dict) else ""
     # When live storyboard already provided the shot, skip stale generate.prompt narratives.
@@ -794,7 +794,7 @@ def build_clip_prompt(
     if roster:
         parts.append(
             "User reference slots (original files are visual/audio authority). "
-            "Video and audio are generic references — not the first frame or keyframe:\n"
+            "Video and audio are generic references — not the first frame or clip still:\n"
             f"{roster}"
         )
     if user_reference_video_path(graph) is not None:

@@ -22,20 +22,20 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _EXIT_RE = re.compile(
-    r"\b(?:leave|leaves|leaving|exit|exits|exiting|walk(?:s|ing)?['clips']+away|"
-    r"gets?['clips']+up|stands?['clips']+up|walks?['clips']+out|pushes?['clips']+(?:his|her|their)['clips']+chair|"
-    r"storms?['clips']+out|departs?)\b",
+    r"\b(?:leave|leaves|leaving|exit|exits|exiting|walk(?:s|ing)?\s+away|"
+    r"gets?\s+up|stands?\s+up|walks?\s+out|pushes?\s+(?:his|her|their)\s+chair|"
+    r"storms?\s+out|departs?)\b",
     re.I,
 )
 # Anticipatory / schedule language — not an on-screen exit this shot.
 _FALSE_EXIT_RE = re.compile(
     r"\b(?:"
-    r"(?:just['clips']+)?before['clips']+(?:leaving|exiting|departing)|"
-    r"about['clips']+to['clips']+(?:leave|exit|depart)|"
-    r"ready['clips']+to['clips']+(?:leave|exit|go['clips']+home)|"
-    r"get(?:ting)?['clips']+off['clips']+work|off['clips']+work|leaving['clips']+work|"
-    r"end['clips']+of['clips']+(?:the['clips']+)?(?:day|shift)|clock(?:ing)?['clips']+out|"
-    r"on['clips']+(?:his|her|their)['clips']+way['clips']+(?:out|home)"
+    r"(?:just\s+)?before\s+(?:leaving|exiting|departing)|"
+    r"about\s+to\s+(?:leave|exit|depart)|"
+    r"ready\s+to\s+(?:leave|exit|go\s+home)|"
+    r"get(?:ting)?\s+off\s+work|off\s+work|leaving\s+work|"
+    r"end\s+of\s+(?:the\s+)?(?:day|shift)|clock(?:ing)?\s+out|"
+    r"on\s+(?:his|her|their)\s+way\s+(?:out|home)"
     r")\b",
     re.I,
 )
@@ -47,36 +47,36 @@ def _action_has_exit(action: str) -> bool:
     return bool(_EXIT_RE.search(text))
 
 _STAY_SPEAK_RE = re.compile(
-    r"\b(?:still['clips']+(?:speak|preach|read|talk)|continues?['clips']+(?:speak|preach|read|talk)|"
-    r"remains?['clips']+(?:at|behind)|keeps?['clips']+(?:speak|read))\b",
+    r"\b(?:still\s+(?:speak|preach|read|talk)|continues?\s+(?:speak|preach|read|talk)|"
+    r"remains?\s+(?:at|behind)|keeps?\s+(?:speak|read))\b",
     re.I,
 )
 _HARD_CUT_RE = re.compile(
-    r"\b(?:pan(?:s|ning)?['clips']+to|cut(?:s)?['clips']+to|then['clips']+the['clips']+camera|close-?up['clips']+on|"
-    r"drift(?:s|ing)?['clips']+to|feature(?:s)?['clips']+the|flash['clips']+of|flashback)\b",
+    r"\b(?:pan(?:s|ning)?\s+to|cut(?:s)?\s+to|then\s+the\s+camera|close-?up\s+on|"
+    r"drift(?:s|ing)?\s+to|feature(?:s)?\s+the|flash\s+of|flashback)\b",
     re.I,
 )
 _DURATION_RE = re.compile(
-    r"(?P<n>\d+)['clips']*(?:-|–|to)['clips']*(?P<m>\d+)['clips']*seconds?|"
-    r"(?P<a>\d+)['clips']*-?['clips']*second|\b(?P<b>\d+)s\b",
+    r"(?P<n>\d+)\s*(?:-|–|to)\s*(?P<m>\d+)\s*seconds?|"
+    r"(?P<a>\d+)\s*-?\s*second|\b(?P<b>\d+)s\b",
     re.I,
 )
 
-# One shot == one keyframe + one clip in this pipeline, so "N 个关键帧" is the
-# same contract as "N 个分镜".
+# One shot == one scene spec + one clip in this pipeline, so "N 个关键帧/分镜" is the
+# same contract as "N clips".
 _SHOT_UNIT_CN = r"(?:分镜|镜头|关键帧|帧|幕)"
 _THREE_SHOT_RE = re.compile(
-    r"\bthree[- ]shot\b|\b3[- ]shot\b|\bthree['clips']+shots?\b|"
-    rf"三分镜|三个?{_SHOT_UNIT_CN}|3['clips']*个?{_SHOT_UNIT_CN}",
+    r"\bthree[- ]shot\b|\b3[- ]shot\b|\bthree\s+shots?\b|"
+    rf"三分镜|三个?{_SHOT_UNIT_CN}|3\s*个?{_SHOT_UNIT_CN}",
     re.I,
 )
 _FOUR_SHOT_RE = re.compile(
-    r"\bfour[- ]shot\b|\b4[- ]shot\b|\bfour['clips']+shots?\b|"
-    rf"四分镜|四个?{_SHOT_UNIT_CN}|4['clips']*个?{_SHOT_UNIT_CN}",
+    r"\bfour[- ]shot\b|\b4[- ]shot\b|\bfour\s+shots?\b|"
+    rf"四分镜|四个?{_SHOT_UNIT_CN}|4\s*个?{_SHOT_UNIT_CN}",
     re.I,
 )
 _N_SHOT_CN_RE = re.compile(
-    rf"(?P<n>[二三四五六七八九十两\d]+)['clips']*个?{_SHOT_UNIT_CN}", re.I
+    rf"(?P<n>[二三四五六七八九十两\d]+)\s*个?{_SHOT_UNIT_CN}", re.I
 )
 _CN_NUM = {
     "两": 2,
@@ -91,7 +91,7 @@ _CN_NUM = {
     "十": 10,
 }
 _TIMELINE_BEAT_RE = re.compile(
-    r"(?:0:)?(\d{1,2}):(\d{2})['clips']*[-–—]['clips']*(?:0:)?(\d{1,2}):(\d{2})",
+    r"(?:0:)?(\d{1,2}):(\d{2})\s*[-–—]\s*(?:0:)?(\d{1,2}):(\d{2})",
     re.M,
 )
 # Beat separators, CJK + latin. A cue means "the story moves on", i.e. one more beat.
@@ -99,12 +99,12 @@ _BEAT_CUE_RE = re.compile(
     r"然后|接着|紧接着|随后|其后|之后|最后|最终|起初|首先|其次|突然|忽然|"
     r"画面(?:切换|切至|切到|转向|转为)|镜头(?:切换|切至|切到|转向|拉近|推近|拉远|摇向)|"
     r"下一(?:幕|镜|个镜头)|"
-    r"\band then\b|\bafter that\b|\bfinally\b|\bmeanwhile\b|\bcut(?:s)?['clips']+to\b|"
-    r"\bpan(?:s)?['clips']+to\b|\bnext['clips']+(?:shot|scene|beat)\b",
+    r"\band then\b|\bafter that\b|\bfinally\b|\bmeanwhile\b|\bcut(?:s)?\s+to\b|"
+    r"\bpan(?:s)?\s+to\b|\bnext\s+(?:shot|scene|beat)\b",
     re.I,
 )
 _SHOT_LABEL_RE = re.compile(
-    r"(?:^|[\n,，。；;])['clips']*(?:镜头|分镜|shot)['clips']*[#no.：:]*['clips']*(?P<n>\d{1,2})\b",
+    r"(?:^|[\n,，。；;])\s*(?:镜头|分镜|shot)\s*[#no.：:]*\s*(?P<n>\d{1,2})\b",
     re.I | re.M,
 )
 
@@ -130,7 +130,7 @@ def _cid_list(raw: Any, valid: set[str], by_name: dict[str, str] | None = None) 
     return out
 
 
-def _explicit_shot_count_from_prompt(prompt: str) -> int:
+def _explicit_clip_count_from_prompt(prompt: str) -> int:
     """Honor explicit N-shot / N分镜 language only (language-agnostic count, not plot rules)."""
     text = prompt or ""
     if _THREE_SHOT_RE.search(text):
@@ -145,7 +145,7 @@ def _explicit_shot_count_from_prompt(prompt: str) -> int:
         if raw in _CN_NUM:
             return max(1, _CN_NUM[raw])
     m2 = re.search(
-        r"\b(?P<n>\d+)['clips']*[- ]?(?:shot|shots|beat|beats|keyframe|keyframes|key['clips']+frames?)\b",
+        r"\b(?P<n>\d+)\s*[- ]?(?:shot|shots|beat|beats|clip|clips|keyframe|keyframes|key\s+frames?)\b",
         text,
         re.I,
     )
@@ -168,7 +168,7 @@ def count_narrative_beats(prompt: str) -> int:
     labels = [int(m.group("n")) for m in _SHOT_LABEL_RE.finditer(text)]
     sentences = [
         part
-        for part in re.split(r"[。！？；!?;]|(?<=[.!?])['clips']+", text)
+        for part in re.split(r"[。！？；!?;]|(?<=[.!?])\s+", text)
         if len(part.strip()) > 8
     ]
     candidates = [
@@ -189,7 +189,7 @@ def infer_shot_budget(prompt: str, analysis: dict[str, Any]) -> int:
         sequential_shot_count,
     )
 
-    explicit = _explicit_shot_count_from_prompt(prompt)
+    explicit = _explicit_clip_count_from_prompt(prompt)
     if needs_duration_slicing(prompt):
         asked = int(requested_film_duration_sec(prompt) or 0)
         n_c = sequential_shot_count(asked)
@@ -543,10 +543,10 @@ def _ensure_stay_on_leave_beats(
 
 def _split_prompt_into_beats(prompt: str, budget: int) -> list[str]:
     """Split a narrative prompt into up to ``budget`` beat descriptions."""
-    text = re.sub(r"['clips']+", " ", (prompt or "").strip())
+    text = re.sub(r"\s+", " ", (prompt or "").strip())
     # Explicit timed beats: 0:00 - 0:07 | Title: desc
     timed = re.findall(
-        r"(?:0:)?\d{1,2}:\d{2}['clips']*[-–—]['clips']*(?:0:)?\d{1,2}:\d{2}['clips']*\|['clips']*([^|]+?)(?=(?:0:)?\d{1,2}:\d{2}|$)",
+        r"(?:0:)?\d{1,2}:\d{2}\s*[-–—]\s*(?:0:)?\d{1,2}:\d{2}\s*\|\s*([^|]+?)(?=(?:0:)?\d{1,2}:\d{2}|$)",
         text,
     )
     if timed:
@@ -570,7 +570,7 @@ def _split_prompt_into_beats(prompt: str, budget: int) -> list[str]:
     except Exception:  # noqa: BLE001
         pass
     # Sentence / clause split fallback — take first N story clauses (not evenly spaced skips).
-    parts = re.split(r"(?<=[.!;])['clips']+|['clips']+[—–-]['clips']+|\band then\b|\bthen\b", text, flags=re.I)
+    parts = re.split(r"(?<=[.!;])\s+|\s+[—–-]\s+|\band then\b|\bthen\b", text, flags=re.I)
     parts = [p.strip() for p in parts if len(p.strip()) > 40]
     if not parts:
         return [text[:400]] * max(1, budget)
@@ -619,7 +619,7 @@ def _expand_shots_to_budget(
             # keep the top two scored humans — no role/place hardcodes.
             if i == budget - 1 and len(ranked) > 1:
                 if re.search(
-                    r"\bwith['clips']+(?:his|her|their|a|an|the)['clips']+\w+",
+                    r"\bwith\s+(?:his|her|their|a|an|the)\s+\w+",
                     action,
                     re.I,
                 ) or len([sc for sc, _ in ranked if sc > 0]) >= 2:
@@ -751,7 +751,7 @@ def enrich_analysis_heuristically(prompt: str, analysis: dict[str, Any]) -> dict
             extra = f" BLOCKING: landmark={blk.get('landmark')}; " + "; ".join(pos_bits)
             base_action = str(shot.get("action") or "")
             # Replace prior BLOCKING suffix if present
-            base_action = re.split(r"['clips']BLOCKING:", base_action, maxsplit=1)[0]
+            base_action = re.split(r"\sBLOCKING:", base_action, maxsplit=1)[0]
             shot["action"] = (base_action + extra)[:500]
     _apply_exit_propagation(shots)
     out["clips"] = shots
@@ -766,7 +766,7 @@ def enrich_analysis_heuristically(prompt: str, analysis: dict[str, Any]) -> dict
         "shot_count": len(shots),
     }
     out["experiment_plan"] = "A"
-    out["clip_policy"] = "compose_solos"
+    out["clip_policy"] = "compose_character_specs"
     out["skip_domain_role_locks"] = True
     try:
         from jiuwenswarm.server.runtime.designer.pipeline.clip_scope import apply_shot_scope
@@ -825,7 +825,7 @@ async def enrich_analysis_with_llm(
             "(6) location changes reflected per beat; "
             "(7) off_camera people are NOT deleted — camera simply excludes them. "
             "Schema: "
-            '{"shots":[...],"spatial_lock":{...},"target_clip_count":N,"notes":"..."}'
+            '{"clips":[...],"spatial_lock":{...},"target_clip_count":N,"notes":"..."}'
         )
         user_payload = {
             "user_prompt": prompt,
@@ -844,7 +844,7 @@ async def enrich_analysis_with_llm(
         )
         text = model_text_or_raise(result)
         # Extract JSON object (tolerate markdown fences / trailing chatter)
-        fence = re.search(r"```(?:json)?['clips']*([['clips']\S]*?)```", text, re.I)
+        fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, re.I)
         if fence:
             text = fence.group(1).strip()
         start = text.find("{")
@@ -887,7 +887,7 @@ async def enrich_analysis_with_llm(
                 code=LLM_API_ERROR,
             )
         budget = int(parsed.get("target_clip_count") or base.get("target_clip_count") or len(new_shots))
-        asked_n = _explicit_shot_count_from_prompt(prompt)
+        asked_n = _explicit_clip_count_from_prompt(prompt)
         if asked_n >= 1:
             budget = asked_n
         else:
@@ -985,7 +985,7 @@ async def enrich_analysis_with_llm(
             "notes": str(parsed.get("notes") or "")[:400],
         }
         out["experiment_plan"] = "A"
-        out["clip_policy"] = "compose_solos"
+        out["clip_policy"] = "compose_character_specs"
         out["skip_domain_role_locks"] = True
         try:
             from jiuwenswarm.server.runtime.designer.pipeline.clip_scope import (
@@ -1046,3 +1046,4 @@ def validate_director_contract(analysis: dict[str, Any]) -> list[str]:
         for cid in shot.get("exiting_character_ids") or []:
             exited.add(str(cid))
     return errors
+

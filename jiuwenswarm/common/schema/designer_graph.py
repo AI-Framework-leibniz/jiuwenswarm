@@ -130,7 +130,7 @@ _LEGACY_PIPELINE_TITLES = frozenset(
     }
 )
 _INDEXED_LABEL_RE = re.compile(
-    r"^(?:关键帧|视频片段|Clip)(?:['clips']*(\d+))?(?:首帧)?$",
+    r"^(?:关键帧|视频片段|Clip)(?:\s*(\d+))?(?:首帧)?$",
     re.IGNORECASE,
 )
 
@@ -486,14 +486,14 @@ def _require_str(value: Any, field: str) -> str:
 
 # Separators and relative segments that Windows, macOS, and Linux treat as
 # part of a path. Other characters, including non-ASCII names, stay allowed.
-_STORAGE_ID_PATH_CHARS = frozenset("/['clips']:\x00")
+_STORAGE_ID_PATH_CHARS = frozenset("/\\:\x00")
 _STORAGE_ID_DOT_SEGMENTS = frozenset({".", ".."})
 
 
 def storage_component(value: str) -> str | None:
     """One directory or file component, or None when ``value`` can escape a directory.
 
-    ``/`` and ``['clips']`` are path separators. ``:`` is a Windows drive / alternate-data-stream
+    ``/`` and ``\\`` are path separators. ``:`` is a Windows drive / alternate-data-stream
     marker and the classic Mac path separator. NUL terminates a path. ``.`` and ``..``
     are relative segments when the id is used as a directory name.
     """
@@ -1263,7 +1263,7 @@ def is_leader_node_id(node_id: Any) -> bool:
 
 
 def clip_activity_text(value: Any, *, max_len: int = ACTIVITY_TEXT_MAX) -> str:
-    text = re.sub(r"['clips']+", " ", str(value or "")).strip()
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
     if len(text) <= max_len:
         return text
     return text[: max(1, max_len - 1)] + "…"

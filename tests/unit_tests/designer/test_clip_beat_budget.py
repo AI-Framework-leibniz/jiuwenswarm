@@ -16,21 +16,21 @@ CN_MULTI_BEAT = (
 
 
 def test_chinese_prose_beats_are_counted():
-    """CJK has no word boundaries, so ['clips']b cues never fired and every prompt read as 1 beat."""
+    """CJK has no word boundaries, so \\b cues never fired and every prompt read as 1 beat."""
     assert count_narrative_beats(CN_MULTI_BEAT) >= 4
 
 
-def test_keyframe_count_is_an_explicit_contract():
-    """One shot == one keyframe + one clip, so "N 个关键帧" must be honored as N."""
+def test_clip_count_is_an_explicit_contract():
+    """User-facing N-clip / N-分镜 language is a hard ceiling; cinematic synonyms still parse."""
     from jiuwenswarm.server.runtime.designer.pipeline.director_contract import (
-        _explicit_shot_count_from_prompt,
+        _explicit_clip_count_from_prompt,
     )
 
-    assert _explicit_shot_count_from_prompt("请用5个关键帧") == 5
-    assert _explicit_shot_count_from_prompt("用三个关键帧收束") == 3
-    assert _explicit_shot_count_from_prompt("use 6 keyframes") == 6
-    assert _explicit_shot_count_from_prompt(CN_MULTI_BEAT + " 请用5个关键帧。") == 5
-    assert _explicit_shot_count_from_prompt(CN_MULTI_BEAT + " 请拆成3个分镜。") == 3
+    assert _explicit_clip_count_from_prompt("请用5个分镜") == 5
+    assert _explicit_clip_count_from_prompt("用三个镜头收束") == 3
+    assert _explicit_clip_count_from_prompt("use 6 clips") == 6
+    assert _explicit_clip_count_from_prompt(CN_MULTI_BEAT + " 请用5个分镜。") == 5
+    assert _explicit_clip_count_from_prompt(CN_MULTI_BEAT + " 请拆成3个分镜。") == 3
 
 
 def test_short_prompt_stays_lean():

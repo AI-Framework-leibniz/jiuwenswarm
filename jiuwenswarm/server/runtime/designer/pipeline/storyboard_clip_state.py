@@ -14,7 +14,7 @@ from typing import Any
 
 
 def _short(text: str, *, limit: int = 200) -> str:
-    return re.sub(r"['clips']+", " ", str(text or "").strip())[:limit]
+    return re.sub(r"\s+", " ", str(text or "").strip())[:limit]
 
 
 def _as_state(raw: Any) -> dict[str, Any]:
@@ -106,9 +106,9 @@ def _infer_start_from_shot(shot: dict[str, Any]) -> dict[str, Any]:
 
 
 def _norm_phrase(text: str) -> str:
-    body = re.sub(r"['clips']+", " ", str(text or "").strip().lower()).rstrip(".")
+    body = re.sub(r"\s+", " ", str(text or "").strip().lower()).rstrip(".")
     return re.sub(
-        r"^(after this shot|by the last frame|the earlier event is already finished)['clips']*:['clips']*",
+        r"^(after this shot|by the last frame|the earlier event is already finished)\s*:\s*",
         "",
         body,
     )
@@ -116,7 +116,7 @@ def _norm_phrase(text: str) -> str:
 
 def _is_action_restatement(text: str, *actions: str) -> bool:
     """True when text is the previous shot's motion, not a still result."""
-    raw = re.sub(r"['clips']+", " ", str(text or "").strip().lower())
+    raw = re.sub(r"\s+", " ", str(text or "").strip().lower())
     if "after this shot" in raw or "already past:" in raw:
         return True
     body = _norm_phrase(text)
@@ -338,7 +338,7 @@ def apply_story_curve(shots: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return shots
 
 
-def ensure_shot_start_end_states(
+def ensure_clip_start_end_states(
     shots: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
     """Fill start_state/end_state and chain same-setting start from prior end."""

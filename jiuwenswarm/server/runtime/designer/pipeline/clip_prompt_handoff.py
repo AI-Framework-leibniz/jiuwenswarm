@@ -39,10 +39,10 @@ def wan_prompt_from_clip_node(node: dict[str, Any] | None) -> str:
 
 
 def _short_action(text: str, *, limit: int = 220) -> str:
-    raw = re.sub(r"['clips']+", " ", (text or "").strip())
+    raw = re.sub(r"\s+", " ", (text or "").strip())
     for marker in (
         "PRIOR CLIP",
-        "PRIOR KEYFRAME",
+        "PRIOR CLIP",
         "YOUR ASSIGNMENT",
         "PREVIOUS CLIP HAD",
         "LANGUAGE LOCK",
@@ -54,10 +54,10 @@ def _short_action(text: str, *, limit: int = 220) -> str:
         if marker in raw.upper():
             raw = raw.split(marker, 1)[0].strip()
     for pat in (
-        r"Primary action for shot \d+:['clips']*(.+?)(?:\.|$)",
-        r"YOUR ASSIGNMENT[['clips']\S]*?Action:['clips']*(.+?)(?:\n|$)",
-        r"Character action:['clips']*(.+?)(?:\n|$)",
-        r"Action:['clips']*(.+?)(?:\n|$)",
+        r"Primary action for shot \d+:\s*(.+?)(?:\.|$)",
+        r"YOUR ASSIGNMENT[\s\S]*?Action:\s*(.+?)(?:\n|$)",
+        r"Character action:\s*(.+?)(?:\n|$)",
+        r"Action:\s*(.+?)(?:\n|$)",
     ):
         m = re.search(pat, raw, flags=re.IGNORECASE)
         if m:
@@ -314,7 +314,7 @@ def this_shot_assignment_clause(
 ) -> str:
     lines = [
         f"YOUR ASSIGNMENT (storyboard shot {int(clip_index or 0)} — film ONLY this part):",
-        f"- Action: {_short_action(action) or '(follow this shot keyframe + storyboard shot)'}",
+        f"- Action: {_short_action(action) or '(follow this shot clip spec + storyboard shot)'}",
     ]
     if str(camera or "").strip():
         lines.append(f"- Camera: {str(camera).strip()[:160]}")
@@ -406,7 +406,7 @@ def handoff_clause_for_prompt(
     return "\n\n".join(parts)
 
 
-def keyframe_continuity_note(
+def clip_continuity_note(
     *,
     clip_index: int,
     this_action: str = "",
@@ -414,12 +414,12 @@ def keyframe_continuity_note(
     prior_action: str = "",
     prior_clip_index: int | None = None,
 ) -> str:
-    """Same pattern for keyframes — no full prior generate.prompt paste."""
+    """Continuity note for clips — no full prior generate.prompt paste."""
     parts: list[str] = []
     if prior_action.strip():
-        src = f"shot {prior_clip_index}" if prior_clip_index else "prior keyframe"
+        src = f"shot {prior_clip_index}" if prior_clip_index else "prior clip"
         parts.append(
-            "PREVIOUS KEYFRAME HAD THE FOLLOWING (context only — do NOT redraw that beat):\n"
+            "PREVIOUS CLIP HAD THE FOLLOWING (context only — do NOT redraw that beat):\n"
             f"- {src}: {_short_action(prior_action)}\n"
             "Advance time; do not restart finished onsets unless storyboard asks."
         )

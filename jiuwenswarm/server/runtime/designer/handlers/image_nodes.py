@@ -1,6 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""Image intermediate handlers: character sheet, scene, and keyframe."""
+"""Image intermediate handlers: character spec sheet and scene spec."""
 
 from __future__ import annotations
 
@@ -57,8 +57,8 @@ def _resolve_image_size(cfg: dict, graph: dict | None = None) -> str:
 def _frame_prompt_looks_contaminated(text: str) -> bool:
     raw = (text or "").upper()
     needles = (
-        "PRIOR KEYFRAME PROMPT",
-        "PREVIOUS KEYFRAME HAD",
+        "PRIOR CLIP PROMPT",
+        "PREVIOUS CLIP HAD",
         "PRIOR SHOT CONSISTENCY",
         "PREVIOUS CLIP HAD",
         "YOUR ASSIGNMENT",
@@ -83,7 +83,7 @@ def _drop_story_context(source: str) -> str:
 
     kept: list[str] = []
     for line in str(source or "").splitlines():
-        if re.search(r"(?i)\bstory context['clips']*:", line):
+        if re.search(r"(?i)\bstory context\s*:", line):
             continue
         kept.append(line)
     return "\n".join(kept).strip()
@@ -117,7 +117,7 @@ def _scene_prompt(source: str, *, derive_from_master: bool = False, composed: bo
     if composed:
         return (
             "COMPOSED SCENE MASTER: generate the SETTING and put ALL listed characters "
-            "into it at opening blocking. Identity from attached solo sheets "
+            "into it at opening blocking. Identity from attached character specs "
             "(Image 1, Image 2, …). People are IN the scene — not an empty room and "
             "not a studio lineup. One instance per person. One clear image.\n"
             f"{source}"
@@ -156,7 +156,7 @@ def _shot_frame_prompt(
     names = [str(n).strip() for n in (cast_names or []) if str(n).strip()]
     who = ", ".join(names)
     lead = (
-        f"Cinematic keyframe, one style-consistent still for shot {shot['shot_no']}{timeline}. "
+        f"Cinematic scene spec, one style-consistent still for shot {shot['shot_no']}{timeline}. "
         "Clear composition, this instant only, no comic grid."
     )
     if who:
@@ -168,7 +168,7 @@ def _shot_frame_prompt(
         else:
             lead += f" Feature this character: {who}."
     if comment:
-        lead += f" Generate the keyframe from this shot description: {comment}."
+        lead += f" Generate the clip spec from this shot description: {comment}."
     lead += (
         " Shot notes: "
         f"shot {shot['shot_no']}; "
@@ -179,15 +179,15 @@ def _shot_frame_prompt(
         f"scene change {shot['scene_change'] or 'unspecified'}."
     )
     n_refs = max(1, int(character_ref_count or 1))
-    prior_edit = clip_strategy == "edit_prior_keyframe"
+    prior_edit = clip_strategy in {"edit_prior_clip"}
     if has_character and has_scene:
         if prior_edit:
             lead += (
-                " This is image-to-image EDIT of the prior keyframe of the SAME setting "
+                " This is image-to-image EDIT of the prior clip spec of the SAME setting "
                 "(first reference). Keep architecture, lighting, landmarks, faces, and costumes "
                 f"{f' for {who}' if who else ''}; only change camera/pose/blocking/who is "
                 "on-screen for this shot. Additional refs may include the scene-master compose "
-                "still (architecture lock) and solo cast sheets (identity only). "
+                "still (architecture lock) and character spec sheets (identity only). "
                 "Never regenerate the set; never jump to another setting."
             )
         elif combined_cast_ref or (len(names) > 1 and n_refs == 1):
@@ -199,7 +199,7 @@ def _shot_frame_prompt(
             )
         elif n_refs > 1:
             lead += (
-                f" This is image-to-image. The first {n_refs} references are CANONICAL solo "
+                f" This is image-to-image. The first {n_refs} references are CANONICAL character specs "
                 f"cast sheets{f' for {who}' if who else ''}. COMPOSE a new SCENE MASTER still: "
                 "generate the scene AND put every listed on-screen character into it. "
                 "IDENTITY LOCK: same face, hair, body, and costume as each sheet — "
@@ -214,12 +214,12 @@ def _shot_frame_prompt(
     elif has_character:
         if prior_edit:
             lead += (
-                " Edit the prior same-setting keyframe (first ref). Keep the scene and identity; "
+                " Edit the prior same-setting clip spec (first ref). Keep the scene and identity; "
                 "only update this shot's action/framing."
             )
         else:
             lead += (
-                " Compose SCENE MASTER from solo sheet(s): generate the setting and put "
+                " Compose SCENE MASTER from character specs(s): generate the setting and put "
                 "the listed on-screen cast. Character look and costume must match the sheet(s)."
             )
     elif has_scene:
@@ -418,10 +418,10 @@ class CharacterDesignNodeHandler:
             # No hard-coded ensure_still rewrite — user/LLM text is authority.
             try:
                 from jiuwenswarm.server.runtime.designer.pipeline.wan_call_locks import (
-                    apply_keyframe_call_locks,
+                    apply_image_call_locks,
                 )
 
-                prompt = apply_keyframe_call_locks(
+                prompt = apply_image_call_locks(
                     prompt, cfg=cfg, graph=ctx.graph if isinstance(ctx.graph, dict) else {}
                 )
             except Exception:  # noqa: BLE001
@@ -505,10 +505,10 @@ class SceneNodeHandler:
         # No hard-coded ensure_still rewrite — user/LLM text is authority.
         try:
             from jiuwenswarm.server.runtime.designer.pipeline.wan_call_locks import (
-                apply_keyframe_call_locks,
+                apply_image_call_locks,
             )
 
-            scene_prompt = apply_keyframe_call_locks(
+            scene_prompt = apply_image_call_locks(
                 scene_prompt, cfg=cfg, graph=ctx.graph
             )
         except Exception:  # noqa: BLE001
@@ -545,7 +545,7 @@ class FrameNodeHandler:
         )
         allow_without_scene = clip_strategy in {
             "compose_from_character_specs",
-            "edit_prior_keyframe",
+            "edit_prior_clip",
         }
         if not all_chars or (not all_scenes and not allow_without_scene):
             missing = []
@@ -554,12 +554,12 @@ class FrameNodeHandler:
             if not all_scenes and not allow_without_scene:
                 missing.append("Scene")
             raise RuntimeError(
-                "Keyframe generation must send "
+                "Clip spec generation must send "
                 + " and ".join(missing)
                 + " with this shot. Finish the Character and Scene nodes first."
             )
         refs_paths = collect_frame_reference_images(ctx, node)
-        # Never dump every solo sheet when occupancy is empty/wrong — that paints
+        # Never dump every character specs when occupancy is empty/wrong — that paints
         # off-screen cast into the still. Prefer on_screen identity refs only.
         preferred_char_nodes = [
             str(x)
@@ -629,7 +629,7 @@ class FrameNodeHandler:
                         for x in (oc.get("character_names") or [])
                         if str(x).strip()
                     ] or ([str(oc.get("character_name") or "").strip()] if oc.get("character_name") else [])
-        # Ref count follows on_screen / cast_names, not every attached solo predecessor.
+        # Ref count follows on_screen / cast_names, not every attached character specs predecessor.
         char_ref_count = max(
             1,
             len(cast_names)
@@ -687,10 +687,10 @@ class FrameNodeHandler:
                 staging_lock=staging_lock,
             )
         from jiuwenswarm.server.runtime.designer.pipeline.wan_call_locks import (
-            apply_keyframe_call_locks,
+            apply_image_call_locks,
         )
 
-        frame_prompt = apply_keyframe_call_locks(
+        frame_prompt = apply_image_call_locks(
             frame_prompt,
             cfg=cfg,
             graph=ctx.graph if isinstance(ctx.graph, dict) else {},
@@ -722,9 +722,9 @@ class FrameNodeHandler:
             return NodeResult(
                 output_ref=ref,
                 output_refs=[ref],
-                message=f"keyframe {clip_index} generated",
+                message=f"clip spec {clip_index} generated",
             )
         last_error = str((generated or {}).get("error") or "").strip()
         raise RuntimeError(
-            f"keyframe {clip_index} image_gen failed: {last_error or 'no image_path'}"
+            f"clip spec {clip_index} image_gen failed: {last_error or 'no image_path'}"
         )

@@ -24,11 +24,8 @@ from jiuwenswarm.common.schema.designer_graph import (
 _PIPELINE_STAGE_TEXT = {
     "brief": "writing the brief",
     "character": "generating character image",
-    "character": "generating character image",
     "scene": "generating scene image",
     "storyboard": "building the storyboard",
-    "frame": "generating keyframe",
-    "keyframe": "generating keyframe",
     "clip": "generating clip video",
     "compose": "composing the film",
     "speech": "generating speech",

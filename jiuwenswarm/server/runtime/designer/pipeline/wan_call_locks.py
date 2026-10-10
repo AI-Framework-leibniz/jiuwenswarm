@@ -1,7 +1,7 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 """Still-image locks, and the short prompt sent to the video model.
 
-Keyframe stills still receive style and wardrobe locks. Clip calls are
+Clip spec stills receive style and wardrobe locks. Clip calls are
 rewritten into a concise story-form prompt (wardrobe/seats/visibility
 folded into narrative); those locks stay on the node for the agent.
 """
@@ -38,7 +38,7 @@ _SEED_STOP = frozenset(
         "must",
         "differ",
         "sibling",
-        "shots",
+        "clips",
     }
 )
 
@@ -88,9 +88,9 @@ def _aspect_from(cfg: dict[str, Any], graph: dict[str, Any], analysis: dict[str,
     return {}
 
 
-def set_orientation_lock_clause(*, scene_card: bool = False) -> str:
+def set_orientation_lock_clause(*, scene_specs: bool = False) -> str:
     """Keep first-frame room orientation stable (fixes spin/flip drift)."""
-    subject = "Scene card / Image 1" if scene_card else "Image 1"
+    subject = "Scene spec / Image 1" if scene_specs else "Image 1"
     return (
         f"SET/ORIENTATION LOCK: keep {subject}'s exact room geometry, wall/window sides, "
         "furniture layout, and camera roll/horizon — FORBIDDEN: spin or rotate the set, "
@@ -99,7 +99,7 @@ def set_orientation_lock_clause(*, scene_card: bool = False) -> str:
     )
 
 
-def apply_keyframe_call_locks(
+def apply_image_call_locks(
     prompt: str,
     *,
     cfg: dict[str, Any] | None = None,
@@ -213,7 +213,7 @@ def apply_wan_call_locks(
         if not camera:
             # Film-shot essays often put Camera on the same line as "Film shot N".
             m = re.search(
-                r"(?i)\bcamera\b['clips']*[:.]?['clips']*(.+?)(?:\.['clips']*action\b|\.['clips']*focus\b|$)",
+                r"(?i)\bcamera\b\s*[:.]?\s*(.+?)(?:\.\s*action\b|\.\s*focus\b|$)",
                 user_text,
             )
             if m:

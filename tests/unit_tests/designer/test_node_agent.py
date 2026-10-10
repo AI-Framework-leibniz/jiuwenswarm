@@ -244,7 +244,7 @@ async def test_agent_patch_cannot_add_nodes_to_frozen_topology(
     assert spawned == ["node not found: n_extra"]
     patched = designer_store.get_graph(graph["graph_id"])
     assert patched is not None
-    assert (patched.get("metadata") or {}).get("freeze_shot_topology") is True
+    assert (patched.get("metadata") or {}).get("freeze_clip_topology") is True
     assert not any(node["id"] == "n_extra" for node in patched["nodes"])
 
 

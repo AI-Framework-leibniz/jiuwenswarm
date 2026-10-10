@@ -237,11 +237,11 @@ def _parse_storyboard_table(text: str) -> list[StoryboardShot]:
 
 
 _HIER_SHOT_RE = re.compile(
-    r"(?im)^###['clips']*Shot['clips']+(\d+)['clips']*[—\-–:]?['clips']*(.*)$"
+    r"(?im)^###\s*Shot\s+(\d+)\s*[—\-–:]?\s*(.*)$"
 )
 _HIER_FIELD_RE = re.compile(
-    r"(?im)^-['clips']*(Timeline|Camera|Camera move|Move|Action|Character action|"
-    r"Comment|Keyframe|Doing|Speech)['clips']*:['clips']*(.*)$"
+    r"(?im)^-\s*(Timeline|Camera|Camera move|Move|Action|Character action|"
+    r"Comment|Clip spec|Doing|Speech)\s*:\s*(.*)$"
 )
 
 
@@ -285,7 +285,7 @@ def _parse_storyboard_hierarchical(text: str) -> list[StoryboardShot]:
                 current["character_action"] = val
             if key == "action":
                 current["comment"] = val or current.get("comment") or ""
-        elif key in {"comment", "keyframe"}:
+        elif key in {"comment", "clip_prompt"}:
             current["comment"] = val
         elif key == "speech" and not current.get("character_action"):
             current["character_action"] = val
@@ -296,7 +296,7 @@ def _parse_storyboard_hierarchical(text: str) -> list[StoryboardShot]:
 
 
 def shot_generate_prompt(shot: StoryboardShot) -> str:
-    """Turn one storyboard row into the keyframe/clip generate prompt."""
+    """Turn one storyboard row into the clip generate prompt."""
     comment = str(shot.get("comment") or "").strip()
     if comment:
         return comment
@@ -377,14 +377,14 @@ def sync_shot_nodes_from_storyboard_markdown(
 
 
 _DURATION_FIELD_RE = re.compile(
-    r"(?im)^(?:[-*]['clips']*)?(?:\*\*)?duration(?:\*\*)?['clips']*:?['clips']*~?['clips']*(\d{1,2}(?:\.\d+)?)",
+    r"(?im)^(?:[-*]\s*)?(?:\*\*)?duration(?:\*\*)?\s*:?\s*~?\s*(\d{1,2}(?:\.\d+)?)",
 )
 _DURATION_INLINE_RE = re.compile(
-    r"(\d{1,2}(?:\.\d+)?)['clips']*-?['clips']*(?:seconds?|secs?|秒)",
+    r"(\d{1,2}(?:\.\d+)?)\s*-?\s*(?:seconds?|secs?|秒)",
     re.I,
 )
 _LOGLINE_RE = re.compile(
-    r"(?im)^(?:[-*]['clips']*)?(?:\*\*)?logline(?:\*\*)?['clips']*:['clips']*(.+)$",
+    r"(?im)^(?:[-*]\s*)?(?:\*\*)?logline(?:\*\*)?\s*:\s*(.+)$",
 )
 
 
@@ -422,7 +422,7 @@ def brief_logline(brief: str) -> str:
     match = _LOGLINE_RE.search(text)
     if match:
         return match.group(1).strip().strip("*").strip()
-    match = re.search(r"(?i)\*\*logline:\*\*['clips']*(.+)", text)
+    match = re.search(r"(?i)\*\*logline:\*\*\s*(.+)", text)
     if match:
         return match.group(1).strip()
     return ""
@@ -431,11 +431,11 @@ def brief_logline(brief: str) -> str:
 def brief_story_focus(prompt: str) -> str:
     text = (prompt or "").strip()
     text = re.sub(
-        r"^(?:generate|create|make|please['clips']+(?:make|create))['clips']+"
-        r"(?:a['clips']+)?(?:\d{3,4}p['clips']+)?(?:video|film|clip|short)?"
-        r"(?:['clips']+in['clips']+\d+['clips']+seconds?)?"
-        r"(?:['clips']*,['clips']*(?:at least['clips']+)?(?:two|2)['clips']+cams?)?"
-        r"[,:]?['clips']*",
+        r"^(?:generate|create|make|please\s+(?:make|create))\s+"
+        r"(?:a\s+)?(?:\d{3,4}p\s+)?(?:video|film|clip|short)?"
+        r"(?:\s+in\s+\d+\s+seconds?)?"
+        r"(?:\s*,\s*(?:at least\s+)?(?:two|2)\s+cams?)?"
+        r"[,:]?\s*",
         "",
         text,
         flags=re.I,

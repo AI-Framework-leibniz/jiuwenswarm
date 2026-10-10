@@ -23,7 +23,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Leave headroom for character solos + scene card in Wan reference_images.
+# Leave headroom for character specs + scene spec in Wan reference_images.
 MAX_SCENE_LAST_FRAME_REFS = 4
 
 
@@ -158,7 +158,7 @@ def _short_beat(cfg: dict[str, Any] | None, *, limit: int = 140) -> str:
         or cfg.get("previous_clip_action")
         or ""
     ).strip()
-    raw = re.sub(r"['clips']+", " ", raw)
+    raw = re.sub(r"\s+", " ", raw)
     return raw[:limit]
 
 
@@ -250,7 +250,7 @@ def extract_last_frame(video_path: Path, dest: Path | None = None) -> Path | Non
 
 
 def _normalize_speech(text: str) -> str:
-    raw = re.sub(r"['clips']+", " ", (text or "").strip().lower())
+    raw = re.sub(r"\s+", " ", (text or "").strip().lower())
     raw = re.sub(r"[\"'`]+", "", raw)
     return raw.strip(" .,!?;:")
 
@@ -364,7 +364,7 @@ def last_frame_continuity_clause(
             "Use it only to localize last-seen people and place. "
             "THIS clip's action/camera come from the storyboard shot — "
             "do not replace that beat with a different plot from the still. "
-            "Face/wardrobe authority remains character solo reference images."
+            "Face/wardrobe authority remains character specs reference images."
         )
 
     lines: list[str] = [
@@ -388,7 +388,7 @@ def last_frame_continuity_clause(
         lines.append(f"Beat progression in this setting: {arrow} → THIS shot.")
     lines.append(
         "Do NOT attach these stills as Wan refs (they steal character1 and restage a crop). "
-        "Identity = on-screen solos; geography = scene card LAST; plot = THIS storyboard shot "
+        "Identity = on-screen character specs; geography = scene spec LAST; plot = THIS storyboard shot "
         "continuing the previous Wan prompt. People who left stay off-screen — "
         "do not teleport them back or restage walking away unless the storyboard asks."
     )

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 def test_ensure_shot_start_end_chains_same_setting() -> None:
     from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
-        ensure_shot_start_end_states,
+        ensure_clip_start_end_states,
         validate_storyboard_state_chain,
     )
 
@@ -29,7 +29,7 @@ def test_ensure_shot_start_end_chains_same_setting() -> None:
             "camera": "tracking",
         },
     ]
-    out = ensure_shot_start_end_states(shots)
+    out = ensure_clip_start_end_states(shots)
     assert out[0]["start_state"]
     assert out[0]["end_state"]
     assert out[1]["start_state"]
@@ -58,12 +58,12 @@ def test_stamp_clears_continuity_clip_node() -> None:
 
 def test_story_curve_keeps_one_climax_and_carries_the_end() -> None:
     from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
-        ensure_shot_start_end_states,
+        ensure_clip_start_end_states,
         start_end_story_lines,
         stamp_shot_states_on_clip_cfg,
     )
 
-    shots = ensure_shot_start_end_states(
+    shots = ensure_clip_start_end_states(
         [
             {
                 "clip_index": 1,

@@ -10,8 +10,8 @@ from jiuwenswarm.server.runtime.designer.continuity import infer_continuity_lock
 
 
 _START_VERBS = (
-    r"(?:start(?:s|ed|ing)?|begin(?:s|ning)?|begins?|kick(?:s|ed)?['clips']+off|"
-    r"set(?:s|ting)?['clips']+off|take(?:s|ing)?['clips']+off|launch(?:es|ed|ing)?)"
+    r"(?:start(?:s|ed|ing)?|begin(?:s|ning)?|begins?|kick(?:s|ed)?\s+off|"
+    r"set(?:s|ting)?\s+off|take(?:s|ing)?\s+off|launch(?:es|ed|ing)?)"
 )
 _MOTION_NOUNS = (
     r"(?:run(?:s|ning)?|jog(?:s|ging)?|sprint(?:s|ing)?|walk(?:s|ing)?|"
@@ -24,10 +24,10 @@ _MOTION_NOUNS = (
 
 
 def _clean_action_snippet(text: str, *, limit: int = 160) -> str:
-    raw = re.sub(r"['clips']+", " ", (text or "").strip())
+    raw = re.sub(r"\s+", " ", (text or "").strip())
     # Drop lock banners / prior paste markers if a full prompt was passed by mistake.
     for marker in (
-        "PRIOR KEYFRAME PROMPT",
+        "PRIOR CLIP PROMPT",
         "PRIOR SHOT CONSISTENCY",
         "MASTER SCENE PROMPT",
         "LANGUAGE LOCK",
@@ -42,9 +42,9 @@ def _clean_action_snippet(text: str, *, limit: int = 160) -> str:
             raw = raw.split(marker, 1)[0].strip()
     # Prefer "Action:" / "Primary action" fragments when present.
     for pat in (
-        r"Primary action for shot \d+:['clips']*(.+?)(?:\.|$)",
-        r"Action:['clips']*(.+?)(?:\.|$)",
-        r"character_action[:['clips']]+(.+?)(?:\.|$)",
+        r"Primary action for shot \d+:\s*(.+?)(?:\.|$)",
+        r"Action:\s*(.+?)(?:\.|$)",
+        r"character_action[:\s]+(.+?)(?:\.|$)",
     ):
         m = re.search(pat, raw, flags=re.IGNORECASE)
         if m:
@@ -76,8 +76,8 @@ def extract_already_done_beats(
     prefix = f"shot {clip_index}: " if clip_index else ""
 
     # Starting a motion must not be restaged as a fresh start.
-    if re.search(rf"{_START_VERBS}['clips']+(?:to['clips']+)?{_MOTION_NOUNS}", lower) or re.search(
-        rf"{_MOTION_NOUNS}['clips']+.*\b(?:start|begin)", lower
+    if re.search(rf"{_START_VERBS}\s+(?:to\s+)?{_MOTION_NOUNS}", lower) or re.search(
+        rf"{_MOTION_NOUNS}\s+.*\b(?:start|begin)", lower
     ):
         bullets.append(
             f"{prefix}onset already happened — do not show starting/beginning this motion again "
@@ -92,7 +92,7 @@ def extract_already_done_beats(
         bullets.append(f"{prefix}exit already happened — keep them gone / do not leave again")
     if re.search(r"\b(?:sat|sit(?:s|ting)?|seated)\b", lower):
         bullets.append(f"{prefix}seating already established — do not reseat from standing unless storyboard asks")
-    if re.search(r"\b(?:stood|stand(?:s|ing)?['clips']+up|gets?['clips']+up|rising)\b", lower):
+    if re.search(r"\b(?:stood|stand(?:s|ing)?\s+up|gets?\s+up|rising)\b", lower):
         bullets.append(f"{prefix}stand-up already happened — do not stand up again")
 
     # Dedupe while preserving order.
@@ -220,10 +220,10 @@ def strip_prior_prompt_pastes(prompt: str) -> str:
     if not text:
         return ""
     patterns = (
-        r"\n*PRIOR KEYFRAME PROMPT \(do not redo the same beat; advance time\):\n[['clips']\S]*?(?=\n[A-Z][A-Z _/]{2,}:|\Z)",
-        r"\n*PRIOR SHOT CONSISTENCY \(do NOT redo these beats; continue the film forward\):\n[['clips']\S]*?(?=\n[A-Z][A-Z _/]{2,}:|\Z)",
-        r"\n*MASTER SCENE PROMPT:\n[['clips']\S]*?(?=\n[A-Z][A-Z _/]{2,}:|\Z)",
-        r"\n*CHARACTER CONSISTENCY \(Director\):[['clips']\S]*?(?=\n[A-Z][A-Z _/]{2,}:|\Z)",
+        r"\n*PRIOR CLIP PROMPT \(do not redo the same beat; advance time\):\n[\s\S]*?(?=\n[A-Z][A-Z _/]{2,}:|\Z)",
+        r"\n*PRIOR SHOT CONSISTENCY \(do NOT redo these beats; continue the film forward\):\n[\s\S]*?(?=\n[A-Z][A-Z _/]{2,}:|\Z)",
+        r"\n*MASTER SCENE PROMPT:\n[\s\S]*?(?=\n[A-Z][A-Z _/]{2,}:|\Z)",
+        r"\n*CHARACTER CONSISTENCY \(Director\):[\s\S]*?(?=\n[A-Z][A-Z _/]{2,}:|\Z)",
     )
     out = text
     for pat in patterns:

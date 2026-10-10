@@ -57,7 +57,7 @@ The server has already removed whole blocks headed solely by a deleted shot. The
 are listed in removed_shot_blocks for context; do not return them. Review every remaining
 block, including mixed tables and surviving shots' continuity claims.
 Insert new paragraphs/shot sections INSIDE an adjacent existing key's text, separated
-by blank lines. For example, an old shot section's value can become "old section['clips']n['clips']nnew section".
+by blank lines. For example, an old clip section's value can become "old section\\n\\nnew section".
 Insert new table rows into that table's existing value. Return complete tables with ALL
 retained rows. Compare ALL sentences/cells in every block with the request and facts.
 
@@ -127,7 +127,7 @@ def document_blocks(text: str) -> list[DocumentBlock]:
     """Keep blank-line separators untouched; no Markdown parsing or format migration."""
     blocks = []
     start = 0
-    for index, part in enumerate(re.split(r"(\n[ ['clips']]*\n)", text)):
+    for index, part in enumerate(re.split(r"(\n[ \s]*\n)", text)):
         if index % 2 == 0 and part:
             key = hashlib.sha256(f"{start}:{part}".encode()).hexdigest()[:12]
             blocks.append(DocumentBlock(key, start, part))

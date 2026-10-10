@@ -75,7 +75,7 @@ VIDEO_STYLES: dict[str, dict[str, Any]] = {
         "min_shots": 0,
         "summary": (
             "Standard storyboarded cinematic short: beat-driven shots, "
-            "continuity locks, R2V shots from on-screen solos + scene specs."
+            "continuity locks, R2V clips from on-screen character specs + scene specs."
         ),
         "cues": (),
     },
@@ -219,10 +219,10 @@ def enforce_style_clip_floor(
         return data
     try:
         from jiuwenswarm.server.runtime.designer.pipeline.director_contract import (
-            _explicit_shot_count_from_prompt,
+            _explicit_clip_count_from_prompt,
         )
 
-        if int(_explicit_shot_count_from_prompt(text) or 0) >= 1:
+        if int(_explicit_clip_count_from_prompt(text) or 0) >= 1:
             return data
     except Exception:  # noqa: BLE001
         pass
@@ -273,7 +273,7 @@ Rules:
 3. Every cut needs a visual carrier (smoke, rain, cloth, feather, light shaft, muzzle flash,
    wipe-by body, rail line, reflection, fog) — never an unmotivated hard cut list.
 4. Rhythm: early speed/impact/travel → mid close-up hits → late decelerate/settle → final 1s freeze.
-5. Last keyframe + last clip beat MUST match the reference composition (pose, framing, light).
+5. Last scene spec + last clip beat MUST match the reference composition (pose, framing, light).
 6. Prompt structure for storyboard/clips: overall intent → action chain → timed beats →
    per-beat (frame content, camera move, cast action, transition motive, emotion) →
    negative prompts → one execution principle.

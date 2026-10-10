@@ -70,7 +70,7 @@ def test_apply_shot_scope_preserves_richer_authored_plan_for_30_seconds() -> Non
         {"clip_index": 4, "action": "The room opens into a joyful celebration and brand payoff."},
     ]
     out = apply_shot_scope(
-        {"shots": shots},
+        {"clips": shots},
         "Create a 30 second video for a Christmas product celebration.",
     )
 
@@ -87,7 +87,7 @@ def test_apply_shot_scope_skips_c_when_under_wan_max() -> None:
         {"clip_index": 1, "action": "Dad sits by the window", "shot_relation": "hard_cut"},
         {"clip_index": 2, "action": "Child walks to the door", "shot_relation": "angle_variant"},
     ]
-    out = apply_shot_scope({"shots": shots}, "10-second scene. Dad sits. Child walks to the door.")
+    out = apply_shot_scope({"clips": shots}, "10-second scene. Dad sits. Child walks to the door.")
     assert out.get("duration_slicing") is False
     assert len(out["clips"]) == 2
     assert out["clips"][1]["shot_relation"] == "continuation"

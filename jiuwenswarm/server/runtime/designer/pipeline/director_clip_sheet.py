@@ -2,7 +2,7 @@
 """Director shot-sheet helpers — second-by-second craft, domain-agnostic.
 
 DeepSeek-Flash has no 3D spatial priors; sheets stay in natural language and
-keyframe prompts must put REPOSE / camera / facing BEFORE identity locks.
+clip prompts must put REPOSE / camera / facing BEFORE identity locks.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import re
 from typing import Any
 
 _SPEECH_QUOTE_RE = re.compile(
-    r"""["“]([^"”]{3,160})["”]|'([^']{3,120})'|says?['clips']*[:,]?['clips']*["“]?([^"”.\n]{3,120})""",
+    r"""["“]([^"”]{3,160})["”]|'([^']{3,120})'|says?\s*[:,]?\s*["“]?([^"”.\n]{3,120})""",
     re.I,
 )
 
@@ -34,12 +34,12 @@ def _timeline_seconds(timeline: str) -> tuple[float, float]:
     """Parse '0-5s' / '0:00-0:07' → (start, end) seconds; default 0–5."""
     t = (timeline or "").strip().lower()
     m = re.search(
-        r"(\d+(?:\.\d+)?)['clips']*(?:s|sec)?['clips']*[-–—to]+['clips']*(\d+(?:\.\d+)?)['clips']*(?:s|sec)?",
+        r"(\d+(?:\.\d+)?)\s*(?:s|sec)?\s*[-–—to]+\s*(\d+(?:\.\d+)?)\s*(?:s|sec)?",
         t,
     )
     if m:
         return float(m.group(1)), float(m.group(2))
-    m2 = re.search(r"(\d+):(\d+)['clips']*[-–—]['clips']*(\d+):(\d+)", t)
+    m2 = re.search(r"(\d+):(\d+)\s*[-–—]\s*(\d+):(\d+)", t)
     if m2:
         a = int(m2.group(1)) * 60 + int(m2.group(2))
         b = int(m2.group(3)) * 60 + int(m2.group(4))
@@ -227,7 +227,7 @@ def format_clip_framing_clause(shot: dict[str, Any] | None, analysis: dict[str, 
         parts.append(
             f"OFF CAMERA this shot (exist in set, not framed): {', '.join(off_n)} — "
             "do not invent them into frame; do not erase them from continuity. "
-            "Name them only in text if useful; R2V does not attach their solos as refs."
+            "Name them only in text if useful; R2V does not attach their character spec sheets as refs."
         )
     speech = str(shot.get("speech_line") or "").strip()
     if speech:

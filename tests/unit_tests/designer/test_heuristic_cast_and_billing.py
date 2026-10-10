@@ -1,4 +1,4 @@
-"""Cast aliases, solo sheets, time-window clips, and chat 402 demotion."""
+"""Cast aliases, character specs, time-window clips, and chat 402 demotion."""
 
 from __future__ import annotations
 

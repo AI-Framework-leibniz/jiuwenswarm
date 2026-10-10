@@ -61,7 +61,7 @@ _TS = (
 
 def _extract_ts_const(path: Path, name: str) -> str:
     text = path.read_text(encoding="utf-8")
-    pattern = rf"export const {re.escape(name)}['clips']*=['clips']*['\"]([^'\"]+)['\"]"
+    pattern = rf"export const {re.escape(name)}\s*=\s*['\"]([^'\"]+)['\"]"
     match = re.search(pattern, text)
     assert match is not None, f"{name} not found in {path}"
     return match.group(1)
