@@ -2,6 +2,7 @@
   position: relative;
   display: flex;
   flex: 1 1 0%;
+  gap: 0;
   min-height: 0;
   flex-direction: row;
   align-items: stretch;
@@ -502,7 +503,7 @@
 
 .designer-page__canvas .react-flow__minimap.designer-canvas__minimap {
   margin-right: 12px;
-  margin-bottom: 96px;
+  margin-bottom: 60px;
   border: 1px solid var(--color-border-default);
 }
 
@@ -518,7 +519,7 @@
 }
 
 .designer-page__canvas .react-flow__controls.designer-canvas__controls--below-minimap {
-  margin-bottom: 56px;
+  margin-bottom: 20px;
 }
 
 .designer-page__canvas .react-flow__controls.designer-canvas__controls .react-flow__controls-button {
@@ -1241,10 +1242,8 @@
   justify-content: center;
   width: 16px;
   height: 16px;
-  border: 1px solid var(--color-border-default);
   border-radius: 4px;
   color: var(--color-text-secondary);
-  background: var(--color-surface-card);
 }
 
 .designer-node__label {
