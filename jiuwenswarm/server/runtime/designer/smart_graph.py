@@ -987,7 +987,7 @@ def build_smart_video_graph(
                     "director_task": (
                         f"Solo character specs for {display}. "
                         "Write a positive Qwen-ready studio portrait from the locks "
-                        "(face, wardrobe, style, aspect) — no LOCK banners or negatives. "
+                        "(face, wardrobe, style) — no LOCK banners or negatives. "
                         "Then call_image_model with that prompt only."
                     ),
                 },
@@ -1223,7 +1223,7 @@ def build_smart_video_graph(
                     "director_task": (
                         f"Empty environment plate for setting {sid}. "
                         "Write a positive Qwen-ready plate prompt from the locks "
-                        "(place, lighting, style, aspect) — no LOCK banners or negatives. "
+                        "(place, lighting, style) — no LOCK banners or negatives. "
                         "Then call_image_model with that prompt only."
                     ),
                 },

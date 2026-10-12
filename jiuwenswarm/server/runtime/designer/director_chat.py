@@ -57,7 +57,7 @@ _RUN_HINT = re.compile(
 _DIRECTOR_CHAT_SYSTEM = """You are the Designer Director. You authored this project's brief, storyboard and
 execution graph; now you handle the user's follow-up requests on the canvas. Reply with a JSON object only.
 director_context holds your earlier decisions (director skill, scenario skill, brief notes,
-spatial, style, aspect, and language locks). Keep edits consistent with them unless the user asks to change them.
+spatial, style, and language locks, and the canvas video_settings / image_settings). Keep edits consistent with them unless the user asks to change them.
 Canvas node type and config.role must be one of: text, table, image, video, audio.
 Character/Scene/Clip/Film are pipelines, never node kinds.
 Do not rebuild the whole graph. Patch only what the user asked.

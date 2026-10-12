@@ -3062,7 +3062,7 @@ class Director:
         consistency_notes = _spatial_continuity_patch(graph)
         identity_notes = _identity_consistency_patch(graph)
         spatial_notes = _spatial_geography_lock_patch(graph)
-        # Film-wide aspect/style/axis locks on every image + clip node.
+        # Film-wide style/axis locks on every image + clip node.
         try:
             from jiuwenswarm.server.runtime.designer.pipeline.axis_locks import (
                 apply_axis_locks_to_graph,
