@@ -678,6 +678,10 @@ export const useDesignerStore = create<DesignerStore>((set, get) => ({
       if (!live || live.graph_id !== graph.graph_id) return;
       set({ domainGraph: { ...live, metadata: withSettings(live.metadata ?? {}, video, image) } });
     };
+    // A full-graph save already in flight carries the old settings: drop its response, and once the
+    // patch lands save again so the server does not keep that older snapshot either.
+    const saveInFlight = get().saveStatus === 'saving';
+    saveSeq += 1;
     // Applied locally first so a debounced full-graph save cannot send the old settings back.
     setLiveSettings(
       patch.video_settings
@@ -690,8 +694,10 @@ export const useDesignerStore = create<DesignerStore>((set, get) => ({
     try {
       const { graph: saved } = await designerGraphClient.patch(graph.graph_id, patch);
       setLiveSettings(saved.metadata?.video_settings, saved.metadata?.image_settings);
+      if (saveInFlight) void get().flushSave();
     } catch (error) {
       setLiveSettings(previous.video_settings, previous.image_settings);
+      get().scheduleSave();
       throw error;
     }
   },
