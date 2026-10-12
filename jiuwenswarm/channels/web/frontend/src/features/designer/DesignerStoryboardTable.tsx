@@ -7,7 +7,7 @@ import {
   serializeMarkdownTable,
   type MarkdownTablePreview,
 } from './designerNodePreview';
-import { storyboardColumnField } from './storyboardShots';
+import { storyboardColumnField } from './storyboardClips';
 
 /** Display label for a header; the file keeps the canonical English header. */
 function useColumnLabel(): (header: string) => string {

@@ -245,7 +245,7 @@
     },
     "storyboard": {
       "columns": {
-        "shot_no": "镜号",
+        "clip_no": "镜号",
         "timeline": "时间",
         "camera": "景别/机位",
         "move": "运镜",

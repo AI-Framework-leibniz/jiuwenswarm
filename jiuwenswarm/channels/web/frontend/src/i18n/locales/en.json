@@ -245,7 +245,7 @@
     },
     "storyboard": {
       "columns": {
-        "shot_no": "Shot",
+        "clip_no": "Shot",
         "timeline": "Timeline",
         "camera": "Camera",
         "move": "Move",

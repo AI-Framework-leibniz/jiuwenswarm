@@ -126,7 +126,7 @@ def _pipeline_graph(*, project_id: str, prompt: str) -> DesignerExecutionGraph:
     for node in graph["nodes"]:
         if node_pipeline(node) == NODE_ROLE_STORYBOARD:
             node["config"]["planned_shots"] = [
-                {"shot_index": 1, "timeline": "0.0-5.0s", "camera": "wide", "camera_move": "static", "action": "enter"},
+                {"clip_index": 1, "timeline": "0.0-5.0s", "camera": "wide", "camera_move": "static", "action": "enter"},
             ]
     return graph
 
