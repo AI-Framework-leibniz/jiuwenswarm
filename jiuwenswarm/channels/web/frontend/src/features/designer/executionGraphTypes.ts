@@ -171,6 +171,8 @@ type DesignerRoleConfig<R extends DesignerNodeRole | string> = {
   skip_llm?: boolean;
   /** The upload replaced the generated output. */
   user_replaced_output?: boolean;
+  /** Manual video length in whole seconds; overrides the storyboard timeline. */
+  duration_sec?: number;
 };
 
 export type DesignerNodeConfig =
@@ -207,6 +209,7 @@ export type DesignerNodeConfig =
       force_handler?: boolean;
       skip_llm?: boolean;
       user_replaced_output?: boolean;
+      duration_sec?: number;
     };
 
 export const DESIGNER_EDGE_KIND_DATA = 'data' as const;
@@ -281,7 +284,7 @@ export type DesignerGraphEdge = {
   label?: string;
 };
 
-/** Canvas-wide; every video node generates with these. Clip length comes from the storyboard. */
+/** Canvas-wide; every video node generates with these. Length is per node (`duration_sec` / storyboard). */
 export type DesignerVideoSettings = {
   aspect_ratio: string;
   resolution: string;
@@ -290,6 +293,7 @@ export type DesignerVideoSettings = {
 /** Canvas-wide; every character / scene still generates with this. */
 export type DesignerImageSettings = {
   aspect_ratio: string;
+  resolution: string;
 };
 
 export type DesignerMediaSettingsPatch = {
@@ -312,15 +316,18 @@ export type DesignerMediaCapabilities = {
     default_sec: number;
   };
   image: {
+    configured_model: string;
     ratios: string[];
+    resolutions: string[];
     default_ratio: string;
+    default_resolution: string;
   };
   settings?: {
     video: DesignerVideoSettings;
     image: DesignerImageSettings;
   };
-  /** Storyboard clip node id → seconds it will be generated at. Present with a graph. */
-  clip_durations?: Record<string, number>;
+  /** Generated video node id → seconds it will be generated at. Present with a graph. */
+  video_durations?: Record<string, number>;
 };
 
 export type DesignerGraphPatch = DesignerMediaSettingsPatch & {

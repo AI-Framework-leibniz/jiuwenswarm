@@ -153,7 +153,6 @@
       "videoTitle": "Video settings",
       "imageTitle": "Image settings",
       "durationValue": "{{seconds}}s",
-      "durationHint": "Clip length follows this shot's storyboard timeline ({{min}}–{{max}}s for this model). Change it in the storyboard or chat.",
       "loading": "Loading generation settings…",
       "loadError": "Could not load generation settings: {{message}}",
       "saveError": "Settings not saved: {{message}}"

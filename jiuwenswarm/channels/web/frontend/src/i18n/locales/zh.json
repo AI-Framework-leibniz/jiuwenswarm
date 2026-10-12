@@ -153,7 +153,6 @@
       "videoTitle": "视频参数",
       "imageTitle": "图片参数",
       "durationValue": "{{seconds}} 秒",
-      "durationHint": "时长取自该分镜的时间轴（当前模型支持 {{min}}–{{max}} 秒），请在分镜或对话中修改。",
       "loading": "正在读取生成参数…",
       "loadError": "无法读取生成参数：{{message}}",
       "saveError": "参数未保存：{{message}}"

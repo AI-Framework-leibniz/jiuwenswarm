@@ -14,6 +14,7 @@ import { useDesignerUiStore } from '../../designerUiStore';
 import {
   isMediaNodeType,
   isTextLikeNodeType,
+  isUploadedMediaNode,
   readMediaConfig,
   writeMediaGeneratePatch,
   writeMediaUploadPatch,
@@ -73,7 +74,11 @@ export function DesignerNodeToolbar({ nodeId, nodeType }: DesignerNodeToolbarPro
   const { t } = useTranslation();
   const isTextLike = isTextLikeNodeType(nodeType);
   const isMedia = isMediaNodeType(nodeType);
-  const canGenerate = nodeType !== 'audio';
+  const uploadedVideo = useDesignerStore((state) => {
+    const node = state.domainGraph?.nodes.find((item) => item.id === nodeId);
+    return nodeType === 'video' && Boolean(node && isUploadedMediaNode(node));
+  });
+  const canGenerate = nodeType !== 'audio' && !uploadedVideo;
   const updateNodeConfig = useDesignerStore((state) => state.updateNodeConfig);
   const setNodeOutputRef = useDesignerStore((state) => state.setNodeOutputRef);
   const applyUploadedOutput = useDesignerRunStore((state) => state.applyUploadedOutput);

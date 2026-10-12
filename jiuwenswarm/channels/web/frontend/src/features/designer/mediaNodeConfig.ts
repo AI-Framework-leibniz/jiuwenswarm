@@ -51,6 +51,18 @@ export function isTextLikeNodeType(nodeType: string): boolean {
   return nodeType === 'text' || nodeType === 'table';
 }
 
+/** Mirrors the server's ``is_uploaded_media_node``: the node's output is a user upload, never generated. */
+export function isUploadedMediaNode(node: {
+  config?: Record<string, unknown> | object;
+  output_ref?: { uri?: string } | null;
+}): boolean {
+  const config = (node.config ?? {}) as Record<string, unknown>;
+  if (String(config.user_reference_id ?? '').trim()) return true;
+  if (config.interaction_mode !== 'upload') return false;
+  const upload = (config.upload ?? {}) as { uri?: unknown };
+  return Boolean(String(upload.uri ?? '').trim() || String(node.output_ref?.uri ?? '').trim());
+}
+
 function normalizeInteractionMode(
   raw: string | undefined,
   nodeType?: string,
