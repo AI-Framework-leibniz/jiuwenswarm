@@ -195,7 +195,8 @@
     "nodeActions": {
       "add": "Add successor node",
       "addPredecessor": "Add predecessor node",
-      "addTitle": "Connect to this node",
+      "successorMenuTitle": "Generate from this node",
+      "predecessorMenuTitle": "Add context",
       "delete": "Delete node",
       "deleteHint": "Delete this node and its connections. You can also press Delete / Backspace.",
       "resize": "Resize",

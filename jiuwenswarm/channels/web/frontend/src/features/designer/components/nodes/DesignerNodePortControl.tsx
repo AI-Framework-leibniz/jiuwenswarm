@@ -129,14 +129,19 @@ export function DesignerNodePortControl({ nodeId, side }: DesignerNodePortContro
       </Handle>
       {menuOpen ? (
         <div
-          className={`designer-node__port-menu designer-node__port-menu--${side} nodrag nopan nowheel`}
+          className={`designer-node__port-menu designer-node__port-menu--${side} chat-mode-select__menu chat-input-attach-menu nodrag nopan nowheel`}
+          role="menu"
           data-testid={menuTestId}
           onClick={(event) => event.stopPropagation()}
           onMouseDown={(event) => event.stopPropagation()}
           onPointerDown={(event) => event.stopPropagation()}
         >
           <DesignerAddNodeMenu
-            title={t('designer.nodeActions.addTitle')}
+            title={t(
+              isSuccessor
+                ? 'designer.nodeActions.successorMenuTitle'
+                : 'designer.nodeActions.predecessorMenuTitle',
+            )}
             testIdPrefix={testIdPrefix}
             onPick={onPick}
             onImportComfyui={onImportComfyui}

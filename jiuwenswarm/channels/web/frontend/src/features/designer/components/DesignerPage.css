@@ -1416,15 +1416,10 @@
   position: absolute;
   top: 50%;
   z-index: 6;
-  width: min(280px, 70vw);
+  min-width: 168px;
   max-height: min(360px, 70vh);
-  overflow: auto;
-  padding: 12px;
-  border: 1px solid var(--color-border-default);
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--color-surface-card) 96%, transparent);
-  backdrop-filter: blur(10px);
-  box-shadow: var(--effect-shadow-lg);
+  overflow-x: hidden;
+  overflow-y: auto;
   transform: translateY(-50%);
 }
 
@@ -1435,6 +1430,15 @@
 .designer-node__port-menu--predecessor {
   right: calc(100% + 28px);
   left: auto;
+}
+
+.designer-node__port-menu-title {
+  margin: 0 0 4px;
+  padding: 4px 8px 6px;
+  color: var(--color-text-muted, #6b7280);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
 }
 
 .designer-node__body {

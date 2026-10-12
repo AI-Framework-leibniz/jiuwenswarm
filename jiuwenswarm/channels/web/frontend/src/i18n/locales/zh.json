@@ -195,7 +195,8 @@
     "nodeActions": {
       "add": "添加后续节点",
       "addPredecessor": "添加前序节点",
-      "addTitle": "连接到此节点",
+      "successorMenuTitle": "引用该节点生成",
+      "predecessorMenuTitle": "添加上下文",
       "delete": "删除节点",
       "deleteHint": "删除此节点及其连线。也可选中后按 Delete / Backspace。",
       "resize": "调整大小",
