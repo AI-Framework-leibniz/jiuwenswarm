@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from jiuwenswarm.common.schema.designer_graph import NODE_TYPE_TABLE
 from jiuwenswarm.server.runtime.designer.graph_store import DesignerGraphStore
+from jiuwenswarm.server.runtime.designer.handlers.common import file_output_ref
 from jiuwenswarm.server.runtime.designer.media_settings import (
     MediaSettingsError,
     image_settings,
@@ -176,17 +178,22 @@ def test_capabilities_endpoint_reads_the_graph(designer_store: DesignerGraphStor
     assert payload is None and code == "NOT_FOUND"
 
 
-def test_clip_durations_follow_the_storyboard_text_not_node_config() -> None:
+def test_clip_durations_follow_the_storyboard_text_not_node_config(tmp_path: Path) -> None:
     graph = make_pipeline_graph(project_id="proj_media", prompt="rain")
     nodes = {node["id"]: node for node in graph["nodes"]}
-    nodes["n_storyboard"]["config"]["prewritten"] = (
-        "| Shot | Timeline | Camera | Move | Character action | Continuity | Comment |\n"
+    storyboard = tmp_path / "storyboard.md"
+    storyboard.write_text(
+        "| Shot | Timeline | Camera | Move | On screen | Character action | Speech |\n"
         "| --- | --- | --- | --- | --- | --- | --- |\n"
-        "| 1 | 0-8s | wide | static | She waits | hold | Rain on the window |\n"
+        "| 1 | 0-8s | wide | static | She | She waits | |\n",
+        encoding="utf-8",
+    )
+    nodes["n_storyboard"]["output_ref"] = file_output_ref(
+        storyboard, kind=NODE_TYPE_TABLE, mime_type="text/markdown"
     )
     nodes["n_clip_1"]["config"]["timeline"] = "0-3s"
 
     assert media_capabilities(graph)["clip_durations"] == {"n_clip_1": 8}
 
-    del nodes["n_storyboard"]["config"]["prewritten"]
+    del nodes["n_storyboard"]["output_ref"]
     assert media_capabilities(graph)["clip_durations"] == {"n_clip_1": 5}
