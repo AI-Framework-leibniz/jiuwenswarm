@@ -1,3 +1,5 @@
+import { webRequest } from '../../services/webClient';
+
 /** Turn a Designer output_ref.uri into a browser-playable /file-api URL. */
 
 export function localPathToFileUri(path: string): string {
@@ -60,11 +62,66 @@ export async function saveDesignerTextFile(uri: string, content: string): Promis
   }
 }
 
-export async function uploadDesignerAsset(file: File): Promise<{
+function mediaTypeForUpload(file: File): 'image' | 'video' | 'audio' {
+  const type = (file.type || '').toLowerCase();
+  if (type.startsWith('video/')) return 'video';
+  if (type.startsWith('audio/')) return 'audio';
+  return 'image';
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const payload = result.includes(',') ? result.split(',')[1] : result;
+      if (!payload) reject(new Error('upload_failed'));
+      else resolve(payload);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('upload_failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+export async function uploadDesignerAsset(file: File, sessionId?: string): Promise<{
   path: string;
   filename: string;
   mime_type?: string;
 }> {
+  if (sessionId) {
+    try {
+      const base64Data = await readFileAsBase64(file);
+      const persisted = await webRequest<{
+        media_items?: Array<{ path?: string; filename?: string; mime_type?: string }>;
+      }>(
+        'media.persist',
+        {
+          session_id: sessionId,
+          content: '',
+          include_av: true,
+          media_items: [{
+            type: mediaTypeForUpload(file),
+            filename: file.name,
+            mime_type: file.type,
+            mimeType: file.type,
+            base64Data,
+            size_bytes: file.size,
+          }],
+        },
+        { timeoutMs: 60_000 },
+      );
+      const uploaded = persisted.media_items?.find((item) => item.path);
+      if (uploaded?.path) {
+        return {
+          path: uploaded.path,
+          filename: uploaded.filename || file.name,
+          mime_type: uploaded.mime_type || file.type,
+        };
+      }
+    } catch {
+      // The running gateway may still be image-only. Fall through to the dev upload route.
+    }
+  }
   const form = new FormData();
   form.append('file', file);
   const response = await fetch('/file-api/upload', {

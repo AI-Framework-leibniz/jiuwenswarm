@@ -1,7 +1,7 @@
 import { Loader2, SendHorizontal, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { chatDesignerGraph } from '../designerEntry';
+import { chatDesignerGraph, composeDesignerSession } from '../designerEntry';
 import { isDesignerPreviewGraph } from '../designerBootstrapGraph';
 import { useDesignerStore } from '../designerStore';
 import { designerActivityText } from '../designerActivity';
@@ -12,6 +12,8 @@ import {
   designerReferenceKindFromMime,
   designerReferencePreviewUrl,
   filesToBootstrapReferences,
+  mediaItemsToBootstrapReferences,
+  persistDesignSessionMedia,
   type DesignerReferenceKind,
   type DesignerStoredReference,
 } from '../designerReferences';
@@ -177,7 +179,7 @@ export function DesignerChatPanel() {
     setSending(true);
     const files = attachments.map((item) => item.file);
     void filesToBootstrapReferences(files)
-      .then((converted) => {
+      .then(async (converted) => {
         if (converted.error) {
           const map: Record<string, string> = {
             image_limit: t('designer.chat.limitImages'),
@@ -195,6 +197,35 @@ export function DesignerChatPanel() {
         });
         setAttachments([]);
         const existingGraph = domainGraph && !isDesignerPreviewGraph(domainGraph) ? domainGraph : null;
+        const sessionId = String(existingGraph?.metadata?.session_id || '');
+        const projectId = String(existingGraph?.project_id || '');
+        let references = converted.refs;
+        if (sessionId && references.length > 0) {
+          const persisted = await persistDesignSessionMedia(
+            sessionId,
+            references.map((item) => ({
+              type: item.kind,
+              filename: item.filename,
+              mimeType: item.mime_type,
+              mime_type: item.mime_type,
+              path: item.path,
+              base64Data: item.base64_data,
+              size_bytes: item.size_bytes,
+            })),
+          );
+          const stored = mediaItemsToBootstrapReferences(persisted);
+          if (!stored.error) references = stored.refs;
+        }
+        if (existingGraph?.graph_id && existingGraph.nodes.length === 0 && sessionId && projectId) {
+          return composeDesignerSession({
+            projectId,
+            sessionId,
+            prompt: content,
+            references,
+            thinkingText: t('designer.chat.thinking'),
+            errorText: t('designer.chat.bootstrapError'),
+          });
+        }
         if (existingGraph?.graph_id) {
           return chatDesignerGraph({
             graphId: existingGraph.graph_id,

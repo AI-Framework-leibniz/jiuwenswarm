@@ -17,11 +17,18 @@ export type DesignerLibraryAsset = {
   created_at: number;
   /** Set when the asset is tied to a graph node output. */
   nodeId?: string;
+  /** Project that owns this upload. Assets are shared across its sessions. */
+  projectId?: string;
+  /** Session whose canvas received the upload. */
+  sessionId?: string;
 };
 
 type DesignerAssetLibraryStore = {
   assets: DesignerLibraryAsset[];
-  addFromFile: (file: File) => DesignerLibraryAsset | null;
+  addFromFile: (
+    file: File,
+    scope?: { projectId?: string; sessionId?: string },
+  ) => DesignerLibraryAsset | null;
   removeAsset: (assetId: string) => void;
   getById: (assetId: string) => DesignerLibraryAsset | undefined;
   clear: () => void;
@@ -49,7 +56,7 @@ function newAssetId(): string {
 export const useDesignerAssetLibraryStore = create<DesignerAssetLibraryStore>((set, get) => ({
   assets: [],
 
-  addFromFile: (file) => {
+  addFromFile: (file, scope) => {
     if (!isAllowedMediaFile(file)) return null;
     const mime = file.type || 'application/octet-stream';
     const asset: DesignerLibraryAsset = {
@@ -61,6 +68,8 @@ export const useDesignerAssetLibraryStore = create<DesignerAssetLibraryStore>((s
       objectUrl: URL.createObjectURL(file),
       size: file.size,
       created_at: Date.now(),
+      ...(scope?.projectId ? { projectId: scope.projectId } : {}),
+      ...(scope?.sessionId ? { sessionId: scope.sessionId } : {}),
     };
     set({ assets: [asset, ...get().assets] });
     return asset;

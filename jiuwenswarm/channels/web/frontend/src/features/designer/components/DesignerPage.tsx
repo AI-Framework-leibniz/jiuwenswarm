@@ -1,5 +1,5 @@
 import { LayoutGrid, Loader2, Map as MapIcon, MessageSquare } from 'lucide-react';
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import PanelCollapseIcon from '../../../assets/panel-collapse.svg?react';
 import {
@@ -17,11 +17,15 @@ import { DesignerAssetsSidebar } from './DesignerAssetsSidebar';
 import { DesignerCanvas } from './DesignerCanvas';
 import { DesignerChatPanel, DesignerEmptyState } from './DesignerChatPanel';
 import { DesignerRunControl } from './DesignerRunControl';
-import { designerWorkspaceClient } from '../designerGraphClient';
+import { designerWorkspaceClient, type DesignerSessionSummary } from '../designerGraphClient';
+import { DesignerTrajectoryPanel } from './DesignerTrajectoryPanel';
+import { useWorkspaceStore } from '../../../stores/workspaceStore';
 import './DesignerPage.css';
 
 type DesignerPageProps = {
   projectId?: string;
+  sessionId?: string;
+  onOpenSession?: (projectId: string, sessionId: string, options?: { replace?: boolean }) => void;
   sidebarCollapsed?: boolean;
   onToggleSidebarCollapse?: () => void;
 };
@@ -67,6 +71,8 @@ function formatModifiedAt(
 
 export function DesignerPage({
   projectId,
+  sessionId,
+  onOpenSession,
   sidebarCollapsed = false,
   onToggleSidebarCollapse,
 }: DesignerPageProps) {
@@ -100,20 +106,34 @@ export function DesignerPage({
   const toggleMinimap = useDesignerUiStore((state) => state.toggleMinimap);
   const requestAutoLayout = useDesignerUiStore((state) => state.requestAutoLayout);
   const workspaceLoadSeqRef = useRef(0);
+  const loadedKeyRef = useRef('');
+  const onOpenSessionRef = useRef(onOpenSession);
+  onOpenSessionRef.current = onOpenSession;
+  const [sessions, setSessions] = useState<DesignerSessionSummary[]>([]);
+  const [creatingSession, setCreatingSession] = useState(false);
+  const [trajectoryOpen, setTrajectoryOpen] = useState(true);
   useEffect(() => bindDesignerRuntime(), []);
 
   useEffect(() => {
-    const loadSeq = ++workspaceLoadSeqRef.current;
     if (!effectiveProjectId || bootstrapInProgress) return;
+    const requestedKey = `${effectiveProjectId}:${sessionId || ''}`;
+    if (sessionId && loadedKeyRef.current === requestedKey) return;
+    const loadSeq = ++workspaceLoadSeqRef.current;
     useDesignerStore.getState().reset();
-    void designerWorkspaceClient.get(effectiveProjectId)
+    void designerWorkspaceClient.get(effectiveProjectId, sessionId)
       .then((workspace) => {
         if (workspaceLoadSeqRef.current !== loadSeq) return;
+        const opened = String(workspace.session?.session_id || '');
+        loadedKeyRef.current = `${effectiveProjectId}:${opened}`;
+        setSessions(workspace.sessions || []);
         useDesignerStore.getState().applyGraph(workspace.graph);
         useDesignerChatStore.getState().replaceMessages(
           workspace.graph.graph_id,
           workspace.messages,
         );
+        if (opened && opened !== sessionId) {
+          onOpenSessionRef.current?.(effectiveProjectId, opened, { replace: true });
+        }
       })
       .catch((reason) => {
         if (workspaceLoadSeqRef.current !== loadSeq) return;
@@ -128,7 +148,35 @@ export function DesignerPage({
   }, [
     bootstrapInProgress,
     effectiveProjectId,
+    sessionId,
   ]);
+
+  const openSession = useCallback((nextSessionId: string) => {
+    if (!effectiveProjectId || !nextSessionId || nextSessionId === sessionId) return;
+    onOpenSession?.(effectiveProjectId, nextSessionId);
+  }, [effectiveProjectId, onOpenSession, sessionId]);
+
+  const createSession = useCallback(() => {
+    if (!effectiveProjectId || creatingSession) return;
+    setCreatingSession(true);
+    void designerWorkspaceClient.createSession({ projectId: effectiveProjectId })
+      .then((workspace) => {
+        const opened = String(workspace.session?.session_id || '');
+        loadedKeyRef.current = `${effectiveProjectId}:${opened}`;
+        setSessions(workspace.sessions || []);
+        useDesignerStore.getState().applyGraph(workspace.graph);
+        useDesignerChatStore.getState().replaceMessages(
+          workspace.graph.graph_id,
+          workspace.messages,
+        );
+        if (opened) onOpenSessionRef.current?.(effectiveProjectId, opened);
+      })
+      .catch((reason) => {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        useDesignerStore.getState().failBootstrapEntry(message);
+      })
+      .finally(() => setCreatingSession(false));
+  }, [creatingSession, effectiveProjectId, onOpenSession]);
 
   useEffect(() => {
     const nextId = domainGraph?.graph_id ?? null;
@@ -143,6 +191,22 @@ export function DesignerPage({
       });
     }
   }, [boundGraphId, domainGraph, resetForGraph, resetUi, t]);
+
+  useEffect(() => {
+    if (!effectiveProjectId) return;
+    const workspace = useWorkspaceStore.getState();
+    void workspace.loadProjectSessions(effectiveProjectId);
+    void workspace.loadProjects();
+  }, [domainGraph?.graph_id, domainGraph?.title, effectiveProjectId]);
+
+  useEffect(() => {
+    const opened = String(sessionId || domainGraph?.metadata?.session_id || '');
+    const title = domainGraph?.title?.trim() || '';
+    if (!opened || !title || title === '设计项目') return;
+    setSessions((current) => current.map((item) => (
+      item.session_id === opened ? { ...item, title } : item
+    )));
+  }, [domainGraph, sessionId]);
 
   const materials = useMemo(
     () => collectDesignerMaterials(domainGraph, run),
@@ -217,6 +281,32 @@ export function DesignerPage({
             ) : null}
           </div>
           <div className="designer-page__toolbar-actions">
+            {sessions.length > 0 ? (
+              <div className="designer-session-switcher" data-testid="designer-session-switcher">
+                <select
+                  className="designer-session-switcher__select"
+                  aria-label={t('designer.sessions.label')}
+                  data-testid="designer-session-select"
+                  value={sessionId || sessions[0]?.session_id || ''}
+                  onChange={(event) => openSession(event.target.value)}
+                >
+                  {sessions.map((item) => (
+                    <option key={item.session_id} value={item.session_id}>
+                      {item.title || item.session_id}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="designer-session-switcher__new"
+                  data-testid="designer-session-new"
+                  disabled={creatingSession || bootstrapInProgress}
+                  onClick={createSession}
+                >
+                  {t('designer.sessions.new')}
+                </button>
+              </div>
+            ) : null}
             <span className="designer-page__zoom" data-testid="designer-page-zoom">
               {zoomPercent}%
             </span>
@@ -257,6 +347,18 @@ export function DesignerPage({
               <MessageSquare size={16} aria-hidden />
               <span>{t('designer.toolbar.openChat')}</span>
             </button>
+            {showCanvas ? (
+              <button
+                type="button"
+                className={`designer-page__toolbar-outline-btn${trajectoryOpen ? ' is-active' : ''}`}
+                aria-label={trajectoryOpen ? t('designer.trajectory.hide') : t('designer.trajectory.show')}
+                aria-pressed={trajectoryOpen}
+                data-testid="designer-trajectory-toggle"
+                onClick={() => setTrajectoryOpen((open) => !open)}
+              >
+                {trajectoryOpen ? t('designer.trajectory.hide') : t('designer.trajectory.show')}
+              </button>
+            ) : null}
             <DesignerRunControl
               graph={showCanvas ? domainGraph : null}
               disabled={!canvasInteractive}
@@ -279,8 +381,17 @@ export function DesignerPage({
           </p>
         ) : null}
 
-        <div className="designer-page__canvas-area">
+        <div className={`designer-page__canvas-area${trajectoryOpen && showCanvas ? ' is-trajectory-open' : ''}`}>
           {showCanvas && domainGraph ? <DesignerCanvas graph={domainGraph} /> : null}
+          {showCanvas && trajectoryOpen && effectiveProjectId && (sessionId || domainGraph?.metadata?.session_id) ? (
+            <DesignerTrajectoryPanel
+              projectId={effectiveProjectId}
+              sessionId={String(sessionId || domainGraph?.metadata?.session_id || '')}
+              graphId={domainGraph?.graph_id}
+              running={run?.status === 'running'}
+              onClose={() => setTrajectoryOpen(false)}
+            />
+          ) : null}
 
           {showLoading ? (
             <div className="designer-page__state" data-testid="designer-loading-state">

@@ -1,4 +1,5 @@
 import type { MediaItem } from '../../types/message';
+import { webRequest } from '../../services/webClient';
 import { designerAssetPreviewUrl } from './designerAssetUrl';
 import type { DesignerExecutionGraph } from './executionGraphTypes';
 
@@ -84,6 +85,51 @@ export function extractDesignerGraphReferences(
     });
   }
   return out;
+}
+
+type PersistedMediaResponse = {
+  media_items?: MediaItem[];
+};
+
+function mediaNamesMatch(original: MediaItem, stored: MediaItem): boolean {
+  if (original.type && stored.type && original.type !== stored.type) return false;
+  const left = (original.filename || '').toLowerCase();
+  const right = (stored.filename || '').toLowerCase();
+  if (!left || !right) return false;
+  if (right === left) return true;
+  const stem = left.replace(/\.[^.]+$/, '');
+  return right.startsWith(`${stem}.`) || right.startsWith(`${stem}-`);
+}
+
+/** Write design attachments into the work session uploads directory. */
+export async function persistDesignSessionMedia(
+  sessionId: string,
+  items: MediaItem[] | null | undefined,
+): Promise<MediaItem[]> {
+  const source = items || [];
+  const media = source.filter((item) => item.type !== 'document');
+  const documents = source.filter((item) => item.type === 'document');
+  if (!sessionId || media.length === 0) return source;
+  try {
+    const persisted = await webRequest<PersistedMediaResponse>(
+      'media.persist',
+      {
+        session_id: sessionId,
+        content: '',
+        include_av: true,
+        media_items: media as unknown as Record<string, unknown>[],
+      },
+      { timeoutMs: 60_000 },
+    );
+    const stored = Array.isArray(persisted.media_items)
+      ? persisted.media_items.filter((item) => Boolean(item?.path))
+      : [];
+    if (stored.length === 0) return source;
+    const missing = media.filter((item) => !stored.some((saved) => mediaNamesMatch(item, saved)));
+    return [...stored, ...missing, ...documents];
+  } catch {
+    return source;
+  }
 }
 
 export function mediaItemsToBootstrapReferences(
