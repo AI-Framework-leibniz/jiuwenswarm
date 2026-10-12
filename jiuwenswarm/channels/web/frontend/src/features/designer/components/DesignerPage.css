@@ -1598,11 +1598,13 @@
   line-height: 0;
   background: var(--color-surface-card);
   opacity: 0;
+  pointer-events: none;
 }
 
 .designer-storyboard-table--editing tr:hover .designer-storyboard-table__row-delete,
 .designer-storyboard-table--editing tr:focus-within .designer-storyboard-table__row-delete {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .designer-storyboard-table__row-add {
