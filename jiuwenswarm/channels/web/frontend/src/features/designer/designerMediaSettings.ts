@@ -93,3 +93,15 @@ export function generatesTimedVideo(graph: DesignerExecutionGraph | null | undef
   sources.delete(nodeId);
   return !graph.nodes.some((item) => sources.has(item.id) && (item.type === 'video' || videoPipeline(item) !== ''));
 }
+
+const BACKEND_LABELS: Record<string, string> = {
+  minimax: 'MiniMax',
+  modelark: 'ModelArk',
+  dashscope: 'DashScope',
+  'vllm-omni': 'vLLM-Omni',
+};
+
+/** Configured model name; a provider that allows an empty model name (vLLM-Omni) shows its own name. */
+export function generationModelLabel(slot: { configured_model: string; backend: string | null }): string {
+  return slot.configured_model.trim() || (slot.backend ? (BACKEND_LABELS[slot.backend] ?? slot.backend) : '');
+}

@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from jiuwenswarm.server.runtime.designer import media_generation
 from jiuwenswarm.server.runtime.designer.media_generation import configured_model
 from jiuwenswarm.server.runtime.designer.pipeline.image_capacity import (
     DEFAULT_IMAGE_RATIO,
@@ -208,6 +209,7 @@ def media_capabilities(
     out: dict[str, Any] = {
         "video": {
             "configured_model": configured_model("video"),
+            "backend": media_generation.slot_settings("video").backend,
             "model_id": cap.model_id,
             "provider": cap.provider,
             "ratios": list(cap.ratios),
@@ -220,6 +222,7 @@ def media_capabilities(
         },
         "image": {
             "configured_model": configured_model("image"),
+            "backend": media_generation.slot_settings("image").backend,
             "ratios": list(IMAGE_RATIOS),
             "resolutions": list(image_cap.resolutions),
             "default_ratio": DEFAULT_IMAGE_RATIO,

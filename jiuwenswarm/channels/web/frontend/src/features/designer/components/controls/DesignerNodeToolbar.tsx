@@ -15,7 +15,7 @@ import {
 import type { DesignerComfyuiConfig } from '../../executionGraphTypes';
 import { DesignerComfyuiParamsForm } from './DesignerComfyuiParamsForm';
 import { DesignerMaterialStrip } from './DesignerMaterialStrip';
-import { DesignerMediaSettingsForm } from './DesignerMediaSettingsForm';
+import { DesignerMediaSettingsMenu } from './DesignerMediaSettingsMenu';
 
 type DesignerNodeToolbarProps = {
   nodeId: string;
@@ -109,9 +109,6 @@ export function DesignerNodeToolbar({ nodeId, nodeType }: DesignerNodeToolbarPro
             {comfyui ? t('designer.comfyui.promptHint') : t('designer.toolbar.promptHint')}
           </p>
           {comfyui ? <DesignerComfyuiParamsForm nodeId={nodeId} comfyui={comfyui} /> : null}
-          {!comfyui && (nodeType === 'image' || nodeType === 'video') ? (
-            <DesignerMediaSettingsForm nodeId={nodeId} nodeType={nodeType} />
-          ) : null}
           <div className="designer-node-toolbar__composer">
             <textarea
               className="designer-node-toolbar__prompt nodrag nopan nowheel"
@@ -137,6 +134,9 @@ export function DesignerNodeToolbar({ nodeId, nodeType }: DesignerNodeToolbarPro
               onWheel={(event) => event.stopPropagation()}
             />
             <div className="designer-node-toolbar__composer-actions">
+              {!comfyui && (nodeType === 'image' || nodeType === 'video') ? (
+                <DesignerMediaSettingsMenu nodeId={nodeId} nodeType={nodeType} />
+              ) : null}
               <button
                 type="button"
                 className="designer-node-toolbar__send"

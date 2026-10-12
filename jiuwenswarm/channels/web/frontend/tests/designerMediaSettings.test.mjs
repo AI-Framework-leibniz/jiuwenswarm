@@ -6,11 +6,13 @@ import {
   effectiveVideoDuration,
   effectiveVideoSettings,
   generatesTimedVideo,
+  generationModelLabel,
 } from '../node_modules/.cache/designer-media-settings/designerMediaSettings.js';
 
 const caps = {
   video: {
     configured_model: 'MiniMax-H3',
+    backend: 'minimax',
     model_id: 'MiniMax-H3',
     provider: 'minimax',
     ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
@@ -23,6 +25,7 @@ const caps = {
   },
   image: {
     configured_model: 'seedream-4-0-250828',
+    backend: 'modelark',
     ratios: ['16:9', '4:3', '1:1', '3:4', '9:16'],
     resolutions: ['1K', '2K', '4K'],
     default_ratio: '16:9',
@@ -81,4 +84,10 @@ test('only generated video nodes that do not concat their inputs get a length', 
   };
   const timed = graph.nodes.filter((node) => generatesTimedVideo(graph, node.id)).map((node) => node.id);
   assert.deepEqual(timed, ['n_clip_1', 'v_free', 'v_from_image']);
+});
+
+test('the toolbar names the configured model, else the provider that needs no model name', () => {
+  assert.equal(generationModelLabel(caps.video), 'MiniMax-H3');
+  assert.equal(generationModelLabel({ configured_model: '', backend: 'vllm-omni' }), 'vLLM-Omni');
+  assert.equal(generationModelLabel({ configured_model: '', backend: null }), '');
 });

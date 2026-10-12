@@ -144,6 +144,7 @@ def test_capabilities_list_the_active_model_values(monkeypatch: pytest.MonkeyPat
     assert caps["image"]["ratios"] == ["16:9", "4:3", "1:1", "3:4", "9:16"]
     assert caps["image"]["resolutions"] == ["1K", "2K", "4K"]
     assert (caps["image"]["default_ratio"], caps["image"]["default_resolution"]) == ("16:9", "1K")
+    assert caps["image"]["backend"] == MODELARK
     assert "settings" not in caps
 
     with_graph = media_capabilities(_graph({"resolution": "1080P"}))

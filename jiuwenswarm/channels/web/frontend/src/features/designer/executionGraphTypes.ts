@@ -305,6 +305,8 @@ export type DesignerMediaSettingsPatch = {
 export type DesignerMediaCapabilities = {
   video: {
     configured_model: string;
+    /** Native generation backend of the slot; null on the OpenRouter-style path. */
+    backend: string | null;
     model_id: string;
     provider: string;
     ratios: string[];
@@ -317,6 +319,7 @@ export type DesignerMediaCapabilities = {
   };
   image: {
     configured_model: string;
+    backend: string | null;
     ratios: string[];
     resolutions: string[];
     default_ratio: string;
