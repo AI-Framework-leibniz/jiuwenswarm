@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Handle, NodeResizeControl, NodeToolbar, Position, type Node, type NodeProps } from '@xyflow/react';
+import { NodeResizeControl, NodeToolbar, Position, type Node, type NodeProps } from '@xyflow/react';
 import { isComfyuiNodeConfig } from '../../comfyuiWorkflow';
 import { designerAssetPreviewUrl, designerAssetTextUrl } from '../../designerAssetUrl';
 import {
@@ -44,7 +44,7 @@ import { isDesignerPreviewGraph } from '../../designerBootstrapGraph';
 import { isMediaNodeType, supportsNodeToolbar } from '../../mediaNodeConfig';
 import { DesignerActivityPeek } from '../DesignerActivityPeek';
 import { DesignerNodeToolbar } from '../controls/DesignerNodeToolbar';
-import { DesignerNodeSuccessorControl } from './DesignerNodeSuccessorControl';
+import { DesignerNodePortControl } from './DesignerNodePortControl';
 
 type DesignerNodeData = DesignerReactFlowNode['data'];
 type DesignerFlowNode = Node<DesignerNodeData>;
@@ -217,7 +217,7 @@ function DesignerNodeShell({
         </button>
       </div>
       <div className="designer-node__card">
-        <Handle type="target" position={Position.Left} className='size-2 bg-gray-500 transition-all ease-out group-hover:size-3' />
+        <DesignerNodePortControl nodeId={nodeId} side="predecessor" />
         {isComfyui ? (
           <span
             className="designer-node__comfyui-badge"
@@ -234,8 +234,7 @@ function DesignerNodeShell({
             {nodeError}
           </p>
         ) : null}
-        <Handle type="source" position={Position.Right} className='size-2 bg-gray-500 transition-all ease-out group-hover:size-3' />
-        <DesignerNodeSuccessorControl nodeId={nodeId} />
+        <DesignerNodePortControl nodeId={nodeId} side="successor" />
         <DesignerNodeResizeHandle nodeId={nodeId} />
       </div>
       {toolbar}

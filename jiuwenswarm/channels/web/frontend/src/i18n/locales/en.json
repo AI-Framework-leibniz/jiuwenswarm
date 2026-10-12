@@ -193,7 +193,8 @@
       }
     },
     "nodeActions": {
-      "add": "Add connected node",
+      "add": "Add successor node",
+      "addPredecessor": "Add predecessor node",
       "addTitle": "Connect to this node",
       "delete": "Delete node",
       "deleteHint": "Delete this node and its connections. You can also press Delete / Backspace.",

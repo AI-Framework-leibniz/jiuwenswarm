@@ -1321,54 +1321,100 @@
   pointer-events: none;
 }
 
-.designer-node__successor-wrap {
-  position: absolute;
-  top: 50%;
-  left: calc(100% - 8px);
+/* Port handle = tiny edge anchor on the node border. The circle-plus icon is a
+   visually offset child so edges still meet the card while the icon floats on top. */
+.designer-node__card .react-flow__handle.designer-node__port {
   z-index: 5;
-  display: flex;
-  align-items: flex-start;
-  padding: 10px 8px 10px 20px;
-  pointer-events: auto;
-  transform: translateY(-50%);
+  width: 8px;
+  height: 8px;
+  min-width: 8px;
+  min-height: 8px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  background-color: transparent;
+  color: var(--color-text-secondary);
+  opacity: 0;
+  overflow: visible;
+  pointer-events: none;
+  cursor: pointer;
+  transition: color 120ms ease, opacity 120ms ease;
 }
 
-.designer-node__successor {
-  position: relative;
-  z-index: 5;
+.designer-node__port-icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: 1px solid var(--color-border-default);
-  border-radius: 999px;
-  background: var(--color-surface-card);
-  color: var(--color-text-primary);
-  box-shadow: var(--effect-shadow-sm);
-  opacity: 0;
+  width: 28px;
+  height: 28px;
   pointer-events: none;
-  cursor: pointer;
+  transform: translate(-50%, -50%);
 }
 
-.designer-node:hover .designer-node__successor,
-.designer-node.is-selected .designer-node__successor,
-.designer-node__successor-wrap:hover .designer-node__successor,
-.designer-node__successor.is-open,
-.designer-node__successor:focus-visible {
+/*
+ * Invisible hover bridge back toward the card. Without it, the gap between the
+ * node box and the offset icon is not a descendant hit target, so
+ * `.designer-node:hover` drops (unlike the in-caption delete button).
+ */
+.designer-node__port-icon::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 22px;
+  height: 48px;
+  transform: translateY(-50%);
+}
+
+/* Float the icon just outside the border, over the outgoing/incoming edge. */
+.designer-node__card .react-flow__handle.designer-node__port--successor .designer-node__port-icon {
+  transform: translate(-50%, -50%) translateX(16px);
+}
+
+.designer-node__card .react-flow__handle.designer-node__port--successor .designer-node__port-icon::before {
+  right: 50%;
+}
+
+.designer-node__card .react-flow__handle.designer-node__port--predecessor .designer-node__port-icon {
+  transform: translate(-50%, -50%) translateX(-16px);
+}
+
+.designer-node__card .react-flow__handle.designer-node__port--predecessor .designer-node__port-icon::before {
+  left: 50%;
+}
+
+.designer-node:hover .designer-node__card .react-flow__handle.designer-node__port,
+.designer-node__card .react-flow__handle.designer-node__port:has(.designer-node__port-icon:hover),
+.designer-node__card .react-flow__handle.designer-node__port.is-open,
+.designer-node__card .react-flow__handle.designer-node__port:focus-visible,
+.designer-node__card .react-flow__handle.designer-node__port.connectingfrom {
   opacity: 1;
+}
+
+.designer-node:hover .designer-node__card .react-flow__handle.designer-node__port .designer-node__port-icon,
+.designer-node__card .react-flow__handle.designer-node__port:has(.designer-node__port-icon:hover) .designer-node__port-icon,
+.designer-node__card .react-flow__handle.designer-node__port.is-open .designer-node__port-icon,
+.designer-node__card .react-flow__handle.designer-node__port:focus-visible .designer-node__port-icon,
+.designer-node__card .react-flow__handle.designer-node__port.connectingfrom .designer-node__port-icon {
   pointer-events: auto;
 }
 
-.designer-node__successor:hover,
-.designer-node__successor.is-open {
-  background: var(--color-action-secondary);
+.designer-node__card .react-flow__handle.designer-node__port:hover,
+.designer-node__card .react-flow__handle.designer-node__port.is-open,
+.designer-node__card .react-flow__handle.designer-node__port.connectingfrom {
+  color: var(--color-text-primary);
 }
 
-.designer-node__successor-menu {
+.designer-canvas-shell.is-hand .designer-node__card .react-flow__handle.designer-node__port .designer-node__port-icon {
+  cursor: pointer;
+}
+
+.designer-node__port-menu {
   position: absolute;
-  top: 0;
-  left: calc(100% + 8px);
+  top: 50%;
   z-index: 6;
   width: min(280px, 70vw);
   max-height: min(360px, 70vh);
@@ -1379,6 +1425,16 @@
   background: color-mix(in srgb, var(--color-surface-card) 96%, transparent);
   backdrop-filter: blur(10px);
   box-shadow: var(--effect-shadow-lg);
+  transform: translateY(-50%);
+}
+
+.designer-node__port-menu--successor {
+  left: calc(100% + 28px);
+}
+
+.designer-node__port-menu--predecessor {
+  right: calc(100% + 28px);
+  left: auto;
 }
 
 .designer-node__body {
