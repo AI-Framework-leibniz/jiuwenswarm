@@ -46,10 +46,3 @@ export function effectiveImageSettings(
     ),
   };
 }
-
-/** Seconds a clip is generated at: its storyboard window, clamped to the model's range. */
-export function clipDurationSeconds(timeline: string, minSec: number, maxSec: number): number {
-  const nums = (timeline.match(/\d+(?:\.\d+)?/g) ?? []).map(Number);
-  const span = nums.length >= 2 && nums[1] > nums[0] ? nums[1] - nums[0] : 5;
-  return Math.max(minSec, Math.min(maxSec, Math.round(span)));
-}

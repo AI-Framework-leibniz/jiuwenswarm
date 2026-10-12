@@ -803,7 +803,8 @@ def _media_capabilities(
         graph = _store.get_graph(graph_id)
         if graph is None:
             return None, "graph not found", "NOT_FOUND"
-    return media_capabilities(graph), None, None
+        return media_capabilities(graph, _store.get_latest_run_for_graph(graph_id)), None, None
+    return media_capabilities(), None, None
 
 
 def _is_managed_design_project_dir(project_dir: str) -> bool:

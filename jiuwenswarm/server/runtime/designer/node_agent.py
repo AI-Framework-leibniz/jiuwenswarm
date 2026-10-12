@@ -1023,7 +1023,6 @@ class DesignerGraphToolkit:
         self,
         *,
         prompt: str = "",
-        duration: int = 5,
         first_frame: str = "",  # kept for tool schema; Design always uses R2V refs
     ) -> str:
         self.raise_media_error()
@@ -1039,7 +1038,7 @@ class DesignerGraphToolkit:
             edge_video_inputs,
             first_connected_video_file,
             generate_clip_video,
-            parse_shot_duration_seconds,
+            shot_duration_seconds,
         )
         from jiuwenswarm.common.schema.designer_graph import node_clip_index
         from jiuwenswarm.server.runtime.designer.pipeline.clip_last_frame_handoff import (
@@ -1235,21 +1234,7 @@ class DesignerGraphToolkit:
                 self.ctx.on_prompt_artifact(text)
             except Exception:  # noqa: BLE001
                 logger.debug("call_video_model early prompt handoff failed", exc_info=True)
-        _, shot = (None, None)
-        try:
-            from jiuwenswarm.server.runtime.designer.handlers.clip import _shot_for_node
-
-            _, shot = _shot_for_node(self.ctx.graph, node, self.ctx)
-        except Exception:  # noqa: BLE001
-            shot = None
-        from jiuwenswarm.server.runtime.designer.pipeline.clip_scope import (
-            clamp_clip_duration,
-        )
-
-        dur = parse_shot_duration_seconds(
-            (shot or {}).get("timeline") or "",
-            default=clamp_clip_duration(duration or 5),
-        )
+        dur = shot_duration_seconds(self.ctx, node)
         from jiuwenswarm.server.runtime.designer.audio_locks import video_gen_family_label
 
         beat = asyncio.create_task(
@@ -1618,13 +1603,8 @@ def build_designer_tools(toolkit: DesignerGraphToolkit) -> list[Any]:
 
     async def call_video_model(**kwargs: Any) -> str:
         payload = _payload(**kwargs)
-        try:
-            duration = int(payload.get("duration") or 5)
-        except (TypeError, ValueError):
-            duration = 5
         return await toolkit.call_video_model(
             prompt=str(payload.get("prompt") or ""),
-            duration=duration,
             first_frame=str(payload.get("first_frame") or payload.get("firstFrame") or ""),
         )
 
@@ -1795,7 +1775,6 @@ def build_designer_tools(toolkit: DesignerGraphToolkit) -> list[Any]:
                                 "examples. " + video_tool_hint
                             ),
                         },
-                        "duration": {"type": "integer"},
                         "first_frame": {
                             "type": "string",
                             "description": "Optional legacy image. Clip-as-shot uses reference images, not a first frame.",

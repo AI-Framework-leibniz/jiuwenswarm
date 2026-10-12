@@ -170,8 +170,25 @@ def update_media_settings(
     write_media_settings(graph, video=next_video, image=next_image)
 
 
-def media_capabilities(graph: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Values the toolbar may offer, plus this canvas's effective settings."""
+def clip_durations(graph: dict[str, Any], run: dict[str, Any] | None = None) -> dict[str, int]:
+    """Seconds each storyboard clip node will be generated at, read like the clip handler does."""
+    from jiuwenswarm.common.schema.designer_graph import PIPELINE_CLIP, node_pipeline
+    from jiuwenswarm.server.runtime.designer.handlers.clip import shot_duration_seconds
+    from jiuwenswarm.server.runtime.designer.handlers.types import NodeExecutionContext
+
+    out: dict[str, int] = {}
+    for node in graph.get("nodes") or []:
+        if node_pipeline(node) != PIPELINE_CLIP:
+            continue
+        ctx = NodeExecutionContext(graph=graph, run_id="", node_id=str(node["id"]), run=run)
+        out[str(node["id"])] = shot_duration_seconds(ctx, node)
+    return out
+
+
+def media_capabilities(
+    graph: dict[str, Any] | None = None, run: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Values the toolbar may offer, plus this canvas's effective settings and clip lengths."""
     cap = active_video_capacity()
     out: dict[str, Any] = {
         "video": {
@@ -196,4 +213,5 @@ def media_capabilities(graph: Mapping[str, Any] | None = None) -> dict[str, Any]
             "video": video_settings(graph, cap).as_dict(),
             "image": image_settings(graph).as_dict(),
         }
+        out["clip_durations"] = clip_durations(graph, run)
     return out

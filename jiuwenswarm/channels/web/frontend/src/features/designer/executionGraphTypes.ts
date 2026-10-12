@@ -159,8 +159,6 @@ type DesignerRoleConfig<R extends DesignerNodeRole | string> = {
   interaction_mode?: 'generate' | 'upload' | 'edit';
   materials?: DesignerMediaMaterialSlot[];
   clip_index?: number;
-  /** Storyboard window of a clip, e.g. "0-5s"; sets the generated clip length. */
-  timeline?: string;
   /** Canvas-added by the user (Director onboards as LLM agent when available). */
   user_added?: boolean;
   /** User dragged the node resize handle; skip content auto-fit. */
@@ -201,7 +199,6 @@ export type DesignerNodeConfig =
       interaction_mode?: string;
       materials?: DesignerMediaMaterialSlot[];
       clip_index?: number;
-      timeline?: string;
       user_added?: boolean;
       user_resized?: boolean;
       kind?: string;
@@ -322,6 +319,8 @@ export type DesignerMediaCapabilities = {
     video: DesignerVideoSettings;
     image: DesignerImageSettings;
   };
+  /** Storyboard clip node id → seconds it will be generated at. Present with a graph. */
+  clip_durations?: Record<string, number>;
 };
 
 export type DesignerGraphPatch = DesignerMediaSettingsPatch & {

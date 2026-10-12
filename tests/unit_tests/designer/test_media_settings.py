@@ -174,3 +174,19 @@ def test_capabilities_endpoint_reads_the_graph(designer_store: DesignerGraphStor
 
     payload, error, code = adapter._media_capabilities({"graph_id": "graph_missing"})
     assert payload is None and code == "NOT_FOUND"
+
+
+def test_clip_durations_follow_the_storyboard_text_not_node_config() -> None:
+    graph = make_pipeline_graph(project_id="proj_media", prompt="rain")
+    nodes = {node["id"]: node for node in graph["nodes"]}
+    nodes["n_storyboard"]["config"]["prewritten"] = (
+        "| Shot | Timeline | Camera | Move | Character action | Continuity | Comment |\n"
+        "| --- | --- | --- | --- | --- | --- | --- |\n"
+        "| 1 | 0-8s | wide | static | She waits | hold | Rain on the window |\n"
+    )
+    nodes["n_clip_1"]["config"]["timeline"] = "0-3s"
+
+    assert media_capabilities(graph)["clip_durations"] == {"n_clip_1": 8}
+
+    del nodes["n_storyboard"]["config"]["prewritten"]
+    assert media_capabilities(graph)["clip_durations"] == {"n_clip_1": 5}

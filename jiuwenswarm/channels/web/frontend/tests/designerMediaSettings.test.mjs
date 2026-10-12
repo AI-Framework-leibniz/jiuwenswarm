@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  clipDurationSeconds,
   effectiveImageSettings,
   effectiveVideoSettings,
 } from '../node_modules/.cache/designer-media-settings/designerMediaSettings.js';
@@ -44,11 +43,4 @@ test('values the model does not list fall back to the server snapped settings', 
 test('image ratio is independent of the video ratio', () => {
   const metadata = { video_settings: { aspect_ratio: '9:16' }, image_settings: { aspect_ratio: '21:9' } };
   assert.equal(effectiveImageSettings(metadata, caps).aspect_ratio, '21:9');
-});
-
-test('clip duration is the storyboard window clamped to the model range', () => {
-  assert.equal(clipDurationSeconds('5.0-12.0s', 2, 30), 7);
-  assert.equal(clipDurationSeconds('0-45s', 4, 15), 15);
-  assert.equal(clipDurationSeconds('0-1s', 4, 15), 4);
-  assert.equal(clipDurationSeconds('shot 3', 2, 30), 5);
 });

@@ -59,6 +59,12 @@ def parse_shot_duration_seconds(timeline: str, default: int = 5) -> int:
     return duration_from_timeline(timeline, default=default)
 
 
+def shot_duration_seconds(ctx: NodeExecutionContext, node: DesignerGraphNode) -> int:
+    """Seconds this clip is generated at: its storyboard Timeline (5s without one), clamped to the model."""
+    _, shot = _shot_for_node(ctx.graph, node, ctx)
+    return parse_shot_duration_seconds((shot or {}).get("timeline") or "", default=5)
+
+
 def collect_clip_scene_image(
     ctx: NodeExecutionContext | None,
     clip_index: int = 1,
@@ -958,8 +964,7 @@ class ClipNodeHandler:
         if scene_chain:
             cfg = stamp_scene_last_frame_chain(cfg, scene_chain)
             node["config"] = cfg
-        _, shot = _shot_for_node(ctx.graph, node, ctx)
-        duration = parse_shot_duration_seconds((shot or {}).get("timeline") or "", default=5)
+        duration = shot_duration_seconds(ctx, node)
         prompt = build_clip_prompt(ctx.graph, node, ctx)
         payload = connected_payload_clause(
             edge_text_inputs(ctx, node),

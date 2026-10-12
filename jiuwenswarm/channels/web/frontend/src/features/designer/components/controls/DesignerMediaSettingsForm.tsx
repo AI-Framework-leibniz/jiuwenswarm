@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { designerGraphClient } from '../../designerGraphClient';
-import { clipDurationSeconds, effectiveImageSettings, effectiveVideoSettings } from '../../designerMediaSettings';
+import { effectiveImageSettings, effectiveVideoSettings } from '../../designerMediaSettings';
+import { useDesignerRunStore } from '../../designerRunStore';
 import { useDesignerStore } from '../../designerStore';
 import type { DesignerMediaCapabilities, DesignerMediaSettingsPatch } from '../../executionGraphTypes';
 
@@ -15,10 +16,8 @@ export function DesignerMediaSettingsForm({ nodeId, nodeType }: DesignerMediaSet
   const { t } = useTranslation();
   const graphId = useDesignerStore((state) => state.domainGraph?.graph_id ?? '');
   const metadata = useDesignerStore((state) => state.domainGraph?.metadata);
-  const timeline = useDesignerStore((state) => {
-    const value = state.domainGraph?.nodes.find((node) => node.id === nodeId)?.config?.timeline;
-    return typeof value === 'string' ? value.trim() : '';
-  });
+  // A finished storyboard run can change clip lengths, so refetch with the run.
+  const runVersion = useDesignerRunStore((state) => `${state.run?.run_id ?? ''}:${state.run?.updated_at ?? ''}`);
   const patchMediaSettings = useDesignerStore((state) => state.patchMediaSettings);
   const [caps, setCaps] = useState<DesignerMediaCapabilities | null>(null);
   const [error, setError] = useState('');
@@ -45,7 +44,7 @@ export function DesignerMediaSettingsForm({ nodeId, nodeType }: DesignerMediaSet
     return () => {
       cancelled = true;
     };
-  }, [graphId, t]);
+  }, [graphId, runVersion, t]);
 
   const apply = (patch: DesignerMediaSettingsPatch) => {
     setSaving(true);
@@ -77,6 +76,7 @@ export function DesignerMediaSettingsForm({ nodeId, nodeType }: DesignerMediaSet
   const isVideo = nodeType === 'video';
   const video = effectiveVideoSettings(metadata, caps);
   const image = effectiveImageSettings(metadata, caps);
+  const clipSeconds = isVideo ? caps.clip_durations?.[nodeId] : undefined;
 
   return (
     <div className="designer-node-toolbar__params" data-testid="designer-media-settings" data-media-type={nodeType}>
@@ -121,17 +121,15 @@ export function DesignerMediaSettingsForm({ nodeId, nodeType }: DesignerMediaSet
           </select>
         </label>
       ) : null}
-      {isVideo && timeline ? (
+      {clipSeconds !== undefined ? (
         <div className="designer-node-toolbar__param" data-testid="designer-media-settings-video-duration">
           {t('designer.toolbar.duration')}
           <span className="designer-node-toolbar__param-value">
-            {t('designer.mediaSettings.durationValue', {
-              seconds: clipDurationSeconds(timeline, caps.video.min_sec, caps.video.max_sec),
-            })}
+            {t('designer.mediaSettings.durationValue', { seconds: clipSeconds })}
           </span>
         </div>
       ) : null}
-      {isVideo && timeline ? (
+      {clipSeconds !== undefined ? (
         <p className="designer-node-toolbar__params-hint" data-testid="designer-media-settings-duration-hint">
           {t('designer.mediaSettings.durationHint', { min: caps.video.min_sec, max: caps.video.max_sec })}
         </p>
