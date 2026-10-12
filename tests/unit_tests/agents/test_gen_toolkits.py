@@ -134,6 +134,15 @@ async def test_minimax_image_success(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_minimax_image_explicit_size_sends_width_and_height(monkeypatch, tmp_path):
+    seen = _patch_client(monkeypatch, lambda r: _mm_ok_image())
+    target = gt.GenerationTarget("minimax", "k", _MM_GLOBAL, "image-01")
+    await gt.generate_image(target, "fox", "16:9", str(tmp_path), gt.ImageOptions(size="1424x800"))
+    body = _body(seen[0])
+    assert (body["width"], body["height"]) == (1424, 800) and "aspect_ratio" not in body
+
+
+@pytest.mark.asyncio
 async def test_minimax_region_failover_and_bad_key(monkeypatch, tmp_path):
     def china_rejects(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=_MM_BAD_KEY) if request.url.host == "api.minimaxi.com" else _mm_ok_image()
@@ -397,8 +406,7 @@ async def test_modelark_image_explicit_size_and_references(monkeypatch, tmp_path
     options = gt.ImageOptions(size="1280*720", reference_image_uris=(_REF_A,))
     await gt.generate_image(gt.GenerationTarget("modelark", "k", _ARK_INTL, "m"), "fox", "16:9", str(tmp_path), options)
     body = _body(seen[0])
-    width, height = (int(side) for side in body["size"].split("x"))
-    assert abs(width / height - 16 / 9) < 0.01 and width * height >= 2048 * 2048 * 0.98
+    assert body["size"] == "1280x720"
     assert body["image"] == [_REF_A] and body["prompt"] == "fox"
 
 
