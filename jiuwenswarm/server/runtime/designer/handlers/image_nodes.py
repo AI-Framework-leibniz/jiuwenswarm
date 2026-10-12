@@ -256,8 +256,17 @@ def _shot_frame_prompt(
     return lead
 
 
-def _publish_shot_image(src: Path, *, stem: str) -> Path:
-    dest = handler_io.get_agent_workspace_dir() / f"{stem}{src.suffix or '.png'}"
+def _canvas_media_dir(ctx: NodeExecutionContext | None) -> str | None:
+    """The project directory, or the session workspace when no project is selected."""
+    graph = getattr(ctx, "graph", None) if ctx is not None else None
+    if not isinstance(graph, dict):
+        return None
+    return str(handler_io.canvas_output_dir(graph))
+
+
+def _publish_shot_image(src: Path, *, stem: str, dest_dir: Path | None = None) -> Path:
+    root = dest_dir if dest_dir is not None else handler_io.canvas_output_dir(None)
+    dest = root / f"{stem}{src.suffix or '.png'}"
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.resolve() != src.resolve():
         copy2(src, dest)
@@ -302,11 +311,13 @@ async def _require_image(
     except Exception:  # noqa: BLE001
         pass
 
+    save_dir = _canvas_media_dir(ctx)
     generated = await handler_io.generate_designer_image(
         prompt,
         size=size,
         reference_images=clean_refs or None,
         max_tries=max_tries,
+        save_dir=save_dir,
     )
     err = str((generated or {}).get("error") or "")
     # DashScope often rejects ref uploads ("Cannot determine file type") — retry T2I-only.
@@ -324,6 +335,7 @@ async def _require_image(
             size=size,
             reference_images=None,
             max_tries=max(2, max_tries // 2),
+            save_dir=save_dir,
         )
     if generated and generated.get("image_path"):
         path = Path(generated["image_path"])
@@ -707,16 +719,19 @@ class ClipSpecImageHandler:
                 emit("stage", "calling image model", "image_gen")
             except TypeError:
                 emit("stage", "calling image model", "image_gen")
+        media_dir = _canvas_media_dir(ctx)
         generated = await handler_io.generate_designer_image(
             frame_prompt,
             size=size,
             reference_images=refs,
             max_tries=max_tries,
+            save_dir=media_dir,
         )
         if generated and generated.get("image_path"):
             path = _publish_shot_image(
                 Path(generated["image_path"]),
                 stem=f"designer_frame_{ctx.run_id}_{ctx.node_id}_shot{clip_index}",
+                dest_dir=Path(media_dir) if media_dir else None,
             )
             ref = file_output_ref(path, kind=NODE_TYPE_IMAGE, mime_type="image/png")
             return NodeResult(

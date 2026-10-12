@@ -13,6 +13,7 @@ import base64
 import binascii
 import json
 import logging
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -1045,6 +1046,19 @@ def _materialize_reference(
             KIND_AUDIO: ".mp3",
         }[kind]
         filename = f"{filename}{suffix}"
+    if source is not None and payload is None and _same_directory(source.parent, dest_dir):
+        resolved = source.resolve()
+        return {
+            "id": f"ref_{index:02d}",
+            "kind": kind,
+            "role": str(item.get("role") or DEFAULT_ROLE).strip() or DEFAULT_ROLE,
+            "filename": resolved.name,
+            "mime_type": mime or _guess_mime(kind, resolved.suffix),
+            "path": str(resolved),
+            "uri": resolved.as_uri(),
+            "size_bytes": resolved.stat().st_size,
+            "order": index,
+        }
     safe_name = safe_upload_filename(filename, fallback=f"{kind}-{index}{suffix}")
     dest = unique_upload_path(dest_dir / safe_name)
     if payload is not None:
@@ -1066,6 +1080,17 @@ def _materialize_reference(
     }
 
 
+def _same_directory(left: Path, right: Path) -> bool:
+    try:
+        left_resolved = left.resolve()
+        right_resolved = right.resolve()
+    except OSError:
+        return False
+    if os.name == "nt":
+        return os.path.normcase(str(left_resolved)) == os.path.normcase(str(right_resolved))
+    return left_resolved == right_resolved
+
+
 def _existing_file(raw: str) -> Path | None:
     value = (raw or "").strip()
     if not value or value.startswith("blob:") or value.startswith("designer://"):
@@ -1083,7 +1108,11 @@ def _existing_file(raw: str) -> Path | None:
             return candidate
     except OSError:
         return None
-    return None
+    from jiuwenswarm.server.runtime.attachments.media_attachments import (
+        resolve_listed_session_file,
+    )
+
+    return resolve_listed_session_file(value)
 
 
 def _decode_inline_bytes(item: dict[str, Any]) -> bytes | None:

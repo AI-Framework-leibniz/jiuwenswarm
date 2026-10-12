@@ -1,5 +1,5 @@
 import { FileText, Headphones, Image as ImageIcon, Trash2, Video } from 'lucide-react';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   useDesignerAssetLibraryStore,
@@ -7,7 +7,9 @@ import {
   type DesignerAssetSource,
 } from '../designerAssetLibraryStore';
 import { collectDesignerMaterials, isDesignerFallbackTextAsset, type DesignerMaterial } from '../designerMaterials';
-import { DESIGNER_ASSET_DRAG_MIME } from '../designerCanvasNodes';
+import { DESIGNER_ASSET_DRAG_MIME, DESIGNER_PROJECT_ASSET_DRAG_MIME } from '../designerCanvasNodes';
+import { designerAssetPreviewUrl } from '../designerAssetUrl';
+import { designerWorkspaceClient, type DesignerProjectAsset } from '../designerGraphClient';
 import { useDesignerRunStore } from '../designerRunStore';
 import { useDesignerStore } from '../designerStore';
 import { useDesignerUiStore } from '../designerUiStore';
@@ -24,6 +26,8 @@ type UnifiedAsset = {
   deletable: boolean;
   materialId?: string;
   nodeId?: string;
+  sharedUri?: string;
+  sharedMime?: string;
 };
 
 function formatBytes(size: number): string {
@@ -60,9 +64,24 @@ function isUploadedMaterial(material: DesignerMaterial): boolean {
   return material.uri.startsWith('blob:');
 }
 
-export function DesignerAssetsPanel() {
+type ListedSessionFile = {
+  name: string;
+  path: string;
+};
+
+function kindFromFilename(filename: string): DesignerAssetKind | null {
+  const name = filename.toLowerCase();
+  if (/\.(png|jpe?g|webp|gif|jfif)$/.test(name)) return 'image';
+  if (/\.(mp4|webm|mov|m4v)$/.test(name)) return 'video';
+  if (/\.(mp3|wav|m4a|aac|ogg|flac)$/.test(name)) return 'audio';
+  return null;
+}
+
+export function DesignerAssetsPanel({ scope = 'session' }: { scope?: 'session' | 'project' }) {
   const { t } = useTranslation();
   const libraryAssets = useDesignerAssetLibraryStore((state) => state.assets);
+  const [projectAssets, setProjectAssets] = useState<DesignerProjectAsset[]>([]);
+  const [sessionFiles, setSessionFiles] = useState<ListedSessionFile[]>([]);
   const removeAsset = useDesignerAssetLibraryStore((state) => state.removeAsset);
   const domainGraph = useDesignerStore((state) => state.domainGraph);
   const clearAssetReferences = useDesignerStore((state) => state.clearAssetReferences);
@@ -88,16 +107,112 @@ export function DesignerAssetsPanel() {
     return ids;
   }, [domainGraph]);
 
+  const projectId = String(domainGraph?.project_id || '');
+  const sessionId = String(domainGraph?.metadata?.session_id || '');
+  useEffect(() => {
+    if (!projectId) {
+      setProjectAssets([]);
+      return;
+    }
+    let cancelled = false;
+    void designerWorkspaceClient.assets(projectId)
+      .then((payload) => {
+        if (!cancelled) setProjectAssets(payload.assets || []);
+      })
+      .catch(() => {
+        if (!cancelled) setProjectAssets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [domainGraph?.updated_at, projectId]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      setSessionFiles([]);
+      return;
+    }
+    let cancelled = false;
+    const dir = `agent/sessions/${sessionId}/uploads`;
+    void fetch(`/file-api/list-files?dir=${encodeURIComponent(dir)}`, { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) return [];
+        const payload = (await response.json()) as { files?: Array<{ name?: string; path?: string; isDirectory?: boolean }> };
+        return (payload.files || [])
+          .filter((item) => item && !item.isDirectory && item.name && item.path && kindFromFilename(item.name))
+          .map((item) => ({ name: String(item.name), path: String(item.path) }));
+      })
+      .then((files) => {
+        if (!cancelled) setSessionFiles(files);
+      })
+      .catch(() => {
+        if (!cancelled) setSessionFiles([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [domainGraph?.updated_at, sessionId]);
+
   const materials = useMemo(
     () => collectDesignerMaterials(domainGraph, run).filter((item) => !item.placeholder),
     [domainGraph, run],
   );
+  const visibleLibrary = useMemo(() => {
+    return libraryAssets.filter((asset) => {
+      if (projectId && asset.projectId && asset.projectId !== projectId) return false;
+      if (scope === 'project') return true;
+      if (!sessionId) return !asset.sessionId;
+      return asset.sessionId === sessionId;
+    });
+  }, [libraryAssets, projectId, scope, sessionId]);
 
   const unified: UnifiedAsset[] = useMemo(() => {
     const items: UnifiedAsset[] = [];
     const seenUris = new Set<string>();
 
-    for (const asset of libraryAssets) {
+    const serverAssets = scope === 'project'
+      ? projectAssets
+      : projectAssets.filter((asset) => !sessionId || asset.session_id === sessionId);
+    const knownNames = new Set(serverAssets.map((asset) => asset.filename.toLowerCase()));
+    for (const asset of serverAssets) {
+      seenUris.add(asset.uri);
+      items.push({
+        id: asset.id,
+        filename: asset.filename,
+        kind: asset.kind,
+        source: asset.source,
+        previewUrl: asset.kind === 'image' ? designerAssetPreviewUrl(asset.uri) : null,
+        sizeLabel: asset.kind,
+        onCanvas: asset.session_id === sessionId,
+        deletable: false,
+        nodeId: asset.session_id === sessionId ? asset.node_id : undefined,
+        sharedUri: asset.uri,
+        sharedMime: asset.mime_type,
+      });
+    }
+    if (sessionId) {
+      for (const file of sessionFiles) {
+        const kind = kindFromFilename(file.name);
+        if (!kind || knownNames.has(file.name.toLowerCase())) continue;
+        knownNames.add(file.name.toLowerCase());
+        seenUris.add(file.path);
+        items.push({
+          id: `file:${sessionId}:${file.name}`,
+          filename: file.name,
+          kind,
+          source: 'uploaded',
+          previewUrl: kind === 'image' ? designerAssetPreviewUrl(file.path) : null,
+          sizeLabel: kind,
+          onCanvas: false,
+          deletable: false,
+          sharedUri: file.path,
+        });
+      }
+    }
+
+    for (const asset of visibleLibrary) {
+      if (knownNames.has(asset.filename.toLowerCase())) continue;
+      knownNames.add(asset.filename.toLowerCase());
       seenUris.add(asset.objectUrl);
       items.push({
         id: asset.id,
@@ -112,29 +227,31 @@ export function DesignerAssetsPanel() {
       });
     }
 
-    for (const material of materials) {
-      if (isUploadedMaterial(material) && seenUris.has(material.uri)) {
-        continue;
+    if (scope === 'session') {
+      for (const material of materials) {
+        if (isUploadedMaterial(material) && seenUris.has(material.uri)) {
+          continue;
+        }
+        if (seenUris.has(material.uri)) continue;
+        seenUris.add(material.uri);
+        const kind = kindFromMaterial(material);
+        items.push({
+          id: `gen:${material.id}`,
+          filename: material.label,
+          kind,
+          source: material.source || (isUploadedMaterial(material) ? 'uploaded' : 'generated'),
+          previewUrl: kind === 'image' ? material.previewUrl : null,
+          sizeLabel: material.kind,
+          onCanvas: true,
+          deletable: false,
+          materialId: material.id,
+          nodeId: material.nodeId,
+        });
       }
-      if (seenUris.has(material.uri)) continue;
-      seenUris.add(material.uri);
-      const kind = kindFromMaterial(material);
-      items.push({
-        id: `gen:${material.id}`,
-        filename: material.label,
-        kind,
-        source: material.source || (isUploadedMaterial(material) ? 'uploaded' : 'generated'),
-        previewUrl: kind === 'image' ? material.previewUrl : null,
-        sizeLabel: material.kind,
-        onCanvas: true,
-        deletable: false,
-        materialId: material.id,
-        nodeId: material.nodeId,
-      });
     }
 
     return items;
-  }, [canvasAssetIds, libraryAssets, materials]);
+  }, [canvasAssetIds, materials, projectAssets, scope, sessionFiles, sessionId, visibleLibrary]);
 
   const onDelete = useCallback(
     (assetId: string) => {
@@ -176,14 +293,16 @@ export function DesignerAssetsPanel() {
 
   if (unified.length === 0) {
     return (
-      <div className="designer-assets-panel" data-testid="designer-assets-panel">
-        <p className="designer-assets-panel__empty">{t('designer.assets.empty')}</p>
+      <div className="designer-assets-panel" data-testid="designer-assets-panel" data-scope={scope}>
+        <p className="designer-assets-panel__empty">
+          {t(scope === 'project' ? 'designer.assets.emptyProject' : 'designer.assets.empty')}
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="designer-assets-panel" data-testid="designer-assets-panel">
+    <div className="designer-assets-panel" data-testid="designer-assets-panel" data-scope={scope}>
       <ul className="designer-assets-panel__list">
         {unified.map((asset) => (
           <li
@@ -196,8 +315,21 @@ export function DesignerAssetsPanel() {
             <button
               type="button"
               className="designer-assets-panel__open"
-              draggable={Boolean(asset.deletable)}
+              draggable={Boolean(asset.deletable || asset.sharedUri)}
               onDragStart={(event) => {
+                if (asset.sharedUri) {
+                  event.dataTransfer.setData(
+                    DESIGNER_PROJECT_ASSET_DRAG_MIME,
+                    JSON.stringify({
+                      uri: asset.sharedUri,
+                      filename: asset.filename,
+                      kind: asset.kind,
+                      mime_type: asset.sharedMime || '',
+                    }),
+                  );
+                  event.dataTransfer.effectAllowed = 'copy';
+                  return;
+                }
                 if (!asset.deletable) return;
                 event.dataTransfer.setData(DESIGNER_ASSET_DRAG_MIME, asset.id);
                 event.dataTransfer.effectAllowed = 'copy';

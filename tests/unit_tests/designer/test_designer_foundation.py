@@ -779,33 +779,16 @@ async def test_rerun_promotes_generated_image_over_fallback_notes(
     assert not (character.get("candidate_output_ref") or {}).get("uri")
 
 
-def test_bootstrap_treats_default_project_as_create(designer_store: DesignerGraphStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from types import SimpleNamespace
-
+def test_bootstrap_keeps_an_unselected_project_on_default(designer_store: DesignerGraphStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from jiuwenswarm.server.runtime.gateway_adapter import designer_adapter as adapter
 
     monkeypatch.setattr(adapter, "_store", designer_store)
-    monkeypatch.setattr(adapter, "resolve_request_work_mode", lambda params, channel: ("work", None))
-    monkeypatch.setattr(
-        adapter.project_store,
-        "resolve_default_project_dir",
-        lambda name, mode: str(tmp_path / "designer-project"),
-    )
-    created: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(adapter, "get_agent_root_dir", lambda: tmp_path)
 
-    def fake_create(name: str, project_dir: str, work_mode: str):
-        created.append((name, project_dir, work_mode))
-        return (
-            SimpleNamespace(
-                project_id="proj_created01",
-                project_dir=project_dir,
-                work_mode=work_mode,
-                hidden=False,
-            ),
-            False,
-        )
+    def fail_create(*_args, **_kwargs):
+        raise AssertionError("an unselected design canvas must not create a project")
 
-    monkeypatch.setattr(adapter.project_store, "create_project_checked", fake_create)
+    monkeypatch.setattr(adapter.project_store, "create_project_checked", fail_create)
 
     analysis = {
         "source": "llm",
@@ -831,9 +814,60 @@ def test_bootstrap_treats_default_project_as_create(designer_store: DesignerGrap
     assert error is None
     assert code is None
     assert payload is not None
-    assert payload["project_id"] == "proj_created01"
-    assert payload["graph"]["title"] == "火车站短片"
-    assert created
+    assert payload["project_id"] == "default"
+    assert payload["graph"]["project_id"] == "default"
+    assert payload["graph"]["title"] == "设计项目"
+    assert "project" not in payload
+
+
+def test_additional_session_on_default_project_does_not_create_a_project(
+    designer_store: DesignerGraphStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jiuwenswarm.server.runtime.gateway_adapter import designer_adapter as adapter
+
+    monkeypatch.setattr(adapter, "_store", designer_store)
+    monkeypatch.setattr(adapter, "get_agent_root_dir", lambda: tmp_path)
+
+    def fail_create(*_args, **_kwargs):
+        raise AssertionError("default-project compose must not create a project")
+
+    monkeypatch.setattr(adapter.project_store, "create_project_checked", fail_create)
+    analysis = {
+        "source": "llm",
+        "characters": [{"id": "char_1", "name": "Traveler", "description": "coat"}],
+        "scenes": [{"id": "set_1", "name": "Station", "description": "platform"}],
+        "clips": [
+            {
+                "clip_index": 1,
+                "action": "walks onto the platform",
+                "camera": "medium",
+                "on_screen": ["char_1"],
+                "setting_id": "set_1",
+                "timeline": "0-5s",
+            }
+        ],
+        "target_clip_count": 1,
+    }
+    payload, error, code = adapter._bootstrap_graph(
+        {
+            "prompt": "火车站短片",
+            "project_id": "default",
+            "session_id": "design_keep",
+            "work_mode": "design",
+        },
+        "web",
+        analysis,
+        allow_additional_session=True,
+    )
+    assert error is None
+    assert code is None
+    assert payload is not None
+    assert payload["project_id"] == "default"
+    assert payload["graph"]["project_id"] == "default"
+    assert payload["graph"]["metadata"]["session_id"] == "design_keep"
+    assert "project" not in payload
 
 
 def test_start_run_rejects_run_from_another_graph(
