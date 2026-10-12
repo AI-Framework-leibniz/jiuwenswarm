@@ -336,12 +336,16 @@ def director_chat_context(graph: DesignerExecutionGraph) -> dict[str, Any]:
         text = next((str(meta.get(key) or "").strip() for key in keys if str(meta.get(key) or "").strip()), "")
         if text:
             context[name] = text[:limit]
-    for lock_name in ("spatial_lock", "style_lock", "aspect_lock"):
+    for lock_name in ("spatial_lock", "style_lock"):
         lock = meta.get(lock_name)
         if not isinstance(lock, dict) or not lock:
             lock = analysis.get(lock_name)
         if isinstance(lock, dict) and lock:
             context[lock_name] = lock
+    from jiuwenswarm.server.runtime.designer.media_settings import image_settings, video_settings
+
+    context["video_settings"] = video_settings(graph).as_dict()
+    context["image_settings"] = image_settings(graph).as_dict()
     language_lock = str(meta.get("language_lock") or analysis.get("language_lock") or "").strip()
     if language_lock:
         context["language_lock"] = language_lock

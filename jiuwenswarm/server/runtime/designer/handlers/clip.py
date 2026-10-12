@@ -855,18 +855,22 @@ def build_clip_prompt(
 
 async def generate_clip_video(
     prompt: str,
+    *,
+    aspect_ratio: str,
+    resolution: str,
     save_dir: str | None = None,
     first_frame: str | None = None,
     reference_images: list[str] | None = None,
     reference_file: str | None = None,
     duration: int = 5,
     audio: bool | None = None,
-    size: str | None = None,
-    resolution: str | None = None,
     model: str | None = None,
     force_reference_mode: bool = False,
 ) -> dict[str, Any]:
-    """Call the Settings > Agent video model and wait for the clip. Tests monkeypatch this function."""
+    """Call the Settings > Agent video model and wait for the clip. Tests monkeypatch this function.
+
+    ``aspect_ratio`` / ``resolution`` are the canvas video settings (``media_settings``).
+    """
     from jiuwenswarm.common.utils import get_env_file
     from jiuwenswarm.dotenv_early import load_dotenv_runtime
     from jiuwenswarm.server.runtime.designer import media_generation
@@ -876,26 +880,14 @@ async def generate_clip_video(
     except Exception:
         logger.debug("Failed to reload video generation env before generation", exc_info=True)
 
-    from jiuwenswarm.server.runtime.designer.pipeline.axis_locks import (
-        resolve_clip_video_duration,
-        resolve_clip_video_format,
-    )
+    from jiuwenswarm.server.runtime.designer.pipeline.clip_scope import clamp_clip_duration
 
-    if size or resolution:
-        video_size, video_res = resolve_clip_video_format(
-            user_resolution=str(resolution or ""),
-            director_resolution=str(resolution or ""),
-        )
-        if size and "*" in str(size).replace("x", "*").replace("X", "*"):
-            video_size = str(size).replace("x", "*").replace("X", "*")
-    else:
-        video_size, video_res = resolve_clip_video_format()
-    clamped_duration = resolve_clip_video_duration(duration, default=5)
+    clamped_duration = clamp_clip_duration(duration)
     resolved_model = (str(model).strip() or None) if model else None
     tool_input = {
         "prompt": prompt,
-        "size": video_size,
-        "resolution": video_res,
+        "aspect_ratio": aspect_ratio,
+        "resolution": resolution,
         "first_frame": first_frame,
         "reference_images": reference_images,
         "reference_file": reference_file,
@@ -917,9 +909,9 @@ async def generate_clip_video(
         result = await media_generation.generate_video(
             media_generation.DesignerVideoRequest(
                 prompt=prompt,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
                 duration=clamped_duration,
-                size=video_size,
-                resolution=video_res,
                 first_frame=first_frame,
                 reference_images=tuple(reference_images or ()),
                 reference_file=reference_file,
@@ -1013,15 +1005,9 @@ class ClipNodeHandler:
                 ctx.on_prompt_artifact(prompt)
             except Exception:  # noqa: BLE001
                 logger.debug("clip early prompt handoff failed", exc_info=True)
-        aspect = cfg.get("aspect_lock") if isinstance(cfg.get("aspect_lock"), dict) else {}
-        if not aspect:
-            meta = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
-            aspect = meta.get("aspect_lock") if isinstance(meta.get("aspect_lock"), dict) else {}
-        from jiuwenswarm.server.runtime.designer.pipeline.axis_locks import (
-            video_format_for_node,
-        )
+        from jiuwenswarm.server.runtime.designer.media_settings import video_settings
 
-        video_size, video_res = video_format_for_node(graph, cfg, aspect if isinstance(aspect, dict) else None)
+        video = video_settings(graph)
         from jiuwenswarm.server.runtime.designer.user_references import (
             user_reference_video_path,
         )
@@ -1057,8 +1043,8 @@ class ClipNodeHandler:
                 reference_images=overrides["reference_images"],
                 reference_file=reference_file,
                 duration=duration,
-                size=video_size,
-                resolution=video_res,
+                aspect_ratio=video.aspect_ratio,
+                resolution=video.resolution,
                 audio=True if want_audio else False,
                 model=None,
                 force_reference_mode=overrides["force_reference_mode"],

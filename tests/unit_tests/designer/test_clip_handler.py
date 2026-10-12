@@ -357,13 +357,23 @@ async def test_clip_handler_returns_file_output_ref(
         assert kwargs.get("force_reference_mode") is True
         assert first_frame in (None, "")
         assert "USER PROMPT (authoritative story" not in prompt
+        assert kwargs["aspect_ratio"] == "9:16"
+        assert kwargs["resolution"] == "720P"
         return {"video_path": str(video), "revised_prompt": prompt}
 
     monkeypatch.setattr(
         "jiuwenswarm.server.runtime.designer.handlers.clip.generate_clip_video",
         fake_generate,
     )
+    monkeypatch.setattr(
+        "jiuwenswarm.server.runtime.designer.pipeline.model_capacity.configured_video_model_id",
+        lambda: "wan3.0-video",
+    )
     graph = _graph()
+    graph["metadata"] = {
+        **(graph.get("metadata") or {}),
+        "video_settings": {"aspect_ratio": "9:16", "resolution": "720p"},
+    }
     result = await ClipNodeHandler().execute(
         graph["nodes"][1],
         NodeExecutionContext(graph=graph, run_id="run_clip01", node_id="n_clip"),
@@ -388,7 +398,7 @@ async def test_generate_clip_video_raises_on_provider_error(
         fake_generate,
     )
     with pytest.raises(RuntimeError, match="402"):
-        await generate_clip_video("a boy playing basketball")
+        await generate_clip_video("a boy playing basketball", aspect_ratio="16:9", resolution="720P")
 
 
 @pytest.mark.asyncio

@@ -887,11 +887,11 @@ class DesignerGraphToolkit:
         self,
         *,
         prompt: str = "",
-        size: str = "1024x1024",
     ) -> str:
         from jiuwenswarm.server.runtime.designer.handlers.common import (
             generate_designer_image,
         )
+        from jiuwenswarm.server.runtime.designer.media_settings import image_settings
 
         self.raise_media_error()
         self.refresh_canvas()
@@ -981,7 +981,7 @@ class DesignerGraphToolkit:
         try:
             generated = await generate_designer_image(
                 text,
-                size=str(size or "1K"),
+                size=image_settings(self.ctx.graph).size,
                 reference_images=refs[:4] if refs else None,
                 max_tries=2,
             )
@@ -1275,15 +1275,9 @@ class DesignerGraphToolkit:
                     else None
                 )
             )
-            from jiuwenswarm.server.runtime.designer.pipeline.axis_locks import (
-                video_format_for_node,
-            )
+            from jiuwenswarm.server.runtime.designer.media_settings import video_settings
 
-            video_size, video_res = video_format_for_node(
-                graph,
-                cfg,
-                meta.get("aspect_lock") if isinstance(meta.get("aspect_lock"), dict) else None,
-            )
+            video = video_settings(graph)
             from jiuwenswarm.server.runtime.designer.pipeline.reference_led import (
                 video_generation_overrides,
             )
@@ -1303,8 +1297,8 @@ class DesignerGraphToolkit:
                 audio=True if want_audio else False,
                 model=None,
                 force_reference_mode=overrides["force_reference_mode"],
-                size=video_size,
-                resolution=video_res,
+                aspect_ratio=video.aspect_ratio,
+                resolution=video.resolution,
             )
         except Exception as exc:  # noqa: BLE001
             self.fail_media(exc)
@@ -1620,7 +1614,6 @@ def build_designer_tools(toolkit: DesignerGraphToolkit) -> list[Any]:
         payload = _payload(**kwargs)
         return await toolkit.call_image_model(
             prompt=str(payload.get("prompt") or ""),
-            size=str(payload.get("size") or "1024x1024"),
         )
 
     async def call_video_model(**kwargs: Any) -> str:
@@ -1758,7 +1751,6 @@ def build_designer_tools(toolkit: DesignerGraphToolkit) -> list[Any]:
                             "type": "string",
                             "description": image_tool_hint,
                         },
-                        "size": {"type": "string"},
                     },
                     "required": ["prompt"],
                 },

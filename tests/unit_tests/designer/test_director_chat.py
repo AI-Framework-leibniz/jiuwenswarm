@@ -11,6 +11,14 @@ from jiuwenswarm.server.runtime.designer.chat_document_sync import ChatDocumentC
 from jiuwenswarm.server.runtime.designer.orchestration import Director
 
 
+@pytest.fixture(autouse=True)
+def _wan_video_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "jiuwenswarm.server.runtime.designer.pipeline.model_capacity.configured_video_model_id",
+        lambda: "wan3.0-video",
+    )
+
+
 def _graph(metadata: dict | None = None) -> dict:
     return {
         "schema_version": "designer-execution-graph.v1",
@@ -51,7 +59,8 @@ def test_director_chat_context_carries_bootstrap_decisions() -> None:
             "director_brief_notes": "keep the rain",
             "spatial_lock": {"setting": "alley"},
             "style_lock": {"look": "noir rain", "medium": "live action"},
-            "aspect_lock": {"ratio": "2.39:1", "rule": "keep film ratio"},
+            "video_settings": {"aspect_ratio": "9:16", "resolution": "720p"},
+            "image_settings": {"aspect_ratio": "1:1"},
             "language_lock": "zh",
             "approved_brief": "already sent as a chat document",
         }
@@ -65,10 +74,14 @@ def test_director_chat_context_carries_bootstrap_decisions() -> None:
         "brief_notes": "keep the rain",
         "spatial_lock": {"setting": "alley"},
         "style_lock": {"look": "noir rain", "medium": "live action"},
-        "aspect_lock": {"ratio": "2.39:1", "rule": "keep film ratio"},
+        "video_settings": {"aspect_ratio": "9:16", "resolution": "720P"},
+        "image_settings": {"aspect_ratio": "1:1"},
         "language_lock": "zh",
     }
-    assert director_chat.director_chat_context(_graph()) == {}
+    assert director_chat.director_chat_context(_graph()) == {
+        "video_settings": {"aspect_ratio": "16:9", "resolution": "1080P"},
+        "image_settings": {"aspect_ratio": "16:9"},
+    }
 
 
 async def test_plan_chat_turn_speaks_as_director_with_context(monkeypatch) -> None:
@@ -88,7 +101,12 @@ async def test_plan_chat_turn_speaks_as_director_with_context(monkeypatch) -> No
     assert "clip_action" in captured["system"]
     assert "shot_action" not in captured["system"]
     snapshot = json.loads(captured["prompt"])
-    assert snapshot["director_context"] == {"director_skill": "director rules", "language_lock": "zh"}
+    assert snapshot["director_context"] == {
+        "director_skill": "director rules",
+        "video_settings": {"aspect_ratio": "16:9", "resolution": "1080P"},
+        "image_settings": {"aspect_ratio": "16:9"},
+        "language_lock": "zh",
+    }
     assert snapshot["user"] == "有几个镜头？"
 
 
