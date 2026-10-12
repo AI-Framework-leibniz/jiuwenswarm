@@ -21,6 +21,7 @@ import {
 import type { DesignerComfyuiConfig } from '../../executionGraphTypes';
 import { DesignerComfyuiParamsForm } from './DesignerComfyuiParamsForm';
 import { DesignerMaterialStrip } from './DesignerMaterialStrip';
+import { DesignerMediaSettingsForm } from './DesignerMediaSettingsForm';
 
 type DesignerNodeToolbarProps = {
   nodeId: string;
@@ -366,6 +367,9 @@ export function DesignerNodeToolbar({ nodeId, nodeType }: DesignerNodeToolbarPro
             onWheel={(event) => event.stopPropagation()}
           />
           {comfyui ? <DesignerComfyuiParamsForm nodeId={nodeId} comfyui={comfyui} /> : null}
+          {!comfyui && (nodeType === 'image' || nodeType === 'video') ? (
+            <DesignerMediaSettingsForm nodeId={nodeId} nodeType={nodeType} />
+          ) : null}
           <button
             type="button"
             className="designer-node-toolbar__action"

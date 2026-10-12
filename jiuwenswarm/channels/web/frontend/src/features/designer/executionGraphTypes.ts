@@ -86,10 +86,6 @@ export const DESIGNER_NODE_CONFIG_KEYS = [
 export type DesignerMediaGenerateConfig = {
   prompt?: string;
   prompt_origin?: 'storyboard' | 'user';
-  aspect_ratio?: string;
-  resolution?: string;
-  duration?: string;
-  has_audio?: boolean;
   count?: number;
 };
 
@@ -163,6 +159,8 @@ type DesignerRoleConfig<R extends DesignerNodeRole | string> = {
   interaction_mode?: 'generate' | 'upload' | 'edit';
   materials?: DesignerMediaMaterialSlot[];
   clip_index?: number;
+  /** Storyboard window of a clip, e.g. "0-5s"; sets the generated clip length. */
+  timeline?: string;
   /** Canvas-added by the user (Director onboards as LLM agent when available). */
   user_added?: boolean;
   /** User dragged the node resize handle; skip content auto-fit. */
@@ -203,6 +201,7 @@ export type DesignerNodeConfig =
       interaction_mode?: string;
       materials?: DesignerMediaMaterialSlot[];
       clip_index?: number;
+      timeline?: string;
       user_added?: boolean;
       user_resized?: boolean;
       kind?: string;
@@ -285,7 +284,47 @@ export type DesignerGraphEdge = {
   label?: string;
 };
 
-export type DesignerGraphPatch = {
+/** Canvas-wide; every video node generates with these. Clip length comes from the storyboard. */
+export type DesignerVideoSettings = {
+  aspect_ratio: string;
+  resolution: string;
+};
+
+/** Canvas-wide; every character / scene still generates with this. */
+export type DesignerImageSettings = {
+  aspect_ratio: string;
+};
+
+export type DesignerMediaSettingsPatch = {
+  video_settings?: Partial<DesignerVideoSettings>;
+  image_settings?: Partial<DesignerImageSettings>;
+};
+
+/** Values the configured models accept, from `designer.media.capabilities`. */
+export type DesignerMediaCapabilities = {
+  video: {
+    configured_model: string;
+    model_id: string;
+    provider: string;
+    ratios: string[];
+    resolutions: string[];
+    default_ratio: string;
+    default_resolution: string;
+    min_sec: number;
+    max_sec: number;
+    default_sec: number;
+  };
+  image: {
+    ratios: string[];
+    default_ratio: string;
+  };
+  settings?: {
+    video: DesignerVideoSettings;
+    image: DesignerImageSettings;
+  };
+};
+
+export type DesignerGraphPatch = DesignerMediaSettingsPatch & {
   title?: string;
   description?: string;
   upsert_nodes?: DesignerGraphNode[];

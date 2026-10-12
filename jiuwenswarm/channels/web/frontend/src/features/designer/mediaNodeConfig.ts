@@ -5,10 +5,6 @@ export type MediaInteractionMode = 'generate' | 'upload' | 'edit';
 export type MediaGenerateConfig = {
   prompt?: string;
   prompt_origin?: 'storyboard' | 'user';
-  aspect_ratio?: string;
-  resolution?: string;
-  duration?: string;
-  has_audio?: boolean;
   count?: number;
 };
 
@@ -178,10 +174,6 @@ export function readMediaConfig(
     generate: {
       prompt: resolvedPrompt,
       prompt_origin: raw.generate?.prompt_origin,
-      aspect_ratio: raw.generate?.aspect_ratio ?? '16:9',
-      resolution: raw.generate?.resolution ?? '1080p',
-      duration: raw.generate?.duration ?? '5s',
-      has_audio: raw.generate?.has_audio ?? true,
       count: raw.generate?.count ?? 1,
     },
     upload: {
