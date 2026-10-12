@@ -1239,12 +1239,26 @@ async def _dashscope_check_video(target: GenerationTarget, task_id: str, save_di
 # vLLM-Omni
 # --------------------------------------------------------------------------- #
 
+_TIER_SHORT_SIDE = {"480p": 480, "720p": 720, "768p": 768, "1080p": 1080, "2k": 1440, "4k": 2160}
+
+
 def _vllm_omni_size(size: str | None, aspect_ratio: str, resolution: str) -> str | None:
+    """Explicit size, else the documented tier size, else a 16-aligned size with the tier's 16:9 area."""
     if parse_size(size):
         return size
-    tier = re.sub(r"\D", "", resolution or "")
-    sizes = _VIDEO_SIZES.get(f"{tier}p") if tier else None
-    return (sizes or {}).get(aspect_ratio)
+    tier = re.sub(r"\s", "", resolution or "").lower()
+    listed = _VIDEO_SIZES.get(tier, {}).get(aspect_ratio)
+    if listed:
+        return listed
+    short = _TIER_SHORT_SIDE.get(tier)
+    ratio = re.fullmatch(r"(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)", (aspect_ratio or "").strip())
+    if short is None or ratio is None or float(ratio.group(2)) <= 0:
+        return None
+    area = short * short * 16 / 9
+    value = float(ratio.group(1)) / float(ratio.group(2))
+    width = max(16, round((area * value) ** 0.5 / 16) * 16)
+    height = max(16, round((area / value) ** 0.5 / 16) * 16)
+    return f"{width}*{height}"
 
 
 async def _vllm_omni_generate_image(

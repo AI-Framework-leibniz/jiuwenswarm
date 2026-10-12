@@ -610,3 +610,19 @@ async def test_vllm_omni_check_video_reports_failure(monkeypatch):
     )
     target = gt.GenerationTarget("vllm-omni", "", "http://127.0.0.1:8091/v1", "")
     assert await gt.check_video(target, "vid-1", None) == "[ERROR]: video job vid-1 ended with status failed: OOM"
+
+
+@pytest.mark.parametrize(
+    ("aspect_ratio", "resolution", "expected"),
+    [
+        ("9:16", "720P", "720*1280"),
+        ("16:9", "768P", "1360*768"),
+        ("9:16", "2K", "1440*2560"),
+        ("21:9", "1080p", "2192*944"),
+        ("4:3", "480P", "736*560"),
+        ("16:9", "8K", None),
+    ],
+)
+def test_vllm_omni_size_covers_every_tier_and_ratio(aspect_ratio, resolution, expected):
+    assert gt._vllm_omni_size(None, aspect_ratio, resolution) == expected
+    assert gt._vllm_omni_size("640*480", aspect_ratio, resolution) == "640*480"
