@@ -131,11 +131,6 @@ export function DesignerMediaSettingsForm({ nodeId, nodeType }: DesignerMediaSet
           </span>
         </div>
       ) : null}
-      <p className="designer-node-toolbar__params-hint" data-testid="designer-media-settings-scope">
-        {isVideo
-          ? t('designer.mediaSettings.videoScope', { model: caps.video.configured_model || caps.video.model_id })
-          : t('designer.mediaSettings.imageScope')}
-      </p>
       {isVideo && timeline ? (
         <p className="designer-node-toolbar__params-hint" data-testid="designer-media-settings-duration-hint">
           {t('designer.mediaSettings.durationHint', { min: caps.video.min_sec, max: caps.video.max_sec })}

@@ -152,8 +152,6 @@
     "mediaSettings": {
       "videoTitle": "Video settings",
       "imageTitle": "Image settings",
-      "videoScope": "Applies to every video node on this canvas ({{model}}).",
-      "imageScope": "Applies to every character and scene image on this canvas.",
       "durationValue": "{{seconds}}s",
       "durationHint": "Clip length follows this shot's storyboard timeline ({{min}}–{{max}}s for this model). Change it in the storyboard or chat.",
       "loading": "Loading generation settings…",
