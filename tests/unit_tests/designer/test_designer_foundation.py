@@ -851,7 +851,7 @@ def test_bootstrap_treats_default_project_as_create(designer_store: DesignerGrap
     assert payload["graph"]["title"] == "火车站短片，竖屏"
     meta = payload["graph"]["metadata"]
     assert meta["video_settings"] == {"aspect_ratio": "9:16", "resolution": "1080P"}
-    assert meta["image_settings"] == {"aspect_ratio": "9:16"}
+    assert meta["image_settings"] == {"aspect_ratio": "9:16", "resolution": "1K"}
     assert created
 
 

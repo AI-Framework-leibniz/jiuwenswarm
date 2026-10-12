@@ -728,3 +728,33 @@ def test_concatenate_clip_videos_falls_back_to_filter_concat(
     assert "-an" not in filter_cmd
     assert "aac" in filter_cmd
 
+
+
+@pytest.mark.asyncio
+async def test_generic_video_node_generates_at_its_manual_length(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jiuwenswarm.server.runtime.designer.handlers import media_nodes
+
+    video = tmp_path / "out.mp4"
+    video.write_bytes(b"mp4")
+    seen: list[int] = []
+
+    async def fake_generate(prompt: str, *, duration: int = 5, **kwargs) -> dict[str, str]:
+        seen.append(duration)
+        return {"video_path": str(video)}
+
+    monkeypatch.setattr(media_nodes, "generate_clip_video", fake_generate)
+    monkeypatch.setattr(media_nodes, "graph_workspace_dir", lambda graph: tmp_path)
+    monkeypatch.setattr(
+        "jiuwenswarm.server.runtime.designer.pipeline.model_capacity.configured_video_model_id",
+        lambda: "MiniMax-H3-Max",
+    )
+    node = {"id": "v1", "type": "video", "config": {"prompt": "a fox"}}
+    graph = {"metadata": {}, "nodes": [node], "edges": []}
+    ctx = NodeExecutionContext(graph=graph, run_id="r", node_id="v1", run={})
+
+    await media_nodes.VideoNodeHandler().execute(node, ctx)
+    node["config"]["duration_sec"] = 11
+    await media_nodes.VideoNodeHandler().execute(node, ctx)
+    assert seen == [6, 11]

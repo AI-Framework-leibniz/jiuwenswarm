@@ -3,8 +3,8 @@
 
 ``graph.metadata.video_settings`` and ``graph.metadata.image_settings`` are the
 only stored copies. Every clip and still call reads them here at call time, so
-one change applies to every node on the canvas. Clip length is not a setting:
-each clip takes its own storyboard timeline.
+one change applies to every node on the canvas. Clip length is per node: a
+video node's own ``duration_sec``, else its storyboard timeline.
 """
 
 from __future__ import annotations
@@ -12,7 +12,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from jiuwenswarm.server.runtime.designer.media_generation import IMAGE_RATIOS, configured_model
+from jiuwenswarm.server.runtime.designer.media_generation import configured_model
+from jiuwenswarm.server.runtime.designer.pipeline.image_capacity import (
+    DEFAULT_IMAGE_RATIO,
+    IMAGE_RATIOS,
+    IMAGE_SIZES,
+    ImageModelCapacity,
+    active_image_capacity,
+    snap_image_resolution,
+)
 from jiuwenswarm.server.runtime.designer.pipeline.model_capacity import (
     VideoModelCapacity,
     active_video_capacity,
@@ -24,21 +32,6 @@ from jiuwenswarm.server.runtime.designer.pipeline.model_capacity import (
 
 VIDEO_SETTINGS_KEY = "video_settings"
 IMAGE_SETTINGS_KEY = "image_settings"
-DEFAULT_IMAGE_RATIO = "16:9"
-
-# About one megapixel per still keeps image calls cheap.
-_IMAGE_SIZES = {
-    "16:9": "1024x576",
-    "9:16": "576x1024",
-    "1:1": "1024x1024",
-    "4:3": "1024x768",
-    "3:4": "768x1024",
-    "3:2": "1152x768",
-    "2:3": "768x1152",
-    "21:9": "1792x768",
-}
-
-
 class MediaSettingsError(ValueError):
     """A settings patch names a field or value the active models do not accept."""
 
@@ -55,13 +48,14 @@ class VideoSettings:
 @dataclass(frozen=True)
 class ImageSettings:
     aspect_ratio: str
+    resolution: str
 
     @property
     def size(self) -> str:
-        return _IMAGE_SIZES[self.aspect_ratio]
+        return IMAGE_SIZES[self.resolution][self.aspect_ratio]
 
     def as_dict(self) -> dict[str, str]:
-        return {"aspect_ratio": self.aspect_ratio}
+        return {"aspect_ratio": self.aspect_ratio, "resolution": self.resolution}
 
 
 def _stored(graph: Mapping[str, Any] | None, key: str) -> dict[str, Any]:
@@ -97,10 +91,16 @@ def snap_image_ratio(requested: str) -> str:
     return min(IMAGE_RATIOS, key=lambda item: abs((ratio_value(item) or 0.0) - target))
 
 
-def image_settings(graph: Mapping[str, Any] | None) -> ImageSettings:
-    """Stored canvas image settings."""
+def image_settings(
+    graph: Mapping[str, Any] | None, capacity: ImageModelCapacity | None = None
+) -> ImageSettings:
+    """Stored canvas image settings, snapped onto the active image model."""
+    cap = capacity or active_image_capacity()
     raw = _stored(graph, IMAGE_SETTINGS_KEY)
-    return ImageSettings(aspect_ratio=snap_image_ratio(str(raw.get("aspect_ratio") or "")))
+    return ImageSettings(
+        aspect_ratio=snap_image_ratio(str(raw.get("aspect_ratio") or "")),
+        resolution=snap_image_resolution(str(raw.get("resolution") or ""), cap),
+    )
 
 
 def _pick(value: Any, allowed: tuple[str, ...], field: str) -> str:
@@ -138,6 +138,7 @@ def update_media_settings(
     video: Mapping[str, Any] | None = None,
     image: Mapping[str, Any] | None = None,
     capacity: VideoModelCapacity | None = None,
+    image_capacity: ImageModelCapacity | None = None,
 ) -> None:
     """Apply a partial settings patch. Values the active models reject raise."""
     if video is not None and not isinstance(video, Mapping):
@@ -163,25 +164,38 @@ def update_media_settings(
         )
     next_image = None
     if image:
-        _check_fields(image, {"aspect_ratio"}, "image")
+        _check_fields(image, {"aspect_ratio", "resolution"}, "image")
+        image_cap = image_capacity or active_image_capacity()
+        current_image = image_settings(graph, image_cap)
         next_image = ImageSettings(
-            aspect_ratio=_pick(image["aspect_ratio"], IMAGE_RATIOS, "image aspect_ratio")
+            aspect_ratio=(
+                _pick(image["aspect_ratio"], IMAGE_RATIOS, "image aspect_ratio")
+                if "aspect_ratio" in image
+                else current_image.aspect_ratio
+            ),
+            resolution=(
+                _pick(image["resolution"], image_cap.resolutions, "image resolution")
+                if "resolution" in image
+                else current_image.resolution
+            ),
         )
     write_media_settings(graph, video=next_video, image=next_image)
 
 
-def clip_durations(graph: dict[str, Any], run: dict[str, Any] | None = None) -> dict[str, int]:
-    """Seconds each storyboard clip node will be generated at, read like the clip handler does."""
-    from jiuwenswarm.common.schema.designer_graph import PIPELINE_CLIP, node_pipeline
-    from jiuwenswarm.server.runtime.designer.handlers.clip import shot_duration_seconds
+def video_durations(graph: dict[str, Any], run: dict[str, Any] | None = None) -> dict[str, int]:
+    """Seconds each generated video node will be rendered at, read like its handler does."""
+    from jiuwenswarm.server.runtime.designer.handlers.clip import (
+        generates_timed_video,
+        video_duration_seconds,
+    )
     from jiuwenswarm.server.runtime.designer.handlers.types import NodeExecutionContext
 
     out: dict[str, int] = {}
     for node in graph.get("nodes") or []:
-        if node_pipeline(node) != PIPELINE_CLIP:
+        if not generates_timed_video(graph, node):
             continue
         ctx = NodeExecutionContext(graph=graph, run_id="", node_id=str(node["id"]), run=run)
-        out[str(node["id"])] = shot_duration_seconds(ctx, node)
+        out[str(node["id"])] = video_duration_seconds(ctx, node)
     return out
 
 
@@ -190,6 +204,7 @@ def media_capabilities(
 ) -> dict[str, Any]:
     """Values the toolbar may offer, plus this canvas's effective settings and clip lengths."""
     cap = active_video_capacity()
+    image_cap = active_image_capacity()
     out: dict[str, Any] = {
         "video": {
             "configured_model": configured_model("video"),
@@ -204,14 +219,17 @@ def media_capabilities(
             "default_sec": cap.default_sec,
         },
         "image": {
+            "configured_model": configured_model("image"),
             "ratios": list(IMAGE_RATIOS),
+            "resolutions": list(image_cap.resolutions),
             "default_ratio": DEFAULT_IMAGE_RATIO,
+            "default_resolution": image_cap.default_resolution,
         },
     }
     if graph is not None:
         out["settings"] = {
             "video": video_settings(graph, cap).as_dict(),
-            "image": image_settings(graph).as_dict(),
+            "image": image_settings(graph, image_cap).as_dict(),
         }
-        out["clip_durations"] = clip_durations(graph, run)
+        out["video_durations"] = video_durations(graph, run)
     return out

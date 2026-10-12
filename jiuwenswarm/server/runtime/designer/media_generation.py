@@ -29,6 +29,7 @@ from urllib.parse import unquote, urlparse
 from jiuwenswarm.agents.harness.common.tools import gen_toolkits
 from jiuwenswarm.agents.harness.common.tools.video_gen_tools import video_gen_enabled
 from jiuwenswarm.agents.harness.common.tools.visual_gen_tools import visual_gen_enabled
+from jiuwenswarm.server.runtime.designer.pipeline.image_capacity import IMAGE_RATIOS
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,6 @@ Kind = Literal["image", "video"]
 
 _ENV_PREFIX: dict[Kind, str] = {"image": "VISUAL_GEN", "video": "VIDEO_GEN"}
 _SETTINGS_LABEL: dict[Kind, str] = {"image": "Image generation", "video": "Video generation"}
-IMAGE_RATIOS = ("16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3", "21:9")
 _VIDEO_POLL_SECONDS = 15.0
 _VIDEO_TIMEOUT_SECONDS = 1800.0
 # The agent tool budget stays under the node cap so a cloud job can still be

@@ -1038,7 +1038,7 @@ class DesignerGraphToolkit:
             edge_video_inputs,
             first_connected_video_file,
             generate_clip_video,
-            shot_duration_seconds,
+            video_duration_seconds,
         )
         from jiuwenswarm.common.schema.designer_graph import node_clip_index
         from jiuwenswarm.server.runtime.designer.pipeline.clip_last_frame_handoff import (
@@ -1234,7 +1234,7 @@ class DesignerGraphToolkit:
                 self.ctx.on_prompt_artifact(text)
             except Exception:  # noqa: BLE001
                 logger.debug("call_video_model early prompt handoff failed", exc_info=True)
-        dur = shot_duration_seconds(self.ctx, node)
+        dur = video_duration_seconds(self.ctx, node)
         from jiuwenswarm.server.runtime.designer.audio_locks import video_gen_family_label
 
         beat = asyncio.create_task(

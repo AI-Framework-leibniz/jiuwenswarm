@@ -93,6 +93,7 @@ class VideoNodeHandler:
             edge_text_inputs,
             edge_video_inputs,
             first_connected_video_file,
+            video_duration_seconds,
         )
 
         prompt = node_generate_prompt(node) or graph_prompt(ctx.graph, node)
@@ -109,6 +110,7 @@ class VideoNodeHandler:
             reference_images=refs or None,
             reference_file=first_connected_video_file(videos),
             force_reference_mode=bool(refs or videos),
+            duration=video_duration_seconds(ctx, node),
             aspect_ratio=video.aspect_ratio,
             resolution=video.resolution,
         )

@@ -13,6 +13,7 @@ from typing import Any
 from jiuwenswarm.common.schema.designer_graph import (
     NODE_ROLE_BRIEF,
     NODE_ROLE_CHARACTER,
+    NODE_ROLE_CLIP,
     NODE_ROLE_SCENE,
     NODE_ROLE_STORYBOARD,
     NODE_TYPE_VIDEO,
@@ -21,6 +22,7 @@ from jiuwenswarm.common.schema.designer_graph import (
     DesignerGraphNode,
     node_pipeline,
     node_clip_index,
+    video_concat_source_ids,
 )
 from jiuwenswarm.server.runtime.designer.handlers.common import (
     node_output_image_paths,
@@ -59,10 +61,35 @@ def parse_shot_duration_seconds(timeline: str, default: int = 5) -> int:
     return duration_from_timeline(timeline, default=default)
 
 
-def shot_duration_seconds(ctx: NodeExecutionContext, node: DesignerGraphNode) -> int:
-    """Seconds this clip is generated at: its storyboard Timeline (5s without one), clamped to the model."""
-    _, shot = _shot_for_node(ctx.graph, node, ctx)
-    return parse_shot_duration_seconds((shot or {}).get("timeline") or "", default=5)
+def generates_timed_video(graph: DesignerExecutionGraph, node: DesignerGraphNode) -> bool:
+    """True when running ``node`` asks the video model for a clip of some length."""
+    from jiuwenswarm.server.runtime.designer.handlers import resolve_handler_key
+
+    key = resolve_handler_key(node)
+    if key == NODE_ROLE_CLIP:
+        return True
+    if key != NODE_TYPE_VIDEO:
+        return False
+    return not video_concat_source_ids(graph, str(node.get("id") or ""))
+
+
+def video_duration_seconds(ctx: NodeExecutionContext | None, node: DesignerGraphNode) -> int:
+    """Seconds a video node is generated at, snapped to the model.
+
+    A manual ``config.duration_sec`` wins; a storyboard clip otherwise follows its
+    shot's Timeline (5s without one); any other video uses the model default.
+    """
+    from jiuwenswarm.server.runtime.designer.pipeline.clip_scope import clamp_clip_duration
+    from jiuwenswarm.server.runtime.designer.pipeline.model_capacity import active_video_capacity
+
+    cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
+    override = cfg.get("duration_sec")
+    if isinstance(override, (int, float)) and not isinstance(override, bool):
+        return clamp_clip_duration(override)
+    if node_pipeline(node) == NODE_ROLE_CLIP:
+        _, shot = _shot_for_node(ctx.graph if ctx is not None else {}, node, ctx)
+        return parse_shot_duration_seconds((shot or {}).get("timeline") or "", default=5)
+    return clamp_clip_duration(active_video_capacity().default_sec)
 
 
 def collect_clip_scene_image(
@@ -527,7 +554,7 @@ def build_clip_prompt(
             node["config"] = cfg
     except Exception:  # noqa: BLE001
         pass
-    duration = parse_shot_duration_seconds((shot or {}).get("timeline") or "", default=5)
+    duration = video_duration_seconds(ctx, node)
     focus_names = ""
     cfg_names = [str(x).strip() for x in (cfg.get("cast_names") or []) if str(x).strip()]
     if cfg_names:
@@ -956,7 +983,7 @@ class ClipNodeHandler:
         if scene_chain:
             cfg = stamp_scene_last_frame_chain(cfg, scene_chain)
             node["config"] = cfg
-        duration = shot_duration_seconds(ctx, node)
+        duration = video_duration_seconds(ctx, node)
         prompt = build_clip_prompt(ctx.graph, node, ctx)
         payload = connected_payload_clause(
             edge_text_inputs(ctx, node, exclude_roles=frozenset({NODE_ROLE_STORYBOARD})),

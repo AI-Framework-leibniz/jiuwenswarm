@@ -75,12 +75,12 @@ def test_director_chat_context_carries_bootstrap_decisions() -> None:
         "spatial_lock": {"setting": "alley"},
         "style_lock": {"look": "noir rain", "medium": "live action"},
         "video_settings": {"aspect_ratio": "9:16", "resolution": "720P"},
-        "image_settings": {"aspect_ratio": "1:1"},
+        "image_settings": {"aspect_ratio": "1:1", "resolution": "1K"},
         "language_lock": "zh",
     }
     assert director_chat.director_chat_context(_graph()) == {
         "video_settings": {"aspect_ratio": "16:9", "resolution": "1080P"},
-        "image_settings": {"aspect_ratio": "16:9"},
+        "image_settings": {"aspect_ratio": "16:9", "resolution": "1K"},
     }
 
 
@@ -104,7 +104,7 @@ async def test_plan_chat_turn_speaks_as_director_with_context(monkeypatch) -> No
     assert snapshot["director_context"] == {
         "director_skill": "director rules",
         "video_settings": {"aspect_ratio": "16:9", "resolution": "1080P"},
-        "image_settings": {"aspect_ratio": "16:9"},
+        "image_settings": {"aspect_ratio": "16:9", "resolution": "1K"},
         "language_lock": "zh",
     }
     assert snapshot["user"] == "有几个镜头？"
@@ -176,3 +176,44 @@ async def test_director_chat_onboards_user_nodes_only_after_changes(monkeypatch,
     else:
         assert "director_user_node_onboard" not in metadata
         assert "kind" not in added["config"]
+
+
+def _clip_graph() -> dict:
+    graph = _graph()
+    for index in (1, 2):
+        graph["nodes"].append(
+            {
+                "id": f"n_clip_{index}",
+                "type": "video",
+                "label": f"Video {index}",
+                "config": {
+                    "role": "video",
+                    "pipeline": "clip",
+                    "clip_index": index,
+                    "timeline": "0-5s",
+                    "duration_sec": 7,
+                },
+                "layout": {"x": 400, "y": 240 * index, "width": 280, "height": 160},
+            }
+        )
+    return graph
+
+
+def test_retiming_a_clip_drops_its_manual_length_unless_the_director_sets_one() -> None:
+    plan = {
+        "patch": {
+            "upsert_nodes": [
+                {"id": "n_clip_1", "config": {"timeline": "0-9s"}},
+                {"id": "n_clip_2", "config": {"timeline": "0-9s", "duration_sec": 9}},
+            ]
+        }
+    }
+    patch = director_chat._merge_prompt_updates(_clip_graph(), plan)
+    configs = {node["id"]: node["config"] for node in patch["upsert_nodes"]}
+    assert "duration_sec" not in configs["n_clip_1"]
+    assert configs["n_clip_2"]["duration_sec"] == 9
+
+    untouched = director_chat._merge_prompt_updates(
+        _clip_graph(), {"patch": {"upsert_nodes": [{"id": "n_clip_1", "config": {"camera": "close"}}]}}
+    )
+    assert untouched["upsert_nodes"][0]["config"]["duration_sec"] == 7

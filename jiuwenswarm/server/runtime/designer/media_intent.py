@@ -22,6 +22,10 @@ from jiuwenswarm.server.runtime.designer.media_settings import (
     VideoSettings,
     snap_image_ratio,
 )
+from jiuwenswarm.server.runtime.designer.pipeline.image_capacity import (
+    ImageModelCapacity,
+    active_image_capacity,
+)
 from jiuwenswarm.server.runtime.designer.pipeline.model_capacity import (
     VideoModelCapacity,
     active_video_capacity,
@@ -189,7 +193,9 @@ async def extract_media_intent(prompt: str, *, timeout_sec: float = 30.0) -> Med
 
 
 def media_settings_from_intent(
-    intent: MediaIntent, capacity: VideoModelCapacity | None = None
+    intent: MediaIntent,
+    capacity: VideoModelCapacity | None = None,
+    image_capacity: ImageModelCapacity | None = None,
 ) -> tuple[VideoSettings, ImageSettings]:
     """Canvas settings for a new graph. Unstated fields take the model defaults.
 
@@ -197,8 +203,12 @@ def media_settings_from_intent(
     two settings are edited separately afterwards.
     """
     cap = capacity or active_video_capacity()
+    image_cap = image_capacity or active_image_capacity()
     video = VideoSettings(
         aspect_ratio=snap_ratio(intent.aspect_ratio, cap) if intent.aspect_ratio else default_ratio(cap),
         resolution=snap_resolution(intent.resolution or "", cap),
     )
-    return video, ImageSettings(aspect_ratio=snap_image_ratio(video.aspect_ratio))
+    return video, ImageSettings(
+        aspect_ratio=snap_image_ratio(video.aspect_ratio),
+        resolution=image_cap.default_resolution,
+    )

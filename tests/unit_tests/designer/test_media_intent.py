@@ -13,6 +13,8 @@ from jiuwenswarm.server.runtime.designer.media_intent import (
     media_settings_from_intent,
     regex_media_intent,
 )
+from jiuwenswarm.agents.harness.common.tools.gen_toolkits import MODELARK
+from jiuwenswarm.server.runtime.designer.pipeline.image_capacity import image_capacity_for
 from jiuwenswarm.server.runtime.designer.pipeline.model_capacity import capacity_for_model
 
 
@@ -71,20 +73,18 @@ async def test_model_failure_falls_back_to_patterns(monkeypatch: pytest.MonkeyPa
 
 def test_settings_from_intent_use_model_values_and_defaults() -> None:
     wan = capacity_for_model("wan3.0-video")
-    video, image = media_settings_from_intent(MediaIntent(), wan)
+    seedream = image_capacity_for("seedream-5-0-260128", MODELARK)
+    video, image = media_settings_from_intent(MediaIntent(), wan, seedream)
     assert video.as_dict() == {"aspect_ratio": "16:9", "resolution": "1080P"}
-    assert image.aspect_ratio == "16:9"
+    assert image.as_dict() == {"aspect_ratio": "16:9", "resolution": "2K"}
 
     video, image = media_settings_from_intent(
-        MediaIntent(aspect_ratio="21:9", resolution="4k", film_duration_sec=120), wan
+        MediaIntent(aspect_ratio="21:9", resolution="4k", film_duration_sec=120), wan, seedream
     )
-    assert video.as_dict() == {"aspect_ratio": "16:9", "resolution": "1080P"}
-    assert image.aspect_ratio == "16:9"
+    assert video.as_dict() == {"aspect_ratio": "21:9", "resolution": "1080P"}
+    assert image.as_dict() == {"aspect_ratio": "16:9", "resolution": "2K"}
 
-    seedance = capacity_for_model("doubao-seedance-2-5-260628")
-    video, image = media_settings_from_intent(MediaIntent(aspect_ratio="21:9", resolution="480p"), seedance)
-    assert video.as_dict() == {"aspect_ratio": "21:9", "resolution": "480p"}
-    assert image.aspect_ratio == "21:9"
-
-    video, image = media_settings_from_intent(MediaIntent(aspect_ratio="9:16"), seedance)
-    assert (video.aspect_ratio, image.aspect_ratio) == ("9:16", "9:16")
+    seedance_fast = capacity_for_model("dreamina-seedance-2-0-fast-260128")
+    video, image = media_settings_from_intent(MediaIntent(aspect_ratio="9:16", resolution="1080p"), seedance_fast)
+    assert video.as_dict() == {"aspect_ratio": "9:16", "resolution": "720P"}
+    assert image.aspect_ratio == "9:16"
