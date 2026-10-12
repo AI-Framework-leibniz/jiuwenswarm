@@ -159,7 +159,8 @@ def graph_workspace_dir(graph: DesignerExecutionGraph | None = None) -> Path:
 
     A selected project uses that project's own directory, the same folder a
     work session would use. No project uses the per-session workspace under
-    ``agent/workspace/projects/<session_id>``.
+    ``agent/workspace/projects/<session_id>``. A canvas without a session id
+    does not use that shared projects root.
     """
     metadata = graph.get("metadata") if isinstance(graph, dict) and isinstance(graph.get("metadata"), dict) else {}
     project_id = str(graph.get("project_id") or "").strip() if isinstance(graph, dict) else ""
@@ -172,8 +173,8 @@ def graph_workspace_dir(graph: DesignerExecutionGraph | None = None) -> Path:
         project_dir = str(project.project_dir or "").strip()
     if project_dir:
         directory = Path(project_dir).expanduser().resolve()
-    elif isinstance(graph, dict) and (session_id or is_default_project_id(project_id)):
-        directory = get_default_project_session_workspace_dir(session_id or None)
+    elif isinstance(graph, dict) and session_id:
+        directory = get_default_project_session_workspace_dir(session_id)
     else:
         directory = get_agent_workspace_dir()
     directory.mkdir(parents=True, exist_ok=True)

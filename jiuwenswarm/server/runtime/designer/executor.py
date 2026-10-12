@@ -875,6 +875,7 @@ class GraphExecutor:
             graph["graph_id"],
             run_id,
             project_id=graph["project_id"],
+            session_id=str((graph.get("metadata") or {}).get("session_id") or ""),
             meta={"scope_node_ids": list(scope)},
         )
         try:

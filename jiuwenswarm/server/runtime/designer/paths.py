@@ -62,22 +62,36 @@ def design_trajectory_dir() -> Path:
     return get_user_workspace_dir() / ".trace" / "designer"
 
 
+def trajectory_file_stem(raw: str) -> str:
+    """Safe file stem for one trajectory id."""
+    text = str(raw).strip()
+    if not text:
+        raise ValueError("trajectory key is empty")
+    if _SAFE_TRAJECTORY_KEY.fullmatch(text):
+        return text
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def design_trajectory_key(
     project_id: str,
     graph_id: str = "",
-    session_id: str | None = None,
+    session_id: str = "",
 ) -> str:
     """File stem for one design canvas.
 
-    A session owns one canvas, so its id is the trajectory key. Runs recorded
-    before sessions still use the required project id, including ``default``.
-    ``graph_id`` is accepted so older call sites keep working.
+    The session id is required. A missing session is not replaced with the
+    project id. ``project_id`` and ``graph_id`` stay in the signature so older
+    call sites keep working.
     """
-    del graph_id
-    raw = str(session_id or "").strip() or str(project_id).strip()
-    if _SAFE_TRAJECTORY_KEY.fullmatch(raw):
-        return raw
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    del project_id, graph_id
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise ValueError("session_id is required")
+    return trajectory_file_stem(session_id)
+
+
+def design_project_trajectory_key(project_id: str) -> str:
+    """File stem used by trajectory files written before sessions existed."""
+    return trajectory_file_stem(project_id)
 
 
 def design_otlp_trajectory_path(key: str) -> Path:

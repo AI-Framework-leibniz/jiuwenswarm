@@ -34,6 +34,7 @@ from jiuwenswarm.observability.config import (
 )
 from jiuwenswarm.server.runtime.designer.paths import (
     design_otlp_trajectory_path,
+    design_project_trajectory_key,
     design_record_trajectory_path,
     design_trajectory_dir,
     design_trajectory_key,
@@ -468,25 +469,34 @@ def begin_trajectory(
     run_id: str,
     *,
     project_id: str,
-    session_id: str | None = None,
+    session_id: str,
     meta: dict[str, Any] | None = None,
     settings: TrajectoryStoreSettings | None = None,
 ) -> TrajectoryRecorder:
+    resolved_session = session_id.strip() if isinstance(session_id, str) else ""
+    if not resolved_session:
+        logger.info("Designer trajectory skipped because session_id is required")
+        return TrajectoryRecorder(
+            graph_id,
+            run_id,
+            project_id=project_id,
+            session_id="",
+        )
     resolved = settings or load_trajectory_store_settings()
     if not resolved.enabled:
         return TrajectoryRecorder(
             graph_id,
             run_id,
             project_id=project_id,
-            session_id=str(session_id or ""),
+            session_id=resolved_session,
         )
-    key = design_trajectory_key(project_id, graph_id, session_id)
+    key = design_trajectory_key(project_id, graph_id, resolved_session)
     _prune_expired(design_trajectory_dir(), resolved.retention_days)
     rec = TrajectoryRecorder(
         graph_id,
         run_id,
         project_id=project_id,
-        session_id=str(session_id or ""),
+        session_id=resolved_session,
         key=key,
         otlp_path=design_otlp_trajectory_path(key),
         design_path=design_record_trajectory_path(key),
@@ -655,11 +665,12 @@ def read_canvas_trajectory(
     this canvas.
     """
     keys: list[str] = []
-    if str(session_id or "").strip():
+    if isinstance(session_id, str) and session_id.strip():
         keys.append(design_trajectory_key(project_id, graph_id, session_id))
-    legacy = design_trajectory_key(project_id, graph_id, None)
-    if legacy not in keys:
-        keys.append(legacy)
+    if str(project_id or "").strip():
+        legacy = design_project_trajectory_key(project_id)
+        if legacy not in keys:
+            keys.append(legacy)
     events: list[dict[str, Any]] = []
     seen: set[tuple[str, str, int, str]] = set()
     for key in keys:

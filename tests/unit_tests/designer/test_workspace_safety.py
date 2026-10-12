@@ -397,7 +397,7 @@ async def test_generated_image_without_a_project_uses_the_session_workspace(tmp_
     monkeypatch.setattr(
         common,
         "get_default_project_session_workspace_dir",
-        lambda session_id=None: session_dir,
+        lambda session_id: session_dir,
     )
     seen: dict[str, str | None] = {}
 
