@@ -131,7 +131,7 @@ def missing_shot_tombstones(
 
 
 def _collapse_blank_lines(text: str) -> str:
-    text = re.sub(r"[ \s]+\n", "\n", text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
