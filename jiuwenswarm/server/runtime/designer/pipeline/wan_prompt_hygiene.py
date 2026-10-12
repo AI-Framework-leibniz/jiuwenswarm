@@ -113,11 +113,11 @@ def positive_continuity_clause(
     action = str(cfg.get("clip_action") or cfg.get("character_action") or "").strip()
     camera = str(cfg.get("camera") or "").strip()
     speech = str(cfg.get("speech_line") or "").strip()
-    lines = ["CONTINUITY STATE (this clip continues the same film):"]
+    lines = ["THIS STORYBOARD ROW LOCKS:"]
     if who_now:
-        lines.append(f"People in frame now: {who_now}.")
+        lines.append(f"People in frame: {who_now}.")
     if holds:
-        lines.append("SEAT HOLDS: " + "; ".join(holds[:8]) + ".")
+        lines.append("SEAT LOCKS: " + "; ".join(holds[:8]) + ".")
     if action:
         lines.append(f"This window: {action}.")
     if camera:
@@ -125,7 +125,7 @@ def positive_continuity_clause(
     if speech:
         lines.append(f"Spoken words in this window: {speech}.")
     else:
-        lines.append("This window has no new spoken line.")
+        lines.append("This row has no spoken line.")
     lines.append(
         "Same faces and wardrobe as the character sheets. "
         "Same room as the scene specs. Match the film STYLE LOCK."

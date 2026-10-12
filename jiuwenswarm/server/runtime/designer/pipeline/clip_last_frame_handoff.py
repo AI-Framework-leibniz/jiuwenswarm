@@ -275,16 +275,14 @@ def speech_already_delivered(this_speech: str, prior_speech: str) -> bool:
 
 
 def scrub_restated_speech(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Clear this clip's speech fields when they duplicate previous_clip_speech."""
+    """Honor forbidden_speech already on this clip. Do not read a previous clip."""
     cfg = dict(cfg or {})
-    prior = str(cfg.get("previous_clip_speech") or "").strip()
+    cfg.pop("previous_clip_speech", None)
     forbid = [
         str(x).strip()
         for x in (cfg.get("forbidden_speech") or [])
         if str(x).strip()
     ]
-    if prior and prior not in forbid:
-        forbid.append(prior)
 
     this_line = str(cfg.get("speech_line") or "").strip()
     by_char = (
@@ -314,37 +312,16 @@ def scrub_restated_speech(cfg: dict[str, Any]) -> dict[str, Any]:
 
     if cleared:
         cfg["speech_continuation_only"] = True
-        done = [str(x) for x in (cfg.get("already_done") or []) if str(x).strip()]
-        note = f"prior dialogue already spoken: {prior[:120]}" if prior else "prior dialogue already spoken"
-        if note not in done:
-            done.append(note)
-        cfg["already_done"] = done
+        # Do not append prior-speech notes into already_done (that feeds prompt preambles).
+        cfg.pop("already_done", None)
     cfg["forbidden_speech"] = forbid[:8]
     return cfg
 
 
 def prior_speech_lock_clause(cfg: dict[str, Any] | None) -> str:
-    cfg = cfg if isinstance(cfg, dict) else {}
-    prior = str(cfg.get("previous_clip_speech") or "").strip()
-    forbid = [str(x).strip() for x in (cfg.get("forbidden_speech") or []) if str(x).strip()]
-    lines: list[str] = []
-    if prior:
-        lines.append(
-            f"PRIOR SPEECH ALREADY DELIVERED (do NOT restate / restart): \"{prior[:220]}\". "
-            "Continue only if this shot has NEW words; otherwise keep mouths matching "
-            "ambient / silent continuation — never repeat the previous line."
-        )
-    elif forbid:
-        lines.append(
-            "PRIOR SPEECH ALREADY DELIVERED (do NOT restate): "
-            + "; ".join(f'"{x[:120]}"' for x in forbid[:4])
-        )
-    if bool(cfg.get("speech_continuation_only")) and not str(cfg.get("speech_line") or "").strip():
-        lines.append(
-            "SPEECH LOCK this shot: no new dialogue line — prior line is finished; "
-            "do not invent a repeat."
-        )
-    return "\n".join(lines)
+    """This clip does not receive another clip's speech."""
+    del cfg
+    return ""
 
 
 def last_frame_continuity_clause(
@@ -472,58 +449,8 @@ def resolve_gated_last_frame_chain(
     ctx: Any = None,
     max_frames: int = MAX_SCENE_LAST_FRAME_REFS,
 ) -> list[dict[str, Any]]:
-    """Resolve same-scene chain; empty when gate forbids continuity."""
-    cfg = cfg if isinstance(cfg, dict) else {}
-    this_idx = int(cfg.get("clip_index") or 0) or 0
-    # Hard guard: first clip of a film/shot never attaches prior endings.
-    if this_idx <= 1:
-        return []
-    if bool(cfg.get("forbid_prior_last_frame")) or bool(cfg.get("hard_cut")):
-        return []
-    if cfg.get("use_prior_last_frame") is False:
-        return []
-    chain = collect_same_scene_last_frame_chain(
-        cfg, graph=graph, ctx=ctx, max_frames=max_frames
-    )
-    if chain:
-        return chain
-    # Stamped chain on this clip when graph rebuild found nothing yet.
-    stamped_raw = (
-        cfg.get("scene_last_frame_chain")
-        if isinstance(cfg.get("scene_last_frame_chain"), list)
-        else []
-    )
-    stamped: list[dict[str, Any]] = []
-    for item in stamped_raw:
-        if not isinstance(item, dict):
-            continue
-        path = Path(str(item.get("path") or "").strip())
-        if path.is_file():
-            stamped.append(
-                {
-                    "clip_index": int(item.get("clip_index") or 0) or 0,
-                    "node_id": str(item.get("node_id") or ""),
-                    "path": str(path.resolve()),
-                    "action": str(item.get("action") or "")[:140],
-                    "speech": str(item.get("speech") or "")[:160],
-                    "setting_id": _setting_id(cfg),
-                }
-            )
-    if stamped:
-        cap = max(1, int(max_frames or MAX_SCENE_LAST_FRAME_REFS))
-        return stamped[-cap:]
-    one = Path(str(cfg.get("previous_clip_last_frame") or "").strip())
-    if one.is_file() and bool(cfg.get("use_prior_last_frame")):
-        return [
-            {
-                "clip_index": int(cfg.get("previous_clip_clip_index") or 0) or 0,
-                "node_id": str(cfg.get("previous_clip_node_id") or ""),
-                "path": str(one.resolve()),
-                "action": str(cfg.get("previous_clip_action") or "")[:140],
-                "speech": str(cfg.get("previous_clip_speech") or "")[:160],
-                "setting_id": _setting_id(cfg),
-            }
-        ]
+    """Previous clip frames are not references for this clip."""
+    del cfg, graph, ctx, max_frames
     return []
 
 
@@ -571,59 +498,9 @@ def stamp_scene_last_frame_chain(
 
 
 def chain_prior_speech_across_clips(graph: dict[str, Any]) -> list[str]:
-    """Stamp previous_clip_speech onto consecutive clips and scrub restatements.
-
-    Call after Director/storyboard stamps speech_line onto clip configs so shot N+1
-    does not restate dialogue already assigned to shot N.
-    """
-    notes: list[str] = []
-    clips: list[tuple[int, dict[str, Any]]] = []
-    for node in graph.get("nodes") or []:
-        if not isinstance(node, dict):
-            continue
-        cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
-        role = str(cfg.get("role") or "")
-        nid = str(node.get("id") or "")
-        if role not in {"clip", "video"} and not nid.startswith("n_clip_"):
-            continue
-        idx = int(cfg.get("clip_index") or 0) or 0
-        if idx <= 0:
-            continue
-        clips.append((idx, node))
-    clips.sort(key=lambda t: t[0])
-    prev_speech = ""
-    prev_id = ""
-    prev_idx = 0
-    for idx, node in clips:
-        cfg = dict(node.get("config") or {})
-        if prev_speech:
-            cfg["previous_clip_speech"] = prev_speech[:280]
-            forbid = [str(x) for x in (cfg.get("forbidden_speech") or []) if str(x)]
-            if prev_speech not in forbid:
-                forbid.append(prev_speech)
-            cfg["forbidden_speech"] = forbid[:8]
-            if prev_id and not str(cfg.get("previous_clip_node_id") or "").strip():
-                cfg["previous_clip_node_id"] = prev_id
-                cfg["previous_clip_clip_index"] = prev_idx
-            before = str(cfg.get("speech_line") or "").strip()
-            cfg = scrub_restated_speech(cfg)
-            after = str(cfg.get("speech_line") or "").strip()
-            if before and not after:
-                notes.append(f"{node.get('id')}: scrubbed restated speech from shot {prev_idx}")
-            else:
-                notes.append(f"{node.get('id')}: prior speech forbid from shot {prev_idx}")
-        node["config"] = cfg
-        # Carry delivered (or continued) speech forward for the next clip.
-        this_speech = str(cfg.get("speech_line") or "").strip()
-        if this_speech:
-            prev_speech = this_speech
-        elif str(cfg.get("previous_clip_speech") or "").strip():
-            prev_speech = str(cfg.get("previous_clip_speech") or "").strip()
-        else:
-            prev_speech = ""
-        prev_id = str(node.get("id") or "")
-        prev_idx = idx
-    return notes
+    """Do not copy one clip's speech onto the next. Each row keeps its storyboard line."""
+    del graph
+    return []
 
 
 def stamp_last_frame_onto_next_clips(
@@ -634,89 +511,22 @@ def stamp_last_frame_onto_next_clips(
     clip_index: int,
     speech_line: str = "",
 ) -> list[str]:
-    """After clip N completes: stamp last-frame path + scene chain + speech onto N+1."""
+    """Save this clip's last frame on this clip only. Later clips are not updated."""
+    del speech_line
     notes: list[str] = []
     frame = str(last_frame_path or "").strip()
     if not frame:
         return notes
-    by_id = {
-        str(n.get("id") or ""): n
-        for n in (graph.get("nodes") or [])
-        if isinstance(n, dict) and n.get("id")
-    }
-    src = by_id.get(str(completed_clip_id or ""))
-    src_cfg = src.get("config") if isinstance(src, dict) else {}
-    src_cfg = dict(src_cfg) if isinstance(src_cfg, dict) else {}
-    speech = (speech_line or str(src_cfg.get("speech_line") or "")).strip()
-    src_cfg["last_frame_path"] = frame
-    if src is not None:
-        src["config"] = src_cfg
-
-    # Build same-scene history ending images on the completed clip, then extend for next.
-    prior_chain = [
-        c
-        for c in (src_cfg.get("scene_last_frame_chain") or [])
-        if isinstance(c, dict) and str(c.get("path") or "").strip()
-    ]
-    this_entry = {
-        "clip_index": int(clip_index or 0),
-        "node_id": str(completed_clip_id or ""),
-        "path": frame,
-        "action": _short_beat(src_cfg),
-        "speech": speech[:120],
-        "setting_id": _setting_id(src_cfg),
-    }
-    # Avoid duplicate tip if re-stamping.
-    if not prior_chain or str(prior_chain[-1].get("path") or "") != frame:
-        prior_chain = [*prior_chain, this_entry]
-    src_cfg = stamp_scene_last_frame_chain(src_cfg, prior_chain)
-    if src is not None:
-        src["config"] = src_cfg
-        notes.append(f"{completed_clip_id}: saved last_frame_path + scene chain ({len(prior_chain)})")
-
     for node in graph.get("nodes") or []:
         if not isinstance(node, dict):
             continue
+        if str(node.get("id") or "") != str(completed_clip_id or ""):
+            continue
         cfg = dict(node.get("config") or {})
-        if str(cfg.get("role") or "") not in {"clip", "video"} and not str(
-            node.get("id") or ""
-        ).startswith("n_clip_"):
-            continue
-        idx = int(cfg.get("clip_index") or 0) or 0
-        nid = str(node.get("id") or "")
-        if idx == int(clip_index or 0) or nid == completed_clip_id:
-            continue
-        is_next = idx == int(clip_index or 0) + 1
-        cont = str(cfg.get("continuity_clip_node_id") or "") == str(completed_clip_id)
-        if not (is_next or cont):
-            continue
-        if should_keep_scene_frame_chain(later_cfg=cfg, earlier_cfg=src_cfg):
-            cfg = stamp_scene_last_frame_chain(cfg, prior_chain)
-            # Immediate prior primary: prefer cast-overlap gate for use flag,
-            # but keep chain for localization even when cast diverged.
-            if should_use_prior_last_frame(this_cfg=cfg, prev_cfg=src_cfg):
-                cfg["use_prior_last_frame"] = True
-            else:
-                # History-only: still attach chain (exits), but mark soft.
-                cfg["use_prior_last_frame"] = True
-                cfg["prior_last_frame_history_only"] = True
-            notes.append(
-                f"{nid}: gated scene last-frame chain ON "
-                f"({len(prior_chain)} images) from {completed_clip_id}"
-            )
-        else:
-            cfg.pop("previous_clip_last_frame", None)
-            cfg.pop("scene_last_frame_chain", None)
-            cfg["use_prior_last_frame"] = False
-            notes.append(f"{nid}: gated prior last-frame OFF (hard cut / setting)")
-        if speech:
-            cfg["previous_clip_speech"] = speech[:280]
-            forbid = [str(x) for x in (cfg.get("forbidden_speech") or []) if str(x)]
-            if speech not in forbid:
-                forbid.append(speech)
-            cfg["forbidden_speech"] = forbid[:8]
-            cfg = scrub_restated_speech(cfg)
+        cfg["last_frame_path"] = frame
         node["config"] = cfg
+        notes.append(f"{completed_clip_id}: saved last_frame_path on this clip only")
+        break
     return notes
 
 
@@ -726,49 +536,6 @@ def resolve_gated_last_frame_path(
     graph: dict[str, Any] | None = None,
     ctx: Any = None,
 ) -> Path | None:
-    """Return immediate prior last-frame path when gate allows and file exists."""
-    chain = resolve_gated_last_frame_chain(cfg, graph=graph, ctx=ctx, max_frames=1)
-    if chain:
-        path = Path(str(chain[-1].get("path") or "").strip())
-        if path.is_file():
-            return path.resolve()
-    cfg = cfg if isinstance(cfg, dict) else {}
-    path = Path(str(cfg.get("previous_clip_last_frame") or "").strip())
-    prev_id = str(cfg.get("continuity_clip_node_id") or cfg.get("previous_clip_node_id") or "").strip()
-    prev_cfg: dict[str, Any] = {}
-    graph = graph if isinstance(graph, dict) else {}
-    if prev_id:
-        for n in graph.get("nodes") or []:
-            if isinstance(n, dict) and str(n.get("id") or "") == prev_id:
-                prev_cfg = n.get("config") if isinstance(n.get("config"), dict) else {}
-                break
-        if (not path.is_file()) and isinstance(prev_cfg, dict):
-            alt = str(prev_cfg.get("last_frame_path") or "").strip()
-            if alt:
-                path = Path(alt)
-    gated = should_keep_scene_frame_chain(later_cfg=cfg, earlier_cfg=prev_cfg) or bool(
-        cfg.get("use_prior_last_frame")
-    )
-    if cfg.get("use_prior_last_frame") is False:
-        return None
-    if not gated and not bool(cfg.get("use_prior_last_frame")):
-        return None
-    if path.is_file():
-        return path.resolve()
-    if ctx is not None and prev_id:
-        try:
-            from jiuwenswarm.server.runtime.designer.handlers.common import (
-                node_output_refs,
-                path_from_uri,
-            )
-
-            for ref in node_output_refs(ctx, prev_id):
-                uri = str((ref or {}).get("uri") or "")
-                vp = path_from_uri(uri)
-                if vp is not None and vp.is_file() and vp.suffix.lower() in {".mp4", ".mov", ".webm"}:
-                    extracted = extract_last_frame(vp)
-                    if extracted is not None:
-                        return extracted
-        except Exception:  # noqa: BLE001
-            logger.debug("resolve prior last frame from ctx failed", exc_info=True)
+    """Previous clip frames are not attached to this clip."""
+    del cfg, graph, ctx
     return None

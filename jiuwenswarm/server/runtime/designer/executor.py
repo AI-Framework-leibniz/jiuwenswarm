@@ -245,7 +245,6 @@ class GraphExecutor:
                 if sid and isinstance(locks0.get(sid), dict):
                     specs = locks0[sid]
             arch = architecture_clause_from_bible(specs)
-            next_ids = {f"n_clip_{clip_index + 1}"}
             for n in live.get("nodes") or []:
                 if not isinstance(n, dict):
                     continue
@@ -253,29 +252,16 @@ class GraphExecutor:
                 if not nid or nid == node_id:
                     continue
                 c = dict(n.get("config") or {})
-                needs = {
-                    str(c.get("scene_prompt_handoff_from") or "").strip(),
-                }
-                if node_id not in needs and nid not in next_ids:
+                # Scene nodes may name this clip as their handoff source.
+                # A later clip never receives this clip's text, speech, or locks.
+                if str(c.get("scene_prompt_handoff_from") or "").strip() != node_id:
                     continue
                 changed = False
                 if arch and not str(c.get("scene_architecture_clause") or "").strip():
                     c["scene_architecture_clause"] = arch
                     changed = True
-                if node_id in needs and arch and not str(c.get("scene_master_prompt") or "").strip():
+                if arch and not str(c.get("scene_master_prompt") or "").strip():
                     c["scene_master_prompt"] = arch
-                    changed = True
-                # Consecutive prior stamp — always overwrite for N→N+1 (fixes parallel clip race).
-                if nid in next_ids:
-                    action_snip = str(
-                        cfg.get("clip_action") or cfg.get("character_action") or ""
-                    ).strip()
-                    if not action_snip:
-                        action_snip = text
-                    c["previous_clip_action"] = action_snip
-                    c["previous_clip_node_id"] = node_id
-                    # Soft-dep readiness; full prior text for the next clip's context.
-                    c["previous_clip_prompt"] = text
                     changed = True
                 if changed:
                     n["config"] = c
@@ -1866,12 +1852,10 @@ class GraphExecutor:
             return
         role = node_pipeline(src)
         is_scene = role == NODE_ROLE_SCENE or src_id.startswith("n_scene_")
-        is_clip = role == NODE_ROLE_CLIP
-        if not is_scene and not is_clip:
+        # Architecture handoff only from scene nodes — never from a prior clip.
+        if not is_scene:
             return
         scfg = src.get("config") if isinstance(src.get("config"), dict) else {}
-        if is_clip and not bool(scfg.get("is_scene_master")):
-            return
         setting_id = str(scfg.get("setting_id") or "").strip()
         if not setting_id:
             return
@@ -1887,9 +1871,9 @@ class GraphExecutor:
         )
 
         arch = architecture_clause_from_bible(specs)
-        gen_src = dict(scfg.get("generate") or {}) if isinstance(scfg.get("generate"), dict) else {}
+        # Prefer structured scene specs / architecture — not a prior video prompt body.
         master_prompt = str(
-            scfg.get("scene_master_prompt") or gen_src.get("prompt") or arch or ""
+            scfg.get("scene_master_prompt") or arch or ""
         ).strip()
         if not arch and not specs and not master_prompt:
             return
@@ -1907,35 +1891,21 @@ class GraphExecutor:
             if target_role == NODE_ROLE_CLIP and bool(cfg.get("is_scene_master")):
                 continue
             cfg["scene_prompt_handoff_from"] = src_id
-            if is_scene:
-                cfg["master_scene_node_id"] = src_id
-                cfg["scene_node_id"] = cfg.get("scene_node_id") or src_id
+            cfg["master_scene_node_id"] = src_id
+            cfg["scene_node_id"] = cfg.get("scene_node_id") or src_id
             if specs:
                 cfg["scene_specs"] = dict(specs)
             if arch or master_prompt:
                 cfg["scene_architecture_clause"] = arch or master_prompt
                 cfg["scene_master_prompt"] = master_prompt or arch
-            gen2 = dict(cfg.get("generate") or {}) if isinstance(cfg.get("generate"), dict) else {}
-            prompt = str(gen2.get("prompt") or "")
-            marker = "SCENE PROMPT HANDOFF"
-            handoff_arch = arch or master_prompt
-            if marker not in prompt and handoff_arch:
-                handoff_bit = (
-                    f"{marker} from {src_id} (same setting `{setting_id}`): "
-                    f"{handoff_arch} Change ONLY camera view + on-screen cast/actions for This shot."
-                )
-                gen2["prompt"] = (prompt + "\n" + handoff_bit).strip()
-                cfg["generate"] = gen2
+            # Do not append SCENE PROMPT HANDOFF prose into the video prompt body;
+            # scene_specs / architecture clause on cfg are the locks.
             irefs = dict(cfg.get("identity_refs") or {})
             irefs["scene_prompt_handoff_from"] = src_id
-            if is_scene:
-                irefs["master_scene_node_id"] = src_id
-                irefs["scene_node_id"] = irefs.get("scene_node_id") or src_id
-                if specs:
-                    irefs["scene_specs"] = dict(specs)
-            else:
-                irefs["clip_strategy"] = "compose_from_character_specs"
-                cfg["clip_strategy"] = "compose_from_character_specs"
+            irefs["master_scene_node_id"] = src_id
+            irefs["scene_node_id"] = irefs.get("scene_node_id") or src_id
+            if specs:
+                irefs["scene_specs"] = dict(specs)
             cfg["identity_refs"] = irefs
             node["config"] = cfg
             changed = True
@@ -2378,23 +2348,6 @@ class GraphExecutor:
                             c["clip_prompt_preview"] = approved
                         n["config"] = c
                         break
-                    if node_pipeline(node) == NODE_ROLE_CLIP and clip_index >= 1:
-                        next_clip = f"n_clip_{clip_index + 1}"
-                        action_snip = str(
-                            cfg_done.get("clip_action")
-                            or cfg_done.get("character_action")
-                            or ""
-                        ).strip() or approved
-                        for n in live_graph.get("nodes") or []:
-                            nid = str(n.get("id") or "")
-                            if nid != next_clip:
-                                continue
-                            c = dict(n.get("config") or {})
-                            # Always overwrite consecutive stamp (parallel clip race fix).
-                            c["previous_clip_action"] = action_snip
-                            c["previous_clip_prompt"] = approved
-                            c["previous_clip_node_id"] = node_id
-                            n["config"] = c
                     if node_pipeline(node) == NODE_ROLE_CLIP and clip_index >= 1:
                         from jiuwenswarm.server.runtime.designer.pipeline.clip_prompt_handoff import (
                             stamp_wan_prompt_handoff,

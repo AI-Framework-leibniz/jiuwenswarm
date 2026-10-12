@@ -1253,23 +1253,8 @@ def build_smart_video_graph(
         clip_inputs = list(dict.fromkeys([x for x in clip_inputs if x]))
         y = 40 + (idx - 1) * 160
         occupancy = shot.get("occupancy") if isinstance(shot.get("occupancy"), dict) else {}
-        already_done = [
-            str(x)
-            for x in (shot.get("already_done") or [])
-            if str(x).strip()
-        ]
-        # First shot of a setting must not inherit prior-room already_done notes.
-        if not prev_shot_by_setting.get(setting_id):
-            already_done = []
-        elif setting_id:
-            # Drop notes that clearly name a different setting_id.
-            filtered: list[str] = []
-            for note in already_done:
-                low = note.lower()
-                if "setting=" in low and f"setting={setting_id.lower()}" not in low:
-                    continue
-                filtered.append(note)
-            already_done = filtered
+        # Prior-shot already_done is not a this-row lock — leave empty.
+        already_done: list[str] = []
         scene_specs = (
             shot.get("scene_specs")
             if isinstance(shot.get("scene_specs"), dict)
@@ -1349,8 +1334,8 @@ def build_smart_video_graph(
         )
         if not first_of_setting:
             layout_bits += (
-                f"CONTINUATION of setting {setting_id}: same room, same faces, same wardrobe. "
-                "This window continues the story. "
+                f"Setting {setting_id}: same room, faces, and wardrobe locks as this "
+                "storyboard row. Film this row only. "
             )
         if show_angle and view_key:
             shot_head = (
@@ -1532,10 +1517,12 @@ def build_smart_video_graph(
             "delegate": "agent",
             "director_task": (
                 f"Shot {idx}: on-screen character sheets plus scene specs {scene_nid}. "
-                "Write ONE positive story-form video prompt from THIS storyboard row "
-                "(start_state → action/camera/speech → end_state). "
-                "No LOCK banners, no negatives, no prior-shot paste. "
-                "Then call_video_model with that prompt only."
+                "Translate THIS storyboard row and its locks into ONE positive "
+                "story-form video prompt for the configured video model "
+                "(best practices). Keep action, posture (stand/sit/walk/…), spatial "
+                "places, camera, and exact speech from this row — do not invent posture "
+                "or dialogue. Do not use text, speech, frames, or locks from any previous "
+                "clip. Then call_video_model with that prompt only."
             ),
         }
         # Storyboard owns consistency — never wire prior shot as a schedule/data parent.

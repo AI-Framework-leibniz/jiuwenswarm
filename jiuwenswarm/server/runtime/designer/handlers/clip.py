@@ -507,16 +507,17 @@ def _clip_prompt_lead(
         else ""
     )
     focus = f" Feature only: {focus_names}." if focus_names else ""
-    continue_bit = (
-        "CONTINUATION: same room, same faces, same wardrobe. This window's action continues the story. "
-        if continuity or not first_of_setting
-        else "Opening of this setting: place the on-screen people into the empty room. "
+    del continuity  # prior-clip continuation framing is not used
+    place_bit = (
+        "Opening of this setting: place the on-screen people into the empty room. "
+        if first_of_setting
+        else "Film THIS storyboard row only from its locks and guidance. "
     )
     return (
         f"Create shot {clip_index} as a {duration}-second video that plays THIS "
         "storyboard shot only. "
         f"{extras}{focus} "
-        f"{continue_bit}"
+        f"{place_bit}"
         "character1/character2 are the character specs (face and wardrobe). "
         "The last image is the scene specs. "
         "Match the film STYLE LOCK. One instance per person. "
@@ -535,12 +536,10 @@ def build_clip_prompt(
     cfg = dict(cfg)
     try:
         from jiuwenswarm.server.runtime.designer.pipeline.clip_story_state import (
-            ensure_prior_clip_story_on_cfg,
+            strip_previous_clip_fields,
         )
 
-        cfg = ensure_prior_clip_story_on_cfg(
-            cfg, graph if isinstance(graph, dict) else {}
-        )
+        cfg = strip_previous_clip_fields(cfg)
         if isinstance(node, dict):
             node["config"] = cfg
     except Exception:  # noqa: BLE001
@@ -963,16 +962,16 @@ class ClipNodeHandler:
         clip_index = node_clip_index(node)
         graph = ctx.graph if isinstance(ctx.graph, dict) else {}
         cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
-        cfg = dict(cfg)
         from jiuwenswarm.server.runtime.designer.pipeline.clip_last_frame_handoff import (
             extract_last_frame,
-            resolve_gated_last_frame_chain,
             scrub_restated_speech,
             stamp_last_frame_onto_next_clips,
-            stamp_scene_last_frame_chain,
+        )
+        from jiuwenswarm.server.runtime.designer.pipeline.clip_story_state import (
+            strip_previous_clip_fields,
         )
 
-        cfg = scrub_restated_speech(cfg)
+        cfg = strip_previous_clip_fields(scrub_restated_speech(dict(cfg)))
         node["config"] = cfg
 
         refs = collect_clip_reference_images(
@@ -980,10 +979,6 @@ class ClipNodeHandler:
         )
         _IMG = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
         ref_files = [p for p in refs if p.is_file() and p.suffix.lower() in _IMG]
-        scene_chain = resolve_gated_last_frame_chain(cfg, graph=graph, ctx=ctx)
-        if scene_chain:
-            cfg = stamp_scene_last_frame_chain(cfg, scene_chain)
-            node["config"] = cfg
         duration = video_duration_seconds(ctx, node)
         prompt = build_clip_prompt(ctx.graph, node, ctx)
         payload = connected_payload_clause(

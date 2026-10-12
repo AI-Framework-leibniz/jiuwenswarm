@@ -63,14 +63,56 @@ def contact_anti_penetration_clause(*, for_clip: bool = True) -> str:
 def wan_r2v_prompt_formula() -> str:
     """Short reference-video formula shared by Wan, Seedance, and MiniMax-H3."""
     return (
-        "VIDEO PROMPT FORMULA: positive story form only — rewrite locks as narrative. "
-        "The scene is as in Image N: <place>. "
-        "<Name> from Image k, wearing <wardrobe>, <placement>, in the scene from Image N, "
+        "VIDEO PROMPT FORMULA: positive story form only — rewrite THIS storyboard row's "
+        "locks as narrative (do not invent posture, seats, or speech). "
+        "The scene is as in Image N: <place from this row>. "
+        "<Name> from Image k, wearing <this row's wardrobe>, "
+        "<this row's posture + spatial place>, in the scene from Image N, "
         "is <action from this storyboard row>. "
         "Name only on_screen / partial cast. Omit exited cast until returned. "
-        "The camera <one move>. <Speaker> says: \"<this shot's line>\". "
-        "One look phrase at the end. Never forbid lists, 'do not', examples, or sit/stand defaults."
+        "The camera <this row's move>. <Speaker> says: \"<this row's exact line or silent>\". "
+        "One look phrase from style_lock at the end. "
+        "Never forbid lists, 'do not', or worked examples."
     )
+
+
+def video_model_leaf_skill_block(*, role: str = "clip") -> str:
+    """Best-practice craft for the configured VIDEO_GEN family (instructional only)."""
+    try:
+        from jiuwenswarm.server.runtime.designer.pipeline.video_prompt_practice import (
+            active_video_family,
+        )
+        from jiuwenswarm.server.runtime.designer.audio_locks import (
+            video_gen_family_label,
+            configured_video_gen_model,
+        )
+
+        family = active_video_family()
+        label = video_gen_family_label(configured_video_gen_model())
+    except Exception:  # noqa: BLE001
+        family = "wan"
+        label = "Wan"
+    base = wan_leaf_skill_block(role=role)
+    if family == "seedance":
+        tips = (
+            f"CONFIGURED VIDEO MODEL ({label} / Seedance): use @Image N labels in attach "
+            "order; keep one clear beat and one camera move; spoken lines verbatim from "
+            "this storyboard row; posture and seats exactly as start_state / cast_actions."
+        )
+    elif family == "minimax":
+        tips = (
+            f"CONFIGURED VIDEO MODEL ({label} / MiniMax): write a short continuous story "
+            "beat for THIS row only; Image N labels in attach order; state posture and "
+            "spatial place for each on-screen person; speech_line exact; do not re-stage "
+            "another shot's action."
+        )
+    else:
+        tips = (
+            f"CONFIGURED VIDEO MODEL ({label} / Wan): Character + Action + Lines + Scene; "
+            "character1… match attach order; Image N labels; keep this row's posture, "
+            "seats, camera, and exact speech; one primary camera move."
+        )
+    return base + "\n" + tips
 
 
 def wan_reference_media_rules(*, prior_ending_count: int = 0) -> str:
@@ -105,11 +147,12 @@ def wan_leaf_skill_block(*, role: str = "clip") -> str:
             [
                 wan_r2v_prompt_formula(),
                 "Seedance uses @Image N; MiniMax/Wan use Image N. Always 'from Image k' in story form.",
-                "ORDER: (1) scene + present-cast story sentences with wardrobe/placement/visibility, "
-                "(2) THIS storyboard action + camera + speech, "
-                "(3) same-setting continue only — never across setting_id.",
+                "ORDER: (1) scene + present-cast story sentences with this row's wardrobe/"
+                "sit-or-stand/seat place, "
+                "(2) THIS storyboard action + camera + exact speech, "
+                "(3) this row only — never borrow another shot's beat.",
                 "Omit exited cast from the video call. No negatives, no worked examples.",
-                "Director keep concise faithful story-form; rewrite lock essays.",
+                "Stay faithful to the storyboard row; rewrite lock essays into story prose.",
                 "STYLE: one look phrase copied from the brief/storyboard.",
             ]
         )

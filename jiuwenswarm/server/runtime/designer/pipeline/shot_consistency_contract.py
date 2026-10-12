@@ -138,16 +138,10 @@ def enforce_speech_uniqueness(
         speech_already_delivered,
     )
 
+    del graph
     out = dict(cfg or {})
+    out.pop("previous_clip_speech", None)
     notes: list[str] = []
-    clip_index = int(out.get("clip_index") or 0) or 0
-    priors = collect_same_setting_prior_clips(
-        graph,
-        clip_index=clip_index,
-        setting_id=str(out.get("setting_id") or ""),
-        this_cfg=out,
-    )
-    out = accumulate_forbidden_speech(out, priors)
     before = str(out.get("speech_line") or "").strip()
     out = scrub_restated_speech(out)
     after = str(out.get("speech_line") or "").strip()
@@ -195,73 +189,13 @@ def merge_storyboard_consistency(
     *,
     graph: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
-    """Stamp already_done / forbidden_speech / end_state from prior storyboard rows."""
-    out = dict(cfg or {})
-    notes: list[str] = []
-    clip_index = int(out.get("clip_index") or 0) or 0
-    if clip_index <= 0:
-        return out, notes
-    priors = collect_same_setting_prior_clips(
-        graph,
-        clip_index=clip_index,
-        setting_id=str(out.get("setting_id") or ""),
-        this_cfg=out,
+    """Keep this clip's storyboard fields. Do not read any earlier clip node."""
+    del graph
+    from jiuwenswarm.server.runtime.designer.pipeline.clip_story_state import (
+        strip_previous_clip_fields,
     )
-    if not priors:
-        out, speech_notes = enforce_speech_uniqueness(out, graph=graph)
-        return out, speech_notes
 
-    done = [str(x).strip() for x in (out.get("already_done") or []) if str(x).strip()]
-    for note in storyboard_already_done_notes(priors):
-        if note not in done:
-            done.append(note)
-            notes.append("storyboard_already_done")
-    out["already_done"] = done[:16]
-
-    # Compact beat_done / pose_holds from storyboard actions (positive holds).
-    beat_done = [str(x).strip() for x in (out.get("beat_done") or []) if str(x).strip()]
-    holds = [str(x).strip() for x in (out.get("pose_holds") or []) if str(x).strip()]
-    for p in priors:
-        action = _short(str(p.get("clip_action") or ""))
-        if not action:
-            continue
-        beat_note = f"shot {p.get('clip_index')}: {action}"
-        if beat_note not in beat_done:
-            beat_done.append(beat_note)
-        # The previous action stays on already_done for the continuity check.
-        # It is not an opening hold: quoting it makes the next clip replay that tail.
-    out["beat_done"] = beat_done[:16]
-    out["pose_holds"] = holds[:8]
-
-    latest = priors[-1]
-    out["previous_clip_action"] = str(
-        out.get("previous_clip_action") or latest.get("clip_action") or ""
-    )
-    if latest.get("speech_line") and not str(out.get("previous_clip_speech") or "").strip():
-        out["previous_clip_speech"] = str(latest.get("speech_line"))
-    if not out.get("previous_clip_clip_index"):
-        out["previous_clip_clip_index"] = int(latest.get("clip_index") or 0)
-    out["previous_clip_handoff_ready"] = True
-
-    # Structured end_state for leaf/Director — never the full prior Wan body.
-    out["end_state"] = {
-        "from_clip_index": int(latest.get("clip_index") or 0),
-        "action_done": _short(str(latest.get("clip_action") or "")),
-        "speech_done": _short(str(latest.get("speech_line") or "")),
-        "camera_was": _short(str(latest.get("camera") or "")),
-        "already_done": list(out.get("already_done") or [])[:12],
-        "pose_holds": list(out.get("pose_holds") or [])[:6],
-        "seat_anchors": out.get("seat_anchors") if isinstance(out.get("seat_anchors"), dict) else {},
-        "exited_ids": [
-            str(x) for x in (out.get("exited_ids") or []) if str(x).strip()
-        ][:12],
-        "forbidden_speech": list(out.get("forbidden_speech") or [])[:8],
-    }
-    notes.append("stamped_end_state_from_storyboard")
-
-    out, speech_notes = enforce_speech_uniqueness(out, graph=graph)
-    notes.extend(speech_notes)
-    return out, notes
+    return strip_previous_clip_fields(cfg), []
 
 
 def agent_structured_continuity_block(cfg: dict[str, Any] | None) -> str:
@@ -359,9 +293,6 @@ def prompt_restates_forbidden_speech(prompt: str, cfg: dict[str, Any] | None) ->
         for x in (cfg.get("forbidden_speech") or [])
         if str(x).strip()
     ]
-    prior = str(cfg.get("previous_clip_speech") or "").strip()
-    if prior and prior not in forbid:
-        forbid.append(prior)
     # Quoted spans + bare forbidden lines.
     quotes = re.findall(r'["“”]([^"“”]{4,200})["“”]', body)
     candidates = list(quotes)
@@ -394,28 +325,7 @@ def prompt_violates_consistency(
     if speech_bad:
         reasons.append("restates_forbidden_speech")
 
-    prior_bias = False
-    try:
-        from jiuwenswarm.server.runtime.designer.pipeline.clip_scope import (
-            overlap_ratio,
-        )
-
-        prior_act = str(cfg.get("previous_clip_action") or "").strip()
-        this_act = str(cfg.get("clip_action") or "").strip()
-        if (
-            prior_act
-            and this_act
-            and overlap_ratio(prior_act, this_act) < 0.4
-            and overlap_ratio(body, prior_act) >= 0.45
-            and overlap_ratio(body, this_act) < 0.35
-        ):
-            reasons.append("films_prior_action_not_this_row")
-            prior_bias = True
-    except Exception:  # noqa: BLE001
-        pass
-
-    # Replay heuristic alone is noisy (shared names/verbs). Require speech or
-    # prior-action bias before hard-rejecting.
+    # Replay heuristic is noisy. Require this row's own forbidden speech.
     try:
         from jiuwenswarm.server.runtime.designer.pipeline.clip_prompt_handoff import (
             agent_replays_finished_events,
@@ -425,7 +335,7 @@ def prompt_violates_consistency(
             body,
             already_done=[str(x) for x in (cfg.get("already_done") or []) if str(x)],
             this_action=str(cfg.get("clip_action") or ""),
-        ) and (speech_bad or prior_bias):
+        ) and speech_bad:
             reasons.append("replays_finished_events")
     except Exception:  # noqa: BLE001
         pass

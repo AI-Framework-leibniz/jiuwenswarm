@@ -686,11 +686,11 @@ def collect_compose_reference_images(ctx: NodeExecutionContext, node: dict) -> l
     handoff_id = str(
         identity.get("scene_prompt_handoff_from")
         or cfg.get("scene_prompt_handoff_from")
-        or identity.get("scene_master_node_id")
-        or cfg.get("scene_master_node_id")
+        or identity.get("scene_node_id")
+        or cfg.get("scene_node_id")
         or ""
     ).strip()
-    # If master prompt was handed off onto this config, prefer it in the leaf prompt path.
+    # Architecture from a scene node only — never copy a prior clip's video prompt.
     if handoff_id and not str(cfg.get("scene_master_prompt") or "").strip():
         master_node = next(
             (
@@ -701,11 +701,22 @@ def collect_compose_reference_images(ctx: NodeExecutionContext, node: dict) -> l
             None,
         )
         if master_node:
-            mcfg = master_node.get("config") if isinstance(master_node.get("config"), dict) else {}
-            mgen = mcfg.get("generate") if isinstance(mcfg.get("generate"), dict) else {}
-            master_prompt = str(mgen.get("prompt") or mcfg.get("prompt") or "").strip()
-            if master_prompt:
-                cfg["scene_master_prompt"] = master_prompt[:2400]
+            from jiuwenswarm.common.schema.designer_graph import node_pipeline as _node_pipeline
+
+            mrole = str(_node_pipeline(master_node) or "").strip().lower()
+            is_scene_src = (
+                mrole == "scene"
+                or handoff_id.startswith("n_scene_")
+            )
+            if is_scene_src:
+                mcfg = master_node.get("config") if isinstance(master_node.get("config"), dict) else {}
+                master_prompt = str(
+                    mcfg.get("scene_master_prompt")
+                    or mcfg.get("scene_architecture_clause")
+                    or ""
+                ).strip()
+                if master_prompt:
+                    cfg["scene_master_prompt"] = master_prompt[:2400]
                 if isinstance(mcfg.get("scene_specs"), dict):
                     cfg["scene_specs"] = dict(mcfg["scene_specs"])
                 node["config"] = cfg

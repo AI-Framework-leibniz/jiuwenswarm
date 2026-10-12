@@ -79,12 +79,11 @@ def test_stamp_handoff_saves_own_prompt_and_does_not_stamp_next_clip():
         this_clip_index=2,
         this_action="man enters the hallway",
     )
-    assert "PREVIOUS CLIP HAD" in clause
+    assert "PREVIOUS CLIP HAD" not in clause
     assert "YOUR ASSIGNMENT" in clause
     assert "SHOT1_ONLY_IDENTITY_MARKER" not in clause
-    assert "man starts running" in clause
+    assert "man starts running" not in clause
     assert "man enters the hallway" in clause
-    assert "do not" in clause.lower() or "do NOT" in clause
 
 
 def test_audio_request_never_overrides_model(monkeypatch):

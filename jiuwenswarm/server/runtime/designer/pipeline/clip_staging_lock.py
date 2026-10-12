@@ -79,6 +79,46 @@ def build_positioning_lock(
             line += f" near={near[:80]}"
         bits.append(line)
 
+    # Hard spatial positioning (place / posture / facing for any stance).
+    positions = (
+        shot.get("spatial_anchors")
+        if isinstance(shot.get("spatial_anchors"), dict)
+        else {}
+    )
+    if not positions and isinstance(shot.get("seat_anchors"), dict):
+        positions = shot["seat_anchors"]
+    start = shot.get("start_state") if isinstance(shot.get("start_state"), dict) else {}
+    if not positions and isinstance(start.get("seats"), dict):
+        positions = start["seats"]
+    for cid, anchor in list(positions.items())[:12]:
+        key = str(cid or "").strip()
+        if not key:
+            continue
+        who = _who(key, names)
+        if isinstance(anchor, dict):
+            place = str(
+                anchor.get("place")
+                or anchor.get("zone")
+                or anchor.get("seat")
+                or anchor.get("landmark")
+                or ""
+            ).strip()
+            posture = str(anchor.get("posture") or anchor.get("pose") or "").strip()
+            facing = str(anchor.get("facing") or "").strip()
+            screen_side = str(anchor.get("screen") or "").strip()
+            parts = [f"{who}@pos"]
+            if place:
+                parts.append(f"place={place[:100]}")
+            if posture:
+                parts.append(f"posture={posture[:80]}")
+            if facing:
+                parts.append(f"facing={facing[:80]}")
+            if screen_side:
+                parts.append(f"screen={screen_side[:40]}")
+            bits.append(" ".join(parts))
+        elif str(anchor).strip():
+            bits.append(f"{who}@pos place={str(anchor).strip()[:100]}")
+
     screen = shot.get("screen_positions") or shot.get("screen_axis")
     if isinstance(screen, dict) and screen:
         bits.append(

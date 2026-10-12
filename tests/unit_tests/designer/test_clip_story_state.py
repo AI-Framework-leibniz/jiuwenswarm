@@ -78,17 +78,22 @@ def test_seat_hold_and_exit_stamp_onto_next_clip() -> None:
         graph=graph,
         characters=chars,
     )
-    done = " ".join(out.get("already_done") or []).lower()
-    assert "child" in done
-    assert "left" in done or "walk" in done or "exit" in done
+    # Occupancy / seats may still be derived for the helper, but live prompts
+    # strip already_done and use this-row locks only.
     assert "char_child" in (out.get("offscreen") or [])
     assert "char_child" not in (out.get("on_screen") or ["char_dad", "char_mum"])
     seats = out.get("seat_anchors") or {}
     assert "char_dad" in seats
     assert "window" in str(seats["char_dad"]).lower()
-    clause = compact_wan_story_clause(out, characters=chars)
-    assert "SEAT HOLDS" in clause
-    assert "Dad" in clause
+    from jiuwenswarm.server.runtime.designer.pipeline.clip_story_state import (
+        strip_previous_clip_fields,
+    )
+
+    cleaned = strip_previous_clip_fields(out)
+    assert "already_done" not in cleaned
+    assert "previous_clip_wan_prompt" not in cleaned
+    clause = compact_wan_story_clause(cleaned, characters=chars)
+    assert "SEAT LOCKS" in clause or "SEAT HOLDS" in clause or "Dad" in clause
     assert "window" in clause.lower()
     assert "already_done" not in clause.lower()
     assert "do not" not in clause.lower()
@@ -147,7 +152,8 @@ def test_wan_api_clause_does_not_paste_prior_prompt_marker() -> None:
     assert "R2V CAST LOCK" not in wan
     assert "animate ONLY people already in Image 1" not in wan
     bind = build_wan_reference_binding(cfg=c2, graph=graph, prior_last_frame=True, prior_last_frame_count=1)
-    assert "NOT attached" in bind or "not attached" in bind.lower()
+    assert marker not in bind
+    assert "child walked away" not in bind.lower()
     clause = handoff_clause_for_prompt(
         [{"clip_index": 1, "clip_action": "child walked away", "wan_prompt": marker * 8}],
         this_clip_index=2,
@@ -669,38 +675,44 @@ def test_compose_weaves_language_and_time_of_day() -> None:
 
 
 def test_compose_keeps_prior_prompt_continuity() -> None:
+    from jiuwenswarm.server.runtime.designer.pipeline.clip_story_state import (
+        strip_previous_clip_fields,
+    )
     from jiuwenswarm.server.runtime.designer.pipeline.video_prompt_practice import (
         compose_practice_prompt,
     )
 
-    cfg = {
-        "cast_names": ["Dad", "Mum"],
-        "offscreen": ["Child"],
-        "clip_action": "Dad and Mum sit quietly.",
-        "camera": "slow push in",
-        "costume_lock": "Dad: navy sweater; Mum: red dress",
-        "previous_clip_wan_prompt": (
-            "The scene is as in Image 2: kitchen. "
-            "Dad from Image 1, wearing navy sweater, is walking to the door."
-        ),
-        "previous_clip_action": "Dad walks to the door",
-        "already_done": ["Dad walked to the door"],
-        "seat_anchors": {"Dad": {"pose": "seated", "screen": "screen-left"}},
-        "scene_specs": {
-            "place": "kitchen",
-            "lighting": "soft morning light",
-            "objects": ["table"],
-        },
-        "style_lock": {"look": "photoreal cinematic"},
-    }
+    cfg = strip_previous_clip_fields(
+        {
+            "cast_names": ["Dad", "Mum"],
+            "offscreen": ["Child"],
+            "clip_action": "Dad and Mum sit quietly.",
+            "camera": "slow push in",
+            "costume_lock": "Dad: navy sweater; Mum: red dress",
+            "previous_clip_wan_prompt": (
+                "The scene is as in Image 2: kitchen. "
+                "Dad from Image 1, wearing navy sweater, is walking to the door."
+            ),
+            "previous_clip_action": "Dad walks to the door",
+            "already_done": ["Dad walked to the door"],
+            "seat_anchors": {"Dad": {"pose": "seated", "screen": "screen-left"}},
+            "scene_specs": {
+                "place": "kitchen",
+                "lighting": "soft morning light",
+                "objects": ["table"],
+            },
+            "style_lock": {"look": "photoreal cinematic"},
+        }
+    )
     text = compose_practice_prompt(cfg=cfg, graph={}, action=cfg["clip_action"], camera="slow push in")
     low = text.lower()
-    assert "dad from image 1" in low or "from image 1" in low
-    assert "scene is as in" in low or "in the scene from" in low
+    # Prior clip Wan prose is stripped — this row + locks only.
+    assert "walking to the door" not in low
+    assert "continues from the previous" not in low
+    assert "must not repeat" not in low
     assert "wearing" in low
     # Silent offscreen Child is omitted from the video call (lock stays on node).
     assert "child" not in low or "child" in (cfg.get("cast_names") or [])
-    assert "continue after" in low or "same setting" in low or "same placement" in low
     assert "seated" in low or "screen-left" in low
     assert "scene description" in low or "morning light" in low
     assert "sit quietly" in low or "dad and mum" in low

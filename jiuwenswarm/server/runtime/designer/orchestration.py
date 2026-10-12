@@ -396,8 +396,8 @@ def _director_reedit_artifacts_after_prune(
                 s for s in shots if int(s.get("clip_index") or 0) in kept
             ]
             notes.append(f"reedit_shots_keep:{sorted(kept)}")
-        # Rebuild already_done chains per setting (never leak office beats into a new room).
-        already_by_setting: dict[str, list[str]] = {}
+        # Rebuild occupancy / exits per setting. Do not accumulate prior-shot
+        # already_done notes onto later rows (clips use this-row locks only).
         exited_by_setting: dict[str, set[str]] = {}
         revised: list[dict[str, Any]] = []
         for s in analysis.get("clips") or []:
@@ -405,22 +405,14 @@ def _director_reedit_artifacts_after_prune(
                 continue
             shot = dict(s)
             sid = str(shot.get("setting_id") or "set_1").strip() or "set_1"
-            already = list(already_by_setting.get(sid) or [])
-            shot["already_done"] = list(already)
-            action = str(shot.get("action") or shot.get("clip_prompt") or "").strip()
+            shot["already_done"] = []
             exits = [
                 str(x)
                 for x in (shot.get("exiting_character_ids") or shot.get("exiting") or [])
                 if str(x)
             ]
-            idx = int(shot.get("clip_index") or 0)
-            if action:
-                already.append(f"shot{idx}: {action[:120]}")
             carried = set(exited_by_setting.get(sid) or ())
             for cid in exits:
-                already.append(
-                    f"{cid} exited by shot{idx} — omit from later same-setting prompts until returned"
-                )
                 carried.add(cid)
             # Storyboard return clears exit for anyone listed on_screen again.
             visible = [
@@ -476,11 +468,10 @@ def _director_reedit_artifacts_after_prune(
                 "Draw must_appear only; omit exited until storyboard returns them; keep offscreen out of frame.",
             )
             shot["occupancy"] = occ
-            already_by_setting[sid] = already
             revised.append(shot)
         analysis["clips"] = revised
         meta["script_analysis"] = analysis
-        notes.append("reedit_already_done_occupancy")
+        notes.append("reedit_occupancy_this_row_only")
 
     chars = [c for c in (analysis.get("characters") or []) if isinstance(c, dict)]
     surviving = [s for s in (analysis.get("clips") or []) if isinstance(s, dict)]
@@ -514,7 +505,7 @@ def _director_reedit_artifacts_after_prune(
         graph["metadata"] = meta
         notes.append("reedit_approved_brief")
 
-    # Stamp occupancy / already_done onto surviving clip nodes.
+    # Stamp occupancy onto surviving clip nodes. No prior-shot already_done.
     by_idx = {
         int(s.get("clip_index") or 0): s
         for s in (analysis.get("clips") or [])
@@ -533,8 +524,7 @@ def _director_reedit_artifacts_after_prune(
             continue
         if isinstance(shot.get("occupancy"), dict):
             cfg["occupancy"] = shot["occupancy"]
-        if shot.get("already_done") is not None:
-            cfg["already_done"] = list(shot.get("already_done") or [])
+        cfg.pop("already_done", None)
         n["config"] = cfg
 
     graph["metadata"] = meta
@@ -1731,6 +1721,14 @@ class Director:
                         meta=meta,
                         clip_embedded=bool(routing.get("clip_embedded")),
                     )
+                    try:
+                        from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+                            stamp_shot_states_on_clip_cfg,
+                        )
+
+                        cfg = stamp_shot_states_on_clip_cfg(cfg, shot=shot)
+                    except Exception:  # noqa: BLE001
+                        pass
                 else:
                     if shot.get("speech_line"):
                         cfg["speech_line"] = str(shot.get("speech_line"))
@@ -2115,10 +2113,7 @@ class Director:
         graph: DesignerExecutionGraph,
         node: DesignerGraphNode,
     ) -> dict[str, Any]:
-        """Gate every clip media prompt against locks + prior handoff / already_done."""
-        from jiuwenswarm.server.runtime.designer.pipeline.clip_prompt_handoff import (
-            collect_prior_clip_prompts,
-        )
+        """Gate every clip media prompt against this row's storyboard locks."""
         from jiuwenswarm.server.runtime.designer.pipeline.character_consistency import (
             architecture_clause_from_bible,
             strip_prior_prompt_pastes,
@@ -2128,6 +2123,12 @@ class Director:
         role = _role_key(node)
         if role not in {"clip", "character", "scene"}:
             return {"patched": False, "notes": "skip_non_media"}
+        if role == "clip":
+            from jiuwenswarm.server.runtime.designer.pipeline.clip_story_state import (
+                strip_previous_clip_fields,
+            )
+
+            cfg = strip_previous_clip_fields(cfg)
         clip_index = int(cfg.get("clip_index") or 0)
         gen = dict(cfg.get("generate") or {})
         prompt = strip_prior_prompt_pastes(str(gen.get("prompt") or cfg.get("prompt") or "").strip())
@@ -2158,11 +2159,6 @@ class Director:
             )
             if str(x)
         ]
-        prior_clip_id = str(
-            cfg.get("prior_clip_node_id") or identity.get("prior_clip_node_id") or ""
-        ).strip()
-
-
         if costume_lock and "Costume lock" not in prompt and "costume lock" not in prompt.lower():
             prompt = prompt + f"\nCostume lock (must keep): {costume_lock}"
             notes.append("inject_costume_lock")
@@ -2205,66 +2201,9 @@ class Director:
             notes.append("inject_identity_character_specs")
             changed = True
 
-        # Prior clip: short consistency note only (never paste full prior generate.prompt).
-        prior_clip_action = str(cfg.get("previous_clip_action") or "").strip()
-        prior_prompt = str(cfg.get("previous_clip_prompt") or "").strip()
-        if not prior_clip_action and clip_index > 1:
-            prev_id = prior_clip_id or f"n_clip_{clip_index - 1}"
-            for n in graph.get("nodes") or []:
-                if str(n.get("id") or "") != prev_id:
-                    continue
-                pcfg = n.get("config") if isinstance(n.get("config"), dict) else {}
-                prior_clip_action = str(
-                    pcfg.get("clip_action")
-                    or pcfg.get("character_action")
-                    or ""
-                ).strip()
-                prior_prompt = str(
-                    pcfg.get("last_approved_prompt")
-                    or (pcfg.get("generate") or {}).get("prompt")
-                    or ""
-                ).strip()
-                if prior_clip_action or prior_prompt:
-                    if prior_clip_action:
-                        cfg["previous_clip_action"] = prior_clip_action
-                    # Readiness marker only; the gate note carries the prior beat.
-                    if prior_prompt and not str(cfg.get("previous_clip_prompt") or "").strip():
-                        cfg["previous_clip_prompt"] = prior_prompt
-                    cfg["previous_clip_node_id"] = prev_id
-                    notes.append("pull_prior_clip_action")
-                    changed = True
-                break
-        if (
-            (prior_clip_action or prior_prompt)
-            and "PREVIOUS CLIP HAD" not in prompt
-            and "PRIOR CLIP PROMPT" not in prompt
-        ):
-            from jiuwenswarm.server.runtime.designer.pipeline.clip_prompt_handoff import (
-                clip_continuity_note,
-            )
-
-            prior_note = clip_continuity_note(
-                clip_index=clip_index,
-                this_action=str(cfg.get("clip_action") or cfg.get("character_action") or ""),
-                this_camera=str(cfg.get("camera") or ""),
-                prior_action=prior_clip_action or prior_prompt,
-                prior_clip_index=clip_index - 1 if clip_index > 1 else None,
-            )
-            if prior_note:
-                prompt = prompt + "\n\n" + prior_note
-                notes.append("inject_prior_clip_note")
-                changed = True
-
-        already_done = [str(x) for x in (cfg.get("already_done") or []) if str(x)]
-        if not already_done:
-            analysis = (graph.get("metadata") or {}).get("script_analysis") or {}
-            for s in analysis.get("clips") or []:
-                if isinstance(s, dict) and int(s.get("clip_index") or 0) == clip_index:
-                    already_done = [str(x) for x in (s.get("already_done") or []) if str(x)]
-                    cfg["already_done"] = already_done
-                    break
-        if already_done:
-            cfg["already_done"] = already_done
+        # Prior-shot already_done is not a this-row lock — clear and do not rehydrate.
+        already_done: list[str] = []
+        cfg.pop("already_done", None)
 
         occupancy = cfg.get("occupancy") if isinstance(cfg.get("occupancy"), dict) else {}
         if not occupancy and isinstance(identity.get("occupancy"), dict):
@@ -2564,18 +2503,6 @@ class Director:
                 pass
             # Character consistency / costume still injected below for the leaf;
             # the video API body is rewritten by director_prepare_video_prompt.
-            prior_shots = collect_prior_clip_prompts(graph, clip_index=clip_index)
-            if not prior_shots and str(cfg.get("previous_clip_action") or "").strip():
-                prior_shots = [
-                    {
-                        "node_id": str(cfg.get("previous_clip_node_id") or ""),
-                        "clip_index": int(
-                            cfg.get("previous_clip_clip_index") or max(1, clip_index - 1)
-                        ),
-                        "clip_action": str(cfg.get("previous_clip_action") or ""),
-                        "speech_line": str(cfg.get("previous_clip_speech") or ""),
-                    }
-                ]
             try:
                 from jiuwenswarm.server.runtime.designer.pipeline.shot_consistency_contract import (
                     apply_consistency_contract,
@@ -2599,18 +2526,6 @@ class Director:
                     changed = True
             except Exception:  # noqa: BLE001
                 pass
-            # Keep prior_shots available for debug / regenerate packets only.
-            if prior_shots:
-                cfg["prior_storyboard_shots"] = [
-                    {
-                        "clip_index": p.get("clip_index"),
-                        "clip_action": p.get("clip_action"),
-                        "speech_line": p.get("speech_line"),
-                        "camera": p.get("camera"),
-                    }
-                    for p in prior_shots
-                    if isinstance(p, dict)
-                ][-6:]
             if "CONSISTENCY STATE" not in prompt:
                 try:
                     from jiuwenswarm.server.runtime.designer.pipeline.wan_prompt_hygiene import (
@@ -2868,6 +2783,18 @@ class Director:
                 prompt = covered
                 notes.extend(cov_notes or ["ensure_story_lock_coverage"])
                 changed = True
+            try:
+                from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
+                    enforce_prompt_continuity,
+                )
+
+                held, hold_notes = enforce_prompt_continuity(prompt, cfg)
+                if held != str(prompt or "").strip():
+                    prompt = held
+                    notes.extend(hold_notes or ["enforce_prompt_continuity"])
+                    changed = True
+            except Exception:  # noqa: BLE001
+                pass
 
         # Always stamp Director lock gate; patched=True when prompt text changed.
         # Images + clips: positive practice prompts only (no LOCK essays on tool body).
@@ -2965,7 +2892,7 @@ class Director:
             "spatial_lock": bool(spatial),
             "style_lock": bool(style),
             "character_spec_ids": character_spec_ids,
-            "prior_clip_node_id": prior_clip_id or None,
+            "prior_clip_node_id": None,
             "language_lock": cfg.get("language_lock") or meta.get("language_lock"),
             "speech_lock": bool(cfg.get("speech_line") or cfg.get("speech_by_character")),
             "bgm_lock": bool(cfg.get("bgm_lock") or meta.get("bgm_lock")),
@@ -4685,35 +4612,43 @@ def _identity_consistency_patch(graph: DesignerExecutionGraph) -> list[str]:
         is_master = False
         handoff_from = None
         if assign_strategy and role in {"clip"}:
+            # Architecture handoff only from a real scene node — never a prior clip.
+            scene_nid = str(cfg.get("scene_node_id") or "").strip() or None
             prior_in_set = prev_frame_by_setting.get(setting_id)
             if prior_in_set:
                 is_master = False
-                handoff_from = scene_master_by_setting.get(setting_id) or prior_in_set
-                cfg["scene_prompt_handoff_from"] = handoff_from
-                cfg["is_scene_master"] = False
-                cfg["scene_master_node_id"] = handoff_from
+                handoff_from = scene_nid
                 cfg.pop("prior_clip_node_id", None)
-                inputs = list(cfg.get("inputs") or [])
-                if handoff_from and handoff_from not in inputs:
-                    inputs.append(handoff_from)
-                cfg["inputs"] = inputs
+                if handoff_from:
+                    cfg["scene_prompt_handoff_from"] = handoff_from
+                    cfg["scene_master_node_id"] = handoff_from
+                else:
+                    cfg.pop("scene_prompt_handoff_from", None)
+                    cfg.pop("scene_master_node_id", None)
+                cfg["is_scene_master"] = False
                 notes.append(
-                    f"{node.get('id')}: same-setting compose + prompt handoff from "
-                    f"{handoff_from} ({setting_id})"
+                    f"{node.get('id')}: same-setting compose; storyboard/scene locks only "
+                    f"({setting_id})"
                 )
             else:
                 is_master = True
                 cfg.pop("prior_clip_node_id", None)
-                cfg.pop("scene_prompt_handoff_from", None)
+                if scene_nid:
+                    cfg["scene_prompt_handoff_from"] = scene_nid
+                    cfg["scene_master_node_id"] = scene_nid
+                else:
+                    cfg.pop("scene_prompt_handoff_from", None)
+                    cfg["scene_master_node_id"] = str(node.get("id") or "")
                 cfg["is_scene_master"] = True
-                cfg["scene_master_node_id"] = str(node.get("id") or "")
                 notes.append(
                     f"{node.get('id')}: SCENE MASTER compose for setting {setting_id}"
                 )
             cfg["clip_strategy"] = strategy
             nid = str(node.get("id") or "")
-            if is_master and nid:
+            if is_master and nid and not scene_nid:
                 scene_master_by_setting[setting_id] = nid
+            elif scene_nid:
+                scene_master_by_setting[setting_id] = scene_nid
             if nid:
                 prev_frame_by_setting[setting_id] = nid
 
@@ -4824,10 +4759,8 @@ def _identity_consistency_patch(graph: DesignerExecutionGraph) -> list[str]:
                 f"objects={', '.join(str(x) for x in (specs.get('objects') or [])[:5])}; "
                 f"views={list((specs.get('views') or {}).keys())}."
             )
-        if handoff_from and "SCENE PROMPT HANDOFF" not in prompt:
-            lock_bits.append(
-                f"SCENE PROMPT HANDOFF from {handoff_from} — keep architecture; change view/cast only."
-            )
+        # Scene architecture comes from scene_specs / scene node — never paste a
+        # prior clip's prompt as a SCENE PROMPT HANDOFF into this clip.
         if lock_bits:
             gen["prompt"] = (prompt + " " + " ".join(lock_bits)).strip()
             cfg["generate"] = gen

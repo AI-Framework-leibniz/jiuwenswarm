@@ -24,7 +24,7 @@ from jiuwenswarm.server.runtime.designer.subagent import complete_designer_node_
 from jiuwenswarm.server.runtime.designer.handlers.types import NodeExecutionContext, NodeResult
 
 _BRIEF_INSTRUCTION = """Turn the request below into an executable short-film Brief.
-Write English Markdown with these sections:
+Write English Markdown with these narrative sections ONLY (no lock tables, no lock bibles):
 - User prompt (verbatim intent)
 - Logline
 - Visual style (REQUIRED: preserve the user's requested medium and rendering details verbatim;
@@ -34,15 +34,16 @@ Write English Markdown with these sections:
 - Narrative / content arc (setup or hook → development/turn → payoff or CTA)
 - Timed shot plan spanning the full requested duration; every shot adds new content, no filler or repetition
 - Script / speech plan (speaker + timing + exact concise dialogue or voiceover; speech is the default; visual-only only when the user asked for mime, a silent film, or no dialogue)
-- Cast (identity locks — face, hair, body, FULL costume for EACH on-screen person, including unnamed groups that share one look; never concatenate; list them on every shot where they are visible)
-- Setting / scene geography, lighting, landmarks, opening blocking (who sits/stands where)
-- Language / speech lock (film language; exact lines if the user gave them)
-- Consistency gates: character consistency, scene consistency, shot consistency, camera views covering every shot
+- Cast (who appears — short identity cues only; not an authority lock list)
+- Setting (place, light, mood as story — not seating/occupancy/axis lock tables)
+- Language (film language; exact lines if the user gave them)
 - Shot-view coverage list (distinct cameras/angles needed)
 - Duration target and per-shot timing budget
 - Audio policy (speech vs music)
-- Production specs (style, axis, occupancy, wardrobe) — copy locks, do not drop them
 - What to avoid
+FORBIDDEN in the brief: sections titled Lock / Locks / Seating lock / Spatial Lock /
+Identity locks / Production Lock Bible / occupancy tables / axis lock tables.
+Structured continuity locks are stamped later from script_analysis onto each clip — not here.
 Preserve every on-screen person, including unnamed groups that share one look, and every shot from the user prompt in FULL DETAIL. Output Markdown only.
 Explicit user facts and constraints are authoritative. For a sparse request, develop a coherent
 story, celebration, advertisement, or other fitting concept rather than stretching one premise.
@@ -306,26 +307,6 @@ def brief_story_focus(prompt: str) -> str:
     return text.strip(" ,.")
 
 
-def _stamp_bible_on_text(text: str, ctx: NodeExecutionContext) -> str:
-    try:
-        from jiuwenswarm.server.runtime.designer.pipeline.production_specs import (
-            append_specs_to_markdown,
-            build_production_specs,
-        )
-
-        meta = ctx.graph.get("metadata") if isinstance(ctx.graph.get("metadata"), dict) else {}
-        bible = str(meta.get("production_specs") or "").strip()
-        if not bible:
-            analysis = meta.get("script_analysis") if isinstance(meta.get("script_analysis"), dict) else {}
-            bible = build_production_specs(
-                analysis,
-                user_prompt=str(ctx.graph.get("description") or ""),
-            )
-        return append_specs_to_markdown(text, bible)
-    except Exception:  # noqa: BLE001
-        return text
-
-
 def _sync_style_authority(text: str, ctx: NodeExecutionContext) -> None:
     from jiuwenswarm.server.runtime.designer.media_model_playbook import (
         synchronize_graph_style_from_brief,
@@ -341,8 +322,8 @@ class BriefNodeHandler:
         approved = str(meta.get("approved_brief") or "").strip()
         if approved:
             _sync_style_authority(approved, ctx)
-            text = _stamp_bible_on_text(approved, ctx)
-            path = write_workspace_text(f"designer_brief_{ctx.run_id}_{ctx.node_id}", text)
+            # Brief stays narrative-only — do not append Production Lock Bible.
+            path = write_workspace_text(f"designer_brief_{ctx.run_id}_{ctx.node_id}", approved)
             return NodeResult(
                 output_ref=file_output_ref(path, kind=NODE_TYPE_TEXT, mime_type="text/markdown"),
                 message="brief written (director)",
@@ -362,7 +343,6 @@ class BriefNodeHandler:
         if not str(text or "").strip():
             raise RuntimeError("Chat model did not return a usable brief.")
         _sync_style_authority(text, ctx)
-        text = _stamp_bible_on_text(text, ctx)
         path = write_workspace_text(f"designer_brief_{ctx.run_id}_{ctx.node_id}", text)
         return NodeResult(
             output_ref=file_output_ref(path, kind=NODE_TYPE_TEXT, mime_type="text/markdown"),

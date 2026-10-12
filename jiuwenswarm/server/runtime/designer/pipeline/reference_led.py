@@ -261,19 +261,7 @@ def reference_prompt_issues(prompt: str, cfg: dict[str, Any] | None) -> list[str
     crowd = str(cfg.get("crowd") or "").strip()
     if crowd and crowd not in text:
         reasons.append("missing_crowd")
-    try:
-        index = int(cfg.get("clip_index") or 1)
-    except (TypeError, ValueError):
-        index = 1
-    if index > 1:
-        end = str(cfg.get("previous_end_state") or "").strip()
-        if "continues from" not in text.lower():
-            reasons.append("missing_continuation")
-        if end and end not in text:
-            reasons.append("missing_previous_end")
-        prev = str(cfg.get("previous_action") or "").strip()
-        if prev and f"Action: {prev}" in text:
-            reasons.append("repeats_previous_action")
+    # This row only: do not require (or rewrite in) previous-clip continuation.
     mode = str(cfg.get("reference_call_mode") or "")
     if mode == "i2v" and "first frame" not in text.lower() and "animate this image" not in text.lower():
         reasons.append("missing_motion_source")
@@ -312,12 +300,41 @@ def compose_reference_clip_prompt(cfg: dict[str, Any] | None) -> str:
         lines.append(f"Lighting stays {lighting}.")
     if crowd:
         lines.append(f"Crowd stays {crowd}.")
-    if index > 1:
-        end = str(cfg.get("previous_end_state") or "").strip()
-        prev = str(cfg.get("previous_action") or "").strip()
-        lines.append(f"This shot continues from the previous end: {end}.")
-        if prev:
-            lines.append(f"The previous action is finished and must not repeat: {prev}.")
+    # Opening spatial placement / posture from stamped start_state (this row only).
+    try:
+        from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+            start_end_story_lines,
+        )
+
+        for story_line in start_end_story_lines(cfg)[:6]:
+            if story_line and story_line not in lines:
+                lines.append(story_line)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
+            hold_lines_for_cfg,
+        )
+
+        for hold in hold_lines_for_cfg(cfg)[:4]:
+            if hold and hold not in lines:
+                lines.append(hold)
+    except Exception:  # noqa: BLE001
+        pass
+    positioning = str(cfg.get("positioning_lock") or "").strip()
+    if positioning:
+        lines.append(f"Placement: {positioning[:280]}.")
+    cast_actions = cfg.get("cast_actions") if isinstance(cfg.get("cast_actions"), dict) else {}
+    if cast_actions:
+        doing = "; ".join(
+            f"{k}: {v}" for k, v in list(cast_actions.items())[:6] if str(v).strip()
+        )
+        if doing:
+            lines.append(f"Cast doing: {doing[:320]}.")
+    speech = str(cfg.get("speech_line") or "").strip()
+    if speech:
+        lines.append(f'Speech: "{speech[:280]}".')
+    # This storyboard row only — never quote a previous clip's action or end state.
     lines.append(f"Action: {action}. Camera: {camera}.")
     mode = str(cfg.get("reference_call_mode") or "")
     contract = str(cfg.get("reference_prompt_contract") or "")
@@ -349,7 +366,16 @@ def compose_reference_clip_prompt(cfg: dict[str, Any] | None) -> str:
             lines.append(
                 "Image 1 is the leading reference. Later references follow in slot order."
             )
-    return " ".join(line for line in lines if line.strip())
+    body = " ".join(line for line in lines if line.strip())
+    try:
+        from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
+            enforce_prompt_continuity,
+        )
+
+        body, _ = enforce_prompt_continuity(body, cfg)
+    except Exception:  # noqa: BLE001
+        pass
+    return body
 
 
 def reference_led_graph(graph: DesignerExecutionGraph) -> bool:
@@ -372,32 +398,45 @@ def reject_removed_reference_images(graph: DesignerExecutionGraph, removed: set[
 def refresh_reference_continuity(
     before: DesignerExecutionGraph, graph: DesignerExecutionGraph
 ) -> None:
-    """Re-derive each clip's handoff from the edited shot order, as the builder does."""
+    """Refresh each clip's this-row prompt after edits. No previous-clip handoff."""
     old_configs = {node["id"]: node_config(node) for node in before["nodes"]}
     clips = sorted(
         (node for node in graph["nodes"] if node_pipeline(node) == "clip"),
         key=node_clip_index,
     )
-    previous_action = ""
-    previous_end = ""
-    done: list[str] = []
     for node in clips:
         cfg = node_config(node)
         old = old_configs.get(node["id"], {})
         action = str(cfg.get("clip_action") or "")
         old_action = str(old.get("clip_action") or "")
-        if action != old_action and cfg.get("end_state") == f"completed: {old_action}":
-            cfg["end_state"] = f"completed: {action}"
-        cfg["previous_action"] = previous_action
-        cfg["previous_end_state"] = previous_end
-        cfg["already_done"] = list(done)
+        end_state = cfg.get("end_state")
+        if action != old_action:
+            # Keep default "completed: …" end in sync with the new action.
+            # Structured dict form is preferred; legacy bare strings still work.
+            if end_state == f"completed: {old_action}":
+                cfg["end_state"] = {"pose": f"completed: {action}"}
+            elif isinstance(end_state, dict):
+                pose = str(end_state.get("pose") or "")
+                if pose == f"completed: {old_action}":
+                    cfg["end_state"] = {**end_state, "pose": f"completed: {action}"}
+        cfg["previous_action"] = ""
+        cfg["previous_end_state"] = ""
+        try:
+            from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+                stamp_shot_states_on_clip_cfg,
+            )
+
+            # Re-stamp from this-row fields already on cfg (no prior clip).
+            cfg = stamp_shot_states_on_clip_cfg(cfg, shot=cfg)
+        except Exception:  # noqa: BLE001
+            pass
+        cfg["already_done"] = []
         generate = cfg.get("generate")
         # Keep an authored prompt; replace only the one the builder composed.
         if isinstance(generate, dict) and generate.get("prompt") == compose_reference_clip_prompt(old):
             generate["prompt"] = compose_reference_clip_prompt(cfg)
-        previous_action = action
-        previous_end = str(cfg.get("end_state") or "")
-        done.append(action)
+            cfg["generate"] = generate
+        node["config"] = cfg
 
 
 def build_reference_led_video_graph(
@@ -734,8 +773,6 @@ def build_reference_led_video_graph(
         job, sheet_ids=sheet_ids, plate_ids=plate_ids, sheet_meta=sheet_meta
     )
     clip_ids: list[str] = []
-    previous_action = ""
-    previous_end = ""
     for shot in shots:
         index = int(shot["clip_index"])
         clip_id = f"n_clip_{index}"
@@ -752,9 +789,10 @@ def build_reference_led_video_graph(
             "lighting": lighting,
             "crowd": crowd,
             "style_lock": dict(style),
-            "previous_action": previous_action,
-            "previous_end_state": previous_end,
-            "already_done": [str(s.get("action") or "") for s in shots[: index - 1]],
+            # This storyboard row only — no previous-clip action/end/already_done.
+            "previous_action": "",
+            "previous_end_state": "",
+            "already_done": [],
             "end_state": shot.get("end_state"),
             "reference_call_mode": job["call_mode"],
             "reference_prompt_contract": job["contract"],
@@ -792,9 +830,22 @@ def build_reference_led_video_graph(
                 mid = str(job["motion_slots"][0].get("node_id") or "")
                 if mid and mid not in cfg["inputs"]:
                     cfg["inputs"].append(mid)
+        # Hard stamp start_state / spatial_anchors / positioning / speech (same as text-led).
+        try:
+            from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+                stamp_shot_states_on_clip_cfg,
+            )
+
+            cfg = stamp_shot_states_on_clip_cfg(cfg, shot=shot)
+        except Exception:  # noqa: BLE001
+            pass
         cfg["generate"] = {"prompt": compose_reference_clip_prompt(cfg)}
         cfg["director_task"] = (
-            "Write the reference-led shot prompt from this clip config, then call_video_model."
+            "Translate THIS storyboard row / clip config into ONE positive "
+            "reference-led video prompt for the configured video model "
+            "(best practices). Keep action, posture (stand/sit/walk/…), spatial "
+            "places, camera, and exact speech from this row — do not invent "
+            "posture or dialogue, and do not use any previous clip. Then call_video_model."
         )
         add_node(
             {
@@ -807,8 +858,6 @@ def build_reference_led_video_graph(
         )
         for source in cfg["inputs"]:
             add_edge(str(source), clip_id)
-        previous_action = str(shot.get("action") or "")
-        previous_end = str(shot.get("end_state") or "")
 
     add_node(
         {
@@ -1624,6 +1673,9 @@ def _prepare_shots(analysis: dict[str, Any], prompt: str) -> list[dict[str, Any]
         raw = [{"action": prompt[:500], "setting_id": "set_1"}]
     shots: list[dict[str, Any]] = []
     cursor = 0.0
+    characters = [
+        dict(ch) for ch in (analysis.get("characters") or []) if isinstance(ch, dict)
+    ]
     for index, shot in enumerate(raw, start=1):
         action = str(shot.get("action") or f"beat {index}").strip()
         duration = shot.get("duration_sec")
@@ -1635,20 +1687,42 @@ def _prepare_shots(analysis: dict[str, Any], prompt: str) -> list[dict[str, Any]
             duration_sec = 5
         start = cursor
         cursor += duration_sec
-        shots.append(
-            {
-                **shot,
-                "clip_index": index,
-                "action": action,
-                "camera": str(shot.get("camera") or "medium / eye-level"),
-                "duration_sec": duration_sec,
-                "timeline": f"{start:.1f}-{cursor:.1f}s",
-                "end_state": str(shot.get("end_state") or f"completed: {action}"),
-                "lighting": str(shot.get("lighting") or ""),
-                "crowd": str(shot.get("crowd") or ""),
-                "setting_id": str(shot.get("setting_id") or "set_1"),
-            }
+        # Preserve structured start_state / end_state / seats from analysis.
+        # Never coerce end_state to a bare "completed: …" string — that drops seats.
+        end_raw = shot.get("end_state")
+        row = {
+            **shot,
+            "clip_index": index,
+            "action": action,
+            "camera": str(shot.get("camera") or "medium / eye-level"),
+            "duration_sec": duration_sec,
+            "timeline": f"{start:.1f}-{cursor:.1f}s",
+            "lighting": str(shot.get("lighting") or ""),
+            "crowd": str(shot.get("crowd") or ""),
+            "setting_id": str(shot.get("setting_id") or "set_1"),
+        }
+        if isinstance(end_raw, dict):
+            row["end_state"] = end_raw
+        elif isinstance(end_raw, str) and end_raw.strip():
+            row["end_state"] = {"pose": end_raw.strip()[:280]}
+        # else: leave absent so ensure_clip_start_end_states can infer
+        try:
+            from jiuwenswarm.server.runtime.designer.pipeline.clip_staging_lock import (
+                enrich_clip_staging,
+            )
+
+            enrich_clip_staging(row, characters)
+        except Exception:  # noqa: BLE001
+            pass
+        shots.append(row)
+    try:
+        from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+            ensure_clip_start_end_states,
         )
+
+        shots = ensure_clip_start_end_states(shots)
+    except Exception:  # noqa: BLE001
+        pass
     return shots
 
 

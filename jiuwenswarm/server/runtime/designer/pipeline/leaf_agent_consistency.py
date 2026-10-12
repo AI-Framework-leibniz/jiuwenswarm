@@ -66,15 +66,16 @@ def hollywood_leaf_instructions(role: str) -> str:
         "no mid-film medium switch (3D<->2D<->photoreal).\n"
         "5) BLOCKING: honor zones + landmark + CONTACT (bodies on supports, never "
         "through furniture/props); featured subjects face the landmark/action focus. "
-        "Pose/placement come from THIS storyboard row — never invent sit/stand defaults.\n"
+        "Pose and placement are AUTHORITY from THIS storyboard row "
+        "(start_state / end_state / spatial_anchors / cast_actions / clip_action). "
+        "Copy sit vs stand, chair contact, and screen-side exactly — never invent a "
+        "different posture (e.g. do not write 'sits' when the row says standing).\n"
         "6) SCREEN AXIS: keep L/R placement stable under pans (180-degree). Do not flip who is left/right.\n"
-        "7) SETTING MASTER: scene specs + identity character specs. First clip of the setting "
-        "plays the storyboard open; later same-setting clips continue from structured "
-        "continuity (already_done / pose_holds / seat_anchors / forbidden_speech / end_state) "
-        "— never from raw prior Wan paragraphs. "
-        "Only name on_screen / returned cast. If someone left the setting, omit them from every "
-        "later same-setting prompt until the storyboard returns them. Never spawn unnamed extras.\n"
-        "8) LANGUAGE: use storyboard speech_line exactly (empty = silent — do not invent lines).\n"
+        "7) THIS CLIP ONLY: write from this storyboard row and the locks on this node. "
+        "Do not use text, speech, frames, or locks from any previous clip. "
+        "Only name on_screen cast from this row. Never spawn unnamed extras.\n"
+        "8) LANGUAGE: use this row's speech_line / speech_by_character verbatim "
+        "(empty = silent — do not invent, shorten, or add lines).\n"
         "9) FORMAT: aspect ratio, size, and resolution are canvas settings; never write them in a prompt.\n"
         "10) IMAGE-N: if references exist, name Image 1, Image 2… in attach order in your prompt.\n"
         "11) Finish with designer_node_complete(text=<FINAL visual-model prompt only>). "
@@ -105,48 +106,58 @@ def hollywood_leaf_instructions(role: str) -> str:
         return (
             shared
             + "ROLE=storyboard/brief. The BRIEF is your source. Turn it into timed shots with "
-            "setting_id, on_screen, offscreen, cast_actions, camera, and speech. "
+            "setting_id, on_screen, offscreen, cast_actions, camera, posture "
+            "(stand/sit/walk/lean/…), spatial places, and speech.\n"
+            "Each shot window owns its own action, posture, and spoken lines. "
+            "Do not restate the same spoken line as the main dialogue of two adjacent "
+            "shots unless the brief clearly wants a separate spoken response in the later "
+            "window. Make posture and place explicit in cast_actions and start_state for "
+            "every shot so clip leaves cannot invent spatial positioning.\n"
             "Downstream clips read the storyboard — not the raw brief."
         )
     if r == "clip":
         return (
             shared
-            +             "ROLE=clip. Write ONE concise positive story-form video prompt "
-            "(Wan / Seedance / MiniMax-H3).\n"
-            "FORM (locks folded into narrative — faithful, general, no examples):\n"
-            "The scene is as in Image N: <place>. Scene description: <lighting/props from bible>.\n"
-            "<Name> from Image k, wearing <wardrobe lock>, <placement from seat_anchors>, "
-            "in the scene from Image N, is <cast_action / storyboard shot>. "
-            "Name only people who are on_screen or partially visible this shot. "
-            "Omit exited cast entirely until the storyboard returns them. "
-            "The camera <one move>. <Speaker> says: \"<this shot's line>\".\n"
-            "PRIORITY: (1) this storyboard shot + camera visibility from occupancy, "
-            "(2) wardrobe + placement folded into those sentences, (3) same-setting continue "
-            "from structured continuity fields only — never paste prior Wan text "
-            "into call_video_model; never restage finished speech/action.\n"
-            "OPENING HOLDS: if pose_holds / beat_done / crowd_state exist, open the prompt "
-            "already past those beats (e.g. already facing the landmark; crowd already gone "
-            "or still in background). Never restage a finished turn/exit/onset unless THIS "
-            "storyboard row asks to repeat it.\n"
-            "Clip API call rules: positive sentences only — no forbid, no 'do not', no already-done, "
-            "no STYLE LOCK banners, no worked examples, no sit/stand defaults.\n"
-            + _wan_leaf_extra()
+            + "ROLE=clip. Authority is THIS storyboard row + the locks in your JSON "
+            "context (clip_action, cast_actions, start_state, end_state, spatial_anchors, "
+            "occupancy, speech_line / speech_by_character, camera, costume, scene_specs, "
+            "style_lock). Translate that row into ONE positive story-form video prompt "
+            "using the configured video model's best practices, then call_video_model. "
+            "Do not use any previous clip.\n"
+            "FIDELITY: keep the row's action, posture (stand/sit/walk/…), spatial places, "
+            "who moves how, camera, and exact spoken words. Do not invent a different "
+            "posture or place, do not invent or drop dialogue.\n"
+            "FORM (adapt labels to the configured video model): The scene is as in "
+            "Image N: <place from this row>. <Name> from Image k, wearing <this row's "
+            "wardrobe>, <this row's posture + spatial place>, is <this row's action>. "
+            "The camera <this row's move>. <Speaker> says: \"<this row's exact line>\".\n"
+            "Positive sentences only — no previous-clip text, no forbid lists, no examples.\n"
+            + _video_model_best_practices_extra()
         )
     return shared
 
 
-def _wan_leaf_extra() -> str:
+def _video_model_best_practices_extra() -> str:
+    """Configured-model prompt craft guidance — instructional, not regex gates."""
     try:
         from jiuwenswarm.server.runtime.designer.pipeline.wan_r2v_best_practices import (
-            wan_leaf_skill_block,
+            video_model_leaf_skill_block,
         )
 
-        return wan_leaf_skill_block(role="clip")
+        return video_model_leaf_skill_block(role="clip")
     except Exception:  # noqa: BLE001
-        return (
-            "CONTACT: bodies never intersect furniture/props; when the shot uses a support "
-            "surface, weight rests ON it. Solo sheets are identity — repose for the shot."
-        )
+        try:
+            from jiuwenswarm.server.runtime.designer.pipeline.wan_r2v_best_practices import (
+                wan_leaf_skill_block,
+            )
+
+            return wan_leaf_skill_block(role="clip")
+        except Exception:  # noqa: BLE001
+            return (
+                "CONTACT: bodies never intersect furniture/props; when the shot uses a support "
+                "surface, weight rests ON it. Solo sheets are identity — repose only as this "
+                "storyboard row requires."
+            )
 
 
 def upstream_image_paths(

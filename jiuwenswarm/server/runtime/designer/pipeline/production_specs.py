@@ -138,8 +138,11 @@ def build_production_specs(
         "same-setting shots (do not empty then reinvent a new crowd).",
         "EXIT RULE: once a character leaves a setting, omit them from later same-setting "
         "prompts until the storyboard returns them — never spawn cast from nowhere.",
-        "LEAF PROTOCOL: (1) read_upstream brief + storyboard (2) copy locks above into "
-        "your visual prompt (3) then call image/video tools — never tool-first. "
+        "LEAF PROTOCOL: (1) read clip config locks stamped from script_analysis "
+        "(start_state / spatial_anchors / cast_actions / speech) plus storyboard row "
+        "(2) rewrite into model best-practice prompt keeping those locks "
+        "(3) then call image/video tools — never tool-first. "
+        "Brief is narrative intent only, not spatial-position/occupancy authority. "
         "Clip video calls: positive story form only — no negatives, no examples.",
         "=== END LOCK BIBLE ===",
     ]
@@ -199,12 +202,48 @@ def leaf_lock_packet(
             }
         },
         "speech_line": str(shot.get("speech_line") or ""),
+        "speech_by_character": (
+            shot.get("speech_by_character")
+            if isinstance(shot.get("speech_by_character"), dict)
+            else {}
+        ),
+        "clip_action": str(shot.get("action") or shot.get("clip_action") or ""),
+        "cast_actions": (
+            shot.get("cast_actions") if isinstance(shot.get("cast_actions"), dict) else {}
+        ),
+        "start_state": (
+            shot.get("start_state") if isinstance(shot.get("start_state"), dict) else {}
+        ),
+        "end_state": shot.get("end_state") if isinstance(shot.get("end_state"), dict) else shot.get("end_state"),
+        "spatial_anchors": (
+            shot.get("spatial_anchors")
+            if isinstance(shot.get("spatial_anchors"), dict)
+            else (
+                shot.get("seat_anchors")
+                if isinstance(shot.get("seat_anchors"), dict)
+                else {}
+            )
+        ),
+        "seat_anchors": (
+            shot.get("spatial_anchors")
+            if isinstance(shot.get("spatial_anchors"), dict)
+            else (
+                shot.get("seat_anchors")
+                if isinstance(shot.get("seat_anchors"), dict)
+                else {}
+            )
+        ),
         "motion_detail": str(shot.get("motion_detail") or ""),
         "wardrobe_lock": str(shot.get("wardrobe_lock") or ""),
         "camera_framing_rule": str(shot.get("camera_framing_rule") or ""),
         "on_camera_cast_ids": list(shot.get("on_camera_cast_ids") or shot.get("character_ids") or []),
         "off_camera_cast_ids": list(shot.get("off_camera_cast_ids") or []),
         "blocking": shot.get("blocking") if isinstance(shot.get("blocking"), dict) else {},
+        "fidelity_rule": (
+            "Translate this storyboard row exactly into the video prompt: "
+            "action, posture (stand/sit/walk/…), spatial places, camera, and spoken words. "
+            "Do not invent a different posture or dialogue."
+        ),
         "production_specs_excerpt": bible,
     }
 
