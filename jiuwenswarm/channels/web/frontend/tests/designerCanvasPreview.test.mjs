@@ -70,7 +70,7 @@ test('storyboardClipPreviews keeps every row', () => {
 
 test('empty storyboard table is a blank seven-column frame', () => {
   assert.deepEqual(EMPTY_STORYBOARD_TABLE.headers, [
-    'Clip',
+    'Shot',
     'Timeline',
     'Camera',
     'Move',
