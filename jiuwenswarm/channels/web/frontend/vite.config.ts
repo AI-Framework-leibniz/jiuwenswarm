@@ -1299,7 +1299,11 @@ function devFileContentApi(): Plugin {
             const uploadDir = path.join(workspaceRootDir, 'uploads', 'designer')
             fs.mkdirSync(uploadDir, { recursive: true })
             const files = parts.map((part) => {
-              const safeName = path.basename(part.filename).replace(/[\\/:*?"<>|\p{Cc}]/gu, '_').slice(0, 120) || 'upload.bin'
+              const safeName = path.basename(part.filename)
+                .split('')
+                .map((ch) => (ch < ' ' || '\\/:*?"<>|'.includes(ch) ? '_' : ch))
+                .join('')
+                .slice(0, 120) || 'upload.bin'
               const storedPath = path.join(uploadDir, `${randomUUID()}_${safeName}`)
               fs.writeFileSync(storedPath, part.data)
               return {
