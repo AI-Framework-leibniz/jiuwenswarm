@@ -39,7 +39,8 @@ import {
 } from '../designerCanvasNodes';
 import { useDesignerAssetLibraryStore } from '../designerAssetLibraryStore';
 import { storeDesignerUpload, uploadOutputRef, uploadedNodeConfig } from '../designerNodeUpload';
-import { useDesignerUiStore } from '../designerUiStore';
+import { useDesignerUiStore, type DesignerZoomKind } from '../designerUiStore';
+import { isMacPlatform } from './DesignerZoomMenu';
 import { DESIGNER_FIT_VIEW_PADDING } from '../designerFitView';
 
 type DesignerCanvasProps = {
@@ -160,7 +161,7 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
   );
   const [nodes, setNodes, onNodesChange] = useNodesState(reactFlowGraph.nodes as Node[]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState(reactFlowGraph.edges as Edge[]);
-  const { fitView, screenToFlowPosition } = useReactFlow();
+  const { fitView, screenToFlowPosition, zoomIn, zoomOut, zoomTo } = useReactFlow();
   const persistReactFlowLayout = useDesignerStore((state) => state.persistReactFlowLayout);
   const addDomainEdge = useDesignerStore((state) => state.addEdge);
   const addDomainNode = useDesignerStore((state) => state.addNode);
@@ -173,6 +174,7 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
   const canvasTool = useDesignerUiStore((state) => state.canvasTool);
   const setCanvasTool = useDesignerUiStore((state) => state.setCanvasTool);
   const closeDock = useDesignerUiStore((state) => state.closeDock);
+  const requestDeleteNodes = useDesignerUiStore((state) => state.requestDeleteNodes);
   const minimapVisible = useDesignerUiStore((state) => state.minimapVisible);
   const layoutRequestId = useDesignerUiStore((state) => state.layoutRequestId);
   const setZoomPercent = useDesignerUiStore((state) => state.setZoomPercent);
@@ -182,15 +184,70 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
   const fittedGraphIdRef = useRef<string | null>(null);
   const lastLayoutRequestRef = useRef(0);
   const handMode = canvasTool === 'hand' || spacePan;
+  const edgesVisible = useDesignerUiStore((state) => state.edgesVisible);
+  const zoomRequest = useDesignerUiStore((state) => state.zoomRequest);
+  const handledZoomRequestRef = useRef(0);
   // Keep visual emphasis separate from edge selection, which controls edge actions.
   const highlightedEdges = useMemo(() => {
     const selectedIds = new Set(nodes.filter((node) => node.selected).map((node) => node.id));
-    return edges.map((edge) =>
-      selectedIds.has(edge.source) || selectedIds.has(edge.target)
-        ? { ...edge, className: 'designer-edge--highlighted' }
-        : edge,
-    );
-  }, [nodes, edges]);
+    return edges.map((edge) => {
+      const highlighted = selectedIds.has(edge.source) || selectedIds.has(edge.target);
+      return {
+        ...edge,
+        hidden: !edgesVisible,
+        ...(highlighted ? { className: 'designer-edge--highlighted' } : {}),
+      };
+    });
+  }, [edgesVisible, nodes, edges]);
+
+  const applyZoom = useCallback(
+    (kind: DesignerZoomKind) => {
+      if (canvasLocked) return;
+      if (kind === 'in') {
+        void zoomIn({ duration: 180 });
+        return;
+      }
+      if (kind === 'out') {
+        void zoomOut({ duration: 180 });
+        return;
+      }
+      if (kind === 'fit') {
+        void fitView({ padding: DESIGNER_FIT_VIEW_PADDING, duration: 200 });
+        return;
+      }
+      void zoomTo(Number(kind) / 100, { duration: 200 });
+    },
+    [canvasLocked, fitView, zoomIn, zoomOut, zoomTo],
+  );
+
+  useEffect(() => {
+    if (!zoomRequest || zoomRequest.id === handledZoomRequestRef.current) return;
+    handledZoomRequestRef.current = zoomRequest.id;
+    applyZoom(zoomRequest.kind);
+  }, [applyZoom, zoomRequest]);
+
+  useEffect(() => {
+    const isTypingTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      const tag = target.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (canvasLocked || event.altKey || event.repeat || isTypingTarget(event.target)) return;
+      const modifier = isMacPlatform() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+      if (!modifier) return;
+      const zoomInKey = event.code === 'Equal' || event.code === 'NumpadAdd' || event.key === '+' || event.key === '=';
+      const zoomOutKey = event.code === 'Minus' || event.code === 'NumpadSubtract' || event.key === '-';
+      const fitKey = !event.shiftKey && (event.code === 'Digit0' || event.code === 'Numpad0');
+      if (!zoomInKey && !zoomOutKey && !fitKey) return;
+      event.preventDefault();
+      if (zoomInKey) applyZoom('in');
+      else if (zoomOutKey) applyZoom('out');
+      else applyZoom('fit');
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [applyZoom, canvasLocked]);
 
   useEffect(() => {
     const isTypingTarget = (target: EventTarget | null) => {
@@ -325,6 +382,15 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
     [closeDock, removeNodes],
   );
 
+  const onBeforeDelete = useCallback(
+    async ({ nodes: deleting }: { nodes: Node[] }) => {
+      if (canvasLocked || deleting.length === 0) return true;
+      requestDeleteNodes(deleting.map((node) => node.id));
+      return false;
+    },
+    [canvasLocked, requestDeleteNodes],
+  );
+
   const onDragOver = useCallback((event: DragEvent) => {
     if (![...event.dataTransfer.types].includes(DESIGNER_ASSET_DRAG_MIME)) return;
     event.preventDefault();
@@ -372,7 +438,7 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
   );
 
   return (
-    <div className={`designer-canvas-shell${handMode ? ' is-hand' : ''}`}>
+    <div className={`designer-canvas-shell${handMode ? ' is-hand' : ''}${edgesVisible ? '' : ' is-edges-hidden'}`}>
       <DesignerLeaderStrip />
       <ReactFlow
         className="designer-page__canvas"
@@ -385,6 +451,7 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
         onConnect={onConnect}
         onNodeDragStop={onNodeDragStop}
         onNodesDelete={onNodesDelete}
+        onBeforeDelete={onBeforeDelete}
         onDragOver={onDragOver}
         onDrop={onDrop}
         onPaneClick={closeDock}
@@ -406,7 +473,7 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
         fitView
         fitViewOptions={{ padding: DESIGNER_FIT_VIEW_PADDING }}
         minZoom={0.2}
-        maxZoom={1.5}
+        maxZoom={2}
         proOptions={{ hideAttribution: true }}
         data-testid="designer-canvas"
       >
