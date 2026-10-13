@@ -13,6 +13,7 @@ from typing import Any
 from jiuwenswarm.common.schema.designer_graph import (
     NODE_ROLE_BRIEF,
     NODE_ROLE_CHARACTER,
+    NODE_ROLE_CLIP,
     NODE_ROLE_SCENE,
     NODE_ROLE_STORYBOARD,
     NODE_TYPE_VIDEO,
@@ -21,6 +22,7 @@ from jiuwenswarm.common.schema.designer_graph import (
     DesignerGraphNode,
     node_pipeline,
     node_clip_index,
+    video_concat_source_ids,
 )
 from jiuwenswarm.server.runtime.designer.handlers.common import (
     canvas_output_dir,
@@ -58,6 +60,37 @@ def parse_shot_duration_seconds(timeline: str, default: int = 5) -> int:
     )
 
     return duration_from_timeline(timeline, default=default)
+
+
+def generates_timed_video(graph: DesignerExecutionGraph, node: DesignerGraphNode) -> bool:
+    """True when running ``node`` asks the video model for a clip of some length."""
+    from jiuwenswarm.server.runtime.designer.handlers import resolve_handler_key
+
+    key = resolve_handler_key(node)
+    if key == NODE_ROLE_CLIP:
+        return True
+    if key != NODE_TYPE_VIDEO:
+        return False
+    return not video_concat_source_ids(graph, str(node.get("id") or ""))
+
+
+def video_duration_seconds(ctx: NodeExecutionContext | None, node: DesignerGraphNode) -> int:
+    """Seconds a video node is generated at, snapped to the model.
+
+    A manual ``config.duration_sec`` wins; a storyboard clip otherwise follows its
+    shot's Timeline (5s without one); any other video uses the model default.
+    """
+    from jiuwenswarm.server.runtime.designer.pipeline.clip_scope import clamp_clip_duration
+    from jiuwenswarm.server.runtime.designer.pipeline.model_capacity import active_video_capacity
+
+    cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
+    override = cfg.get("duration_sec")
+    if isinstance(override, (int, float)) and not isinstance(override, bool):
+        return clamp_clip_duration(override)
+    if node_pipeline(node) == NODE_ROLE_CLIP:
+        _, shot = _shot_for_node(ctx.graph if ctx is not None else {}, node, ctx)
+        return parse_shot_duration_seconds((shot or {}).get("timeline") or "", default=5)
+    return clamp_clip_duration(active_video_capacity().default_sec)
 
 
 def collect_clip_scene_image(
@@ -135,6 +168,8 @@ def edge_image_flow(
 def edge_text_inputs(
     ctx: NodeExecutionContext | None,
     node: DesignerGraphNode | None,
+    *,
+    exclude_roles: frozenset[str] = frozenset(),
 ) -> list[tuple[str, str]]:
     """Text bodies that arrive on incoming data edges, in edge order."""
     from jiuwenswarm.server.runtime.designer.handlers.common import predecessor_outputs
@@ -142,7 +177,7 @@ def edge_text_inputs(
     outputs = predecessor_outputs(ctx, node if isinstance(node, dict) else None) or []
     texts: list[tuple[str, str]] = []
     for item in outputs:
-        if item.kind != "text":
+        if item.kind != "text" or item.role in exclude_roles:
             continue
         body = item.text.strip()
         if body:
@@ -373,11 +408,24 @@ def collect_clip_reference_images(
     return cap_r2v_reference_paths(paths)
 
 
+def edge_storyboard_text(
+    ctx: NodeExecutionContext | None,
+    node: DesignerGraphNode | None,
+) -> str:
+    """The storyboard table that arrives on this clip's incoming data edge."""
+    from jiuwenswarm.server.runtime.designer.handlers.common import predecessor_outputs
+
+    outputs = predecessor_outputs(ctx, node if isinstance(node, dict) else None) or []
+    for item in outputs:
+        if item.kind == "text" and item.role == NODE_ROLE_STORYBOARD and item.text.strip():
+            return item.text
+    return ""
+
+
 def _storyboard_narrative_action(shot: dict[str, Any] | None) -> str:
-    """Prefer Comment (clip spec description), then Character action."""
     if not isinstance(shot, dict):
         return ""
-    return str(shot.get("comment") or shot.get("character_action") or "").strip()
+    return str(shot.get("character_action") or "").strip()
 
 
 def _extract_action_from_generate_prompt(text: str) -> str:
@@ -403,18 +451,9 @@ def _shot_for_node(
     ctx: NodeExecutionContext | None,
 ) -> tuple[int, StoryboardShot | None]:
     index = node_clip_index(node)
-    text = role_output_text(ctx, NODE_ROLE_STORYBOARD) if ctx is not None else ""
-    shots = parse_storyboard_shots(text)
+    shots = parse_storyboard_shots(edge_storyboard_text(ctx, node))
     if shots and 1 <= index <= len(shots):
-        shot = dict(shots[index - 1])
-        # Keep live storyboard comment/character_action intact.
-        # Do NOT overwrite comment with generate.prompt (often lock-stuffed / stale).
-        sb_action = _storyboard_narrative_action(shot)
-        if not str(shot.get("character_action") or "").strip() and sb_action:
-            shot["character_action"] = sb_action
-        if not str(shot.get("comment") or "").strip() and sb_action:
-            shot["comment"] = sb_action
-        return index, shot
+        return index, shots[index - 1]
     return index, None
 
 
@@ -441,12 +480,9 @@ def _format_shot_block(shot: StoryboardShot, clip_index: int) -> str:
         f"- Timeline: {shot.get('timeline') or ''}",
         f"- Camera: {shot.get('camera') or ''}",
         f"- Camera move: {shot.get('move') or ''}",
+        f"- On screen: {shot.get('on_screen') or ''}",
         f"- Character action: {shot.get('character_action') or ''}",
-        f"- Scene change: {shot.get('scene_change') or ''}",
     ]
-    comment = str(shot.get("comment") or "").strip()
-    if comment:
-        lines.append(f"- Shot description: {comment}")
     return "\n".join(lines)
 
 
@@ -519,7 +555,7 @@ def build_clip_prompt(
             node["config"] = cfg
     except Exception:  # noqa: BLE001
         pass
-    duration = parse_shot_duration_seconds((shot or {}).get("timeline") or "", default=5)
+    duration = video_duration_seconds(ctx, node)
     focus_names = ""
     cfg_names = [str(x).strip() for x in (cfg.get("cast_names") or []) if str(x).strip()]
     if cfg_names:
@@ -547,27 +583,17 @@ def build_clip_prompt(
         str(cfg.get("continuity_clip_node_id") or "").strip()
     )
     sb_action = _storyboard_narrative_action(shot if isinstance(shot, dict) else None)
-    action = str(
-        sb_action
-        or cfg.get("clip_action")
-        or (shot or {}).get("character_action")
-        or (shot or {}).get("comment")
-        or ""
-    ).strip()
+    action = str(sb_action or cfg.get("clip_action") or "").strip()
     if not action:
         local = str(cfg.get("prompt") or "").strip()
         user = str(graph.get("description") or "")
         try:
             from jiuwenswarm.server.runtime.designer.pipeline.clip_scope import (
                 looks_like_full_story_restatement,
-                storyboard_fallback_beat,
             )
 
             if local and not looks_like_full_story_restatement(local, user) and len(local) <= 400:
                 action = local
-            elif ctx is not None:
-                sb_text = str(role_output_text(ctx, NODE_ROLE_STORYBOARD) or "").strip()
-                action = storyboard_fallback_beat(sb_text, clip_index)
         except Exception:  # noqa: BLE001
             if local and len(local) <= 220:
                 action = local
@@ -576,8 +602,7 @@ def build_clip_prompt(
     ).strip()
     speech_line = str(
         cfg.get("speech_line")
-        or (shot or {}).get("speech_line")
-        or (shot or {}).get("dialogue")
+        or (shot or {}).get("speech")
         or ""
     ).strip()
     story_lines: list[str] = [
@@ -856,18 +881,22 @@ def build_clip_prompt(
 
 async def generate_clip_video(
     prompt: str,
+    *,
+    aspect_ratio: str,
+    resolution: str,
     save_dir: str | None = None,
     first_frame: str | None = None,
     reference_images: list[str] | None = None,
     reference_file: str | None = None,
     duration: int = 5,
     audio: bool | None = None,
-    size: str | None = None,
-    resolution: str | None = None,
     model: str | None = None,
     force_reference_mode: bool = False,
 ) -> dict[str, Any]:
-    """Call the Settings > Agent video model and wait for the clip. Tests monkeypatch this function."""
+    """Call the Settings > Agent video model and wait for the clip. Tests monkeypatch this function.
+
+    ``aspect_ratio`` / ``resolution`` are the canvas video settings (``media_settings``).
+    """
     from jiuwenswarm.common.utils import get_env_file
     from jiuwenswarm.dotenv_early import load_dotenv_runtime
     from jiuwenswarm.server.runtime.designer import media_generation
@@ -877,26 +906,14 @@ async def generate_clip_video(
     except Exception:
         logger.debug("Failed to reload video generation env before generation", exc_info=True)
 
-    from jiuwenswarm.server.runtime.designer.pipeline.axis_locks import (
-        resolve_clip_video_duration,
-        resolve_clip_video_format,
-    )
+    from jiuwenswarm.server.runtime.designer.pipeline.clip_scope import clamp_clip_duration
 
-    if size or resolution:
-        video_size, video_res = resolve_clip_video_format(
-            user_resolution=str(resolution or ""),
-            director_resolution=str(resolution or ""),
-        )
-        if size and "*" in str(size).replace("x", "*").replace("X", "*"):
-            video_size = str(size).replace("x", "*").replace("X", "*")
-    else:
-        video_size, video_res = resolve_clip_video_format()
-    clamped_duration = resolve_clip_video_duration(duration, default=5)
+    clamped_duration = clamp_clip_duration(duration)
     resolved_model = (str(model).strip() or None) if model else None
     tool_input = {
         "prompt": prompt,
-        "size": video_size,
-        "resolution": video_res,
+        "aspect_ratio": aspect_ratio,
+        "resolution": resolution,
         "first_frame": first_frame,
         "reference_images": reference_images,
         "reference_file": reference_file,
@@ -918,9 +935,9 @@ async def generate_clip_video(
         result = await media_generation.generate_video(
             media_generation.DesignerVideoRequest(
                 prompt=prompt,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
                 duration=clamped_duration,
-                size=video_size,
-                resolution=video_res,
                 first_frame=first_frame,
                 reference_images=tuple(reference_images or ()),
                 reference_file=reference_file,
@@ -967,11 +984,10 @@ class ClipNodeHandler:
         if scene_chain:
             cfg = stamp_scene_last_frame_chain(cfg, scene_chain)
             node["config"] = cfg
-        _, shot = _shot_for_node(ctx.graph, node, ctx)
-        duration = parse_shot_duration_seconds((shot or {}).get("timeline") or "", default=5)
+        duration = video_duration_seconds(ctx, node)
         prompt = build_clip_prompt(ctx.graph, node, ctx)
         payload = connected_payload_clause(
-            edge_text_inputs(ctx, node),
+            edge_text_inputs(ctx, node, exclude_roles=frozenset({NODE_ROLE_STORYBOARD})),
             edge_video_inputs(ctx, node),
         )
         if payload and payload not in prompt:
@@ -1014,15 +1030,9 @@ class ClipNodeHandler:
                 ctx.on_prompt_artifact(prompt)
             except Exception:  # noqa: BLE001
                 logger.debug("clip early prompt handoff failed", exc_info=True)
-        aspect = cfg.get("aspect_lock") if isinstance(cfg.get("aspect_lock"), dict) else {}
-        if not aspect:
-            meta = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
-            aspect = meta.get("aspect_lock") if isinstance(meta.get("aspect_lock"), dict) else {}
-        from jiuwenswarm.server.runtime.designer.pipeline.axis_locks import (
-            video_format_for_node,
-        )
+        from jiuwenswarm.server.runtime.designer.media_settings import video_settings
 
-        video_size, video_res = video_format_for_node(graph, cfg, aspect if isinstance(aspect, dict) else None)
+        video = video_settings(graph)
         from jiuwenswarm.server.runtime.designer.user_references import (
             user_reference_video_path,
         )
@@ -1059,8 +1069,8 @@ class ClipNodeHandler:
                 reference_images=overrides["reference_images"],
                 reference_file=reference_file,
                 duration=duration,
-                size=video_size,
-                resolution=video_res,
+                aspect_ratio=video.aspect_ratio,
+                resolution=video.resolution,
                 audio=True if want_audio else False,
                 model=None,
                 force_reference_mode=overrides["force_reference_mode"],

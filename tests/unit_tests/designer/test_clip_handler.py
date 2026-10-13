@@ -68,53 +68,6 @@ def test_build_clip_prompt_uses_brief_then_graph_text() -> None:
     assert "Image" in out or "只拍站台" in out
 
 
-def test_build_clip_prompt_reads_upstream_brief_and_storyboard(tmp_path: Path) -> None:
-    from jiuwenswarm.common.schema.designer_graph import NODE_ROLE_STORYBOARD, NODE_TYPE_TABLE
-    from jiuwenswarm.server.runtime.designer.handlers.common import file_output_ref
-
-    brief = tmp_path / "brief.md"
-    story = tmp_path / "storyboard.md"
-    brief.write_text("# Brief\n**Visual style:** 火车进站", encoding="utf-8")
-    story.write_text(
-        "## 分镜表\n"
-        "| 镜号 | 时间轴 | 镜头视角 | 运镜 | 人物变化 | 场景变化 |\n"
-        "| 1 | 0.0-5.0s | 中景/平视 | 缓推进站 | 主体入画 | 站台 |\n",
-        encoding="utf-8",
-    )
-    graph = _graph()
-    graph["nodes"].insert(
-        1,
-        {
-            "id": "n_storyboard",
-            "type": NODE_TYPE_TABLE,
-            "label": "storyboard",
-            "config": {"role": NODE_ROLE_STORYBOARD},
-        },
-    )
-    graph["nodes"][-1]["config"]["clip_action"] = "缓推进站"
-    graph["nodes"][-1]["config"]["camera"] = "中景/平视"
-    ctx = NodeExecutionContext(
-        graph=graph,
-        run_id="run_clip_up",
-        node_id="n_clip",
-        run={
-            "node_states": {
-                "n_brief": {
-                    "status": "completed",
-                    "output_ref": file_output_ref(brief, kind="text", mime_type="text/markdown"),
-                },
-                "n_storyboard": {
-                    "status": "completed",
-                    "output_ref": file_output_ref(story, kind="table", mime_type="text/markdown"),
-                },
-            }
-        },
-    )
-    prompt = build_clip_prompt(graph, graph["nodes"][-1], ctx)
-    assert "缓推进站" in prompt or "Image" in prompt
-    assert "USER PROMPT (authoritative story" not in prompt
-
-
 @pytest.mark.asyncio
 async def test_clip_handler_sends_scene_spec_and_storyboard_as_multimodal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -132,10 +85,10 @@ async def test_clip_handler_sends_scene_spec_and_storyboard_as_multimodal(
     story = tmp_path / "storyboard.md"
     scene.write_bytes(b"png-scene")
     story.write_text(
-        "## 分镜表\n"
-        "| 镜号 | 时间轴 | 镜头视角 | 运镜 | 人物变化 | 场景变化 |\n"
-        "| 1 | 0.0-2.0s | 全景/平视 | 缓摇 | 未入画 | 站台 |\n"
-        "| 2 | 2.0-5.0s | 中景/平视 | 跟移 | 主体入画 | 出站 |\n",
+        "| Shot | Timeline | Camera | Move | On screen | Character action | Speech |\n"
+        "| --- | --- | --- | --- | --- | --- | --- |\n"
+        "| 1 | 0.0-2.0s | 全景/平视 | 缓摇 |  | 未入画 |  |\n"
+        "| 2 | 2.0-5.0s | 中景/平视 | 跟移 | 主体 | 主体入画 |  |\n",
         encoding="utf-8",
     )
     video = tmp_path / "generated_clip.mp4"
@@ -155,6 +108,10 @@ async def test_clip_handler_sends_scene_spec_and_storyboard_as_multimodal(
             "label": "scene",
             "config": {"role": NODE_ROLE_SCENE},
         },
+    ]
+    graph["edges"] = [
+        {"id": "e_sb_clip", "source": "n_storyboard", "target": "n_clip"},
+        {"id": "e_scene_clip", "source": "n_scene", "target": "n_clip"},
     ]
     ctx = NodeExecutionContext(
         graph=graph,
@@ -357,13 +314,23 @@ async def test_clip_handler_returns_file_output_ref(
         assert kwargs.get("force_reference_mode") is True
         assert first_frame in (None, "")
         assert "USER PROMPT (authoritative story" not in prompt
+        assert kwargs["aspect_ratio"] == "9:16"
+        assert kwargs["resolution"] == "720P"
         return {"video_path": str(video), "revised_prompt": prompt}
 
     monkeypatch.setattr(
         "jiuwenswarm.server.runtime.designer.handlers.clip.generate_clip_video",
         fake_generate,
     )
+    monkeypatch.setattr(
+        "jiuwenswarm.server.runtime.designer.pipeline.model_capacity.configured_video_model_id",
+        lambda: "wan3.0-video",
+    )
     graph = _graph()
+    graph["metadata"] = {
+        **(graph.get("metadata") or {}),
+        "video_settings": {"aspect_ratio": "9:16", "resolution": "720p"},
+    }
     result = await ClipNodeHandler().execute(
         graph["nodes"][1],
         NodeExecutionContext(graph=graph, run_id="run_clip01", node_id="n_clip"),
@@ -388,7 +355,7 @@ async def test_generate_clip_video_raises_on_provider_error(
         fake_generate,
     )
     with pytest.raises(RuntimeError, match="402"):
-        await generate_clip_video("a boy playing basketball")
+        await generate_clip_video("a boy playing basketball", aspect_ratio="16:9", resolution="720P")
 
 
 @pytest.mark.asyncio
@@ -491,11 +458,10 @@ async def test_clip_handler_uses_scene_spec_and_storyboard_duration_for_shot(
     story = tmp_path / "storyboard.md"
     scene.write_bytes(b"png-scene")
     story.write_text(
-        "## 分镜表\n"
-        "| 镜号 | 时间轴 | 镜头视角 | 运镜 | 人物变化 | 场景变化 |\n"
-        "| --- | --- | --- | --- | --- | --- |\n"
-        "| 1 | 0.0-2.0s | 全景/平视 | 缓摇 | 未入画 | 站台 |\n"
-        "| 2 | 2.0-5.0s | 中景/平视 | 跟移 | 主体入画 | 出站 |\n",
+        "| Shot | Timeline | Camera | Move | On screen | Character action | Speech |\n"
+        "| --- | --- | --- | --- | --- | --- | --- |\n"
+        "| 1 | 0.0-2.0s | 全景/平视 | 缓摇 |  | 未入画 |  |\n"
+        "| 2 | 2.0-5.0s | 中景/平视 | 跟移 | 主体 | 主体入画 |  |\n",
         encoding="utf-8",
     )
     video = tmp_path / "generated_clip_2.mp4"
@@ -524,6 +490,10 @@ async def test_clip_handler_uses_scene_spec_and_storyboard_duration_for_shot(
             "label": "scene",
             "config": {"role": NODE_ROLE_SCENE},
         },
+    ]
+    graph["edges"] = [
+        {"id": "e_sb_clip", "source": "n_storyboard", "target": "n_clip_2"},
+        {"id": "e_scene_clip", "source": "n_scene", "target": "n_clip_2"},
     ]
     clip = next(node for node in graph["nodes"] if node["id"] == "n_clip_2")
     ctx = NodeExecutionContext(
@@ -758,3 +728,33 @@ def test_concatenate_clip_videos_falls_back_to_filter_concat(
     assert "-an" not in filter_cmd
     assert "aac" in filter_cmd
 
+
+
+@pytest.mark.asyncio
+async def test_generic_video_node_generates_at_its_manual_length(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jiuwenswarm.server.runtime.designer.handlers import media_nodes
+
+    video = tmp_path / "out.mp4"
+    video.write_bytes(b"mp4")
+    seen: list[int] = []
+
+    async def fake_generate(prompt: str, *, duration: int = 5, **kwargs) -> dict[str, str]:
+        seen.append(duration)
+        return {"video_path": str(video)}
+
+    monkeypatch.setattr(media_nodes, "generate_clip_video", fake_generate)
+    monkeypatch.setattr(media_nodes, "graph_workspace_dir", lambda graph: tmp_path)
+    monkeypatch.setattr(
+        "jiuwenswarm.server.runtime.designer.pipeline.model_capacity.configured_video_model_id",
+        lambda: "MiniMax-H3-Max",
+    )
+    node = {"id": "v1", "type": "video", "config": {"prompt": "a fox"}}
+    graph = {"metadata": {}, "nodes": [node], "edges": []}
+    ctx = NodeExecutionContext(graph=graph, run_id="r", node_id="v1", run={})
+
+    await media_nodes.VideoNodeHandler().execute(node, ctx)
+    node["config"]["duration_sec"] = 11
+    await media_nodes.VideoNodeHandler().execute(node, ctx)
+    assert seen == [6, 11]

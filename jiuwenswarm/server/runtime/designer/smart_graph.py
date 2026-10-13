@@ -40,18 +40,6 @@ from jiuwenswarm.common.schema.designer_graph import (
 from jiuwenswarm.server.runtime.designer.skills_loader import attach_skills_metadata
 
 _MAX_SPLIT_CHARS = 12
-_IMAGE_SIZE = "1K"  # cost-save: ~1024 class, not 2K/4K
-
-
-def _duration_sec_for_graph(prompt: str, analysis: dict[str, Any], characters: list[dict[str, Any]]) -> int:
-    from jiuwenswarm.server.runtime.designer.pipeline.clip_scope import (
-        film_duration_for_graph,
-    )
-
-    stamped = film_duration_for_graph(prompt, analysis)
-    if stamped >= 1:
-        return stamped
-    return max(6, min(24, max(1, len(characters)) * 3 + 4))
 
 
 def default_spatial_lock(scene: dict[str, Any] | None = None) -> dict[str, str]:
@@ -251,112 +239,6 @@ def prune_non_contributing_nodes(graph: DesignerExecutionGraph) -> list[str]:
     meta["prune_notes"] = notes[-40:]
     graph["metadata"] = meta
     return pruned
-
-
-def _write_storyboard_markdown(
-    shots: list[dict[str, Any]],
-    characters: list[dict[str, Any]],
-    *,
-    style_lock: dict[str, Any] | None = None,
-) -> str:
-    id_to_name = {str(c.get("id")): str(c.get("name") or c.get("id")) for c in characters}
-    # Hierarchical: scenes (setting_id) → clips/shots.
-    by_set: dict[str, list[dict[str, Any]]] = {}
-    order: list[str] = []
-    for shot in shots:
-        if not isinstance(shot, dict):
-            continue
-        sid = str(shot.get("setting_id") or "set_1").strip() or "set_1"
-        if sid not in by_set:
-            by_set[sid] = []
-            order.append(sid)
-        by_set[sid].append(shot)
-    lines = [
-        "# Storyboard Scenario",
-        "",
-        (
-            "Visual style: "
-            + str((style_lock or {}).get("look") or (style_lock or {}).get("medium") or "").strip()
-        )
-        if style_lock
-        else "",
-        "",
-        "Hierarchy: **Scene (setting_id)** → **Clips/shots**.",
-        "Different scenes = different places. First clip of each scene authors the "
-        "**scene specs + master prompt** (compose scene + only on-screen cast). "
-        "Later same-scene clips **compose again from character specs** "
-        "using that shared scene prompt/view locks (architecture locked). "
-        "Never borrow another setting_id. Not every cast member is in every scene.",
-        "",
-    ]
-    for sid in order:
-        scene_shots = by_set.get(sid) or []
-        scene_text = ""
-        for shot in scene_shots:
-            scene_text = str(shot.get("setting_description") or "").strip()
-            if scene_text:
-                break
-        lines.append(f"## Scene `{sid}`" + (f" — {scene_text}" if scene_text else ""))
-        lines.append("")
-        for shot in scene_shots:
-            idx = int(shot.get("clip_index") or 0)
-            strategy = str(shot.get("clip_strategy") or "")
-            visible = [
-                id_to_name.get(str(cid), str(cid))
-                for cid in (
-                    shot.get("on_screen")
-                    or shot.get("visible_cast_ids")
-                    or shot.get("character_ids")
-                    or []
-                )
-            ]
-            offscreen = [
-                id_to_name.get(str(cid), str(cid))
-                for cid in (shot.get("offscreen") or shot.get("off_screen_cast_ids") or [])
-            ]
-            featured = [
-                id_to_name.get(str(cid), str(cid))
-                for cid in (shot.get("featured_cast_ids") or [])
-            ]
-            actions = shot.get("cast_actions") if isinstance(shot.get("cast_actions"), dict) else {}
-            doing_lines = [
-                f"{id_to_name.get(str(cid), str(cid))}: {act}"
-                for cid, act in actions.items()
-                if str(act).strip()
-            ]
-            crowd = shot.get("crowd_lock") if isinstance(shot.get("crowd_lock"), dict) else {}
-            lines.append(f"### Shot {idx} — {shot.get('title') or f'Shot {idx}'}")
-            lines.append(f"- Timeline: {shot.get('timeline') or ''}")
-            lines.append(f"- Strategy: `{strategy}`")
-            lines.append(f"- Camera: {shot.get('camera') or ''}")
-            lines.append(f"- On screen (visible): {', '.join(visible) or '—'}")
-            lines.append(f"- Offscreen (in scene, not in frame): {', '.join(offscreen) or '—'}")
-            lines.append(f"- Featured (camera focus): {', '.join(featured) or '—'}")
-            if doing_lines:
-                lines.append(f"- Doing: {'; '.join(doing_lines)}")
-            lines.append(f"- Action: {shot.get('action') or shot.get('clip_prompt') or ''}")
-            if shot.get("scene_distinctness"):
-                lines.append(f"- Scene note: {shot.get('scene_distinctness')}")
-            speech_line = str(shot.get("speech_line") or "").strip()
-            by_char = shot.get("speech_by_character") if isinstance(shot.get("speech_by_character"), dict) else {}
-            if by_char:
-                bits = "; ".join(f"{cid}: {line}" for cid, line in by_char.items() if str(line).strip())
-                if bits:
-                    lines.append(f"- Speech by character: {bits}")
-            elif speech_line:
-                lines.append(f"- Speech: {speech_line}")
-            if shot.get("language_lock"):
-                lines.append(f"- Language lock: {shot.get('language_lock')}")
-            if crowd:
-                lines.append(
-                    f"- Crowd lock: present={crowd.get('present')}; "
-                    f"{str(crowd.get('density') or '')}"
-                )
-            done = shot.get("already_done") or []
-            if done:
-                lines.append(f"- Already done: {'; '.join(str(x) for x in done[:8])}")
-            lines.append("")
-    return "\n".join(lines).strip() + "\n"
 
 
 def _shot_budget(analysis: dict[str, Any], shots: list[dict[str, Any]]) -> int:
@@ -854,40 +736,10 @@ def build_smart_video_graph(
         pass
     # Continuity: scene specs + on-screen character specs; storyboard start/end owns continuity.
     analysis["scene_consistency_mode"] = "scene_specs_plus_clips"
-    from jiuwenswarm.server.runtime.designer.pipeline.axis_locks import (
-        infer_aspect_lock,
-        resolve_clip_video_format,
-    )
-    from jiuwenswarm.server.runtime.designer.pipeline.model_capacity import (
-        resolution_mentioned,
-    )
-
-    aspect = analysis.get("aspect_lock") if isinstance(analysis.get("aspect_lock"), dict) else {}
-    if not aspect:
-        aspect = infer_aspect_lock(prompt_text)
-    asked_res = resolution_mentioned(prompt_text)
-    if asked_res:
-        analysis["video_resolution"] = asked_res
-    elif not str(analysis.get("video_resolution") or "").strip():
-        analysis["video_resolution"] = str(aspect.get("video_resolution") or "")
-    film_video_size, film_video_res = resolve_clip_video_format(
-        ratio=str(aspect.get("ratio") or "16:9"),
-        user_resolution=asked_res,
-        director_resolution=str(
-            analysis.get("video_resolution") or aspect.get("video_resolution") or ""
-        ),
-    )
-    analysis["video_resolution"] = film_video_res
-    analysis["video_size"] = film_video_size
-    aspect = dict(aspect)
-    aspect["video_size"] = film_video_size
-    aspect["video_resolution"] = film_video_res
-    analysis["aspect_lock"] = aspect
 
     cast_sheets, shot_cast_nodes, cast_layout = _plan_cast_sheets(
         characters, shots, prompt=prompt_text
     )
-    film_duration = _duration_sec_for_graph(prompt_text, analysis, characters)
     try:
         from jiuwenswarm.server.runtime.designer.pipeline.production_specs import (
             build_production_specs,
@@ -997,7 +849,6 @@ def build_smart_video_graph(
                 "character_name": names[0] if names else display,
                 "character_names": names,
                 "costume_lock": wardrobe or str(sheet.get("costume_lock") or ""),
-                "image_size": _IMAGE_SIZE,
             }
             prompt = compose_character_sheet_prompt(cfg=seed_cfg, graph=None, seed="")
         except Exception:  # noqa: BLE001
@@ -1025,9 +876,8 @@ def build_smart_video_graph(
                     "identity_source": True,
                     "costume_lock": str(sheet.get("costume_lock") or ""),
                     "style_lock": dict(film_style),
-                    "image_size": _IMAGE_SIZE,
                     "max_image_calls": 1,
-                    "inputs": ["n_brief", "n_storyboard"],
+                    "inputs": ["n_brief"],
                     "agent_name": agent,
                     "kind": "agent",
                     "skill_id": "character",
@@ -1036,14 +886,13 @@ def build_smart_video_graph(
                     "director_task": (
                         f"Solo character specs for {display}. "
                         "Write a positive Qwen-ready studio portrait from the locks "
-                        "(face, wardrobe, style, aspect) — no LOCK banners or negatives. "
+                        "(face, wardrobe, style) — no LOCK banners or negatives. "
                         "Then call_image_model with that prompt only."
                     ),
                 },
                 "layout": {"x": 680, "y": float(40 + (i - 1) * 160), "width": 240, "height": 140},
             }
         )
-        edges.append(_edge(f"e_sb_{nid}", "n_storyboard", nid))
         edges.append(_edge(f"e_brief_{nid}", "n_brief", nid))
 
     # Spatial lock text (weak env hint only). Scene specs are built per setting_id;
@@ -1235,14 +1084,13 @@ def build_smart_video_graph(
                 "spatial_lock": shot_spatial_scene,
                 "time_of_day_lock": tod,
                 "style_lock": dict(film_style) if isinstance(film_style, dict) else {},
-                "image_size": _IMAGE_SIZE,
             }
             scene_prompt = compose_scene_specs_prompt(cfg=seed_cfg, graph=None, seed="")
         except Exception:  # noqa: BLE001
             tod = {}
             scene_prompt = "One empty setting. The setting is empty. One clear image."
         _ = (opening_cast, opening_action, ensemble_nids, lock_line_scene)
-        scene_inputs = ["n_brief", "n_storyboard"]
+        scene_inputs = ["n_brief"]
         nodes.append(
             {
                 "id": scene_nid,
@@ -1263,7 +1111,6 @@ def build_smart_video_graph(
                     "is_scene_master": True,
                     "generate": {"prompt": scene_prompt},
                     "prompt": scene_prompt,
-                    "image_size": _IMAGE_SIZE,
                     "max_image_calls": 1,
                     "inputs": scene_inputs,
                     "agent_name": scene_label,
@@ -1274,7 +1121,7 @@ def build_smart_video_graph(
                     "director_task": (
                         f"Empty environment plate for setting {sid}. "
                         "Write a positive Qwen-ready plate prompt from the locks "
-                        "(place, lighting, style, aspect) — no LOCK banners or negatives. "
+                        "(place, lighting, style) — no LOCK banners or negatives. "
                         "Then call_image_model with that prompt only."
                     ),
                 },
@@ -1675,8 +1522,6 @@ def build_smart_video_graph(
             "first_of_setting": first_of_setting,
             "composed_scene": False,
             "style_lock": dict(film_style),
-            "video_size": film_video_size,
-            "video_resolution": film_video_res,
             "generate": {"prompt": shot_prompt_body},
             "max_video_calls": 1,
             "inputs": clip_inputs,
@@ -1854,7 +1699,6 @@ def build_smart_video_graph(
             "spatial_lock_by_setting": spatial_by_setting,
             "max_shots": len(shots),
             "target_clip_count": len(shots),
-            "image_size": _IMAGE_SIZE,
             "max_image_calls_per_node": 1,
         },
         "created_at": now,

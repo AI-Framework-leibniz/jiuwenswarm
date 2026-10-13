@@ -54,6 +54,7 @@ async def test_script_analysis_prompt_develops_sparse_requests(
     result = await script_analysis.analyze_creative_brief(
         "Create a 30 second video for Christmas celebration.",
         timeout_sec=5,
+        film_duration_sec=30,
     )
 
     system = captured["system"]
@@ -230,13 +231,6 @@ async def test_director_storyboard_materializes_enriched_speech_into_clip_config
                     "language_lock": "en",
                     "include_speech": True,
                     "include_music": True,
-                    "storyboard_markdown": (
-                        "# Storyboard\n\n### Shot 1 — Arrival\n- Timeline: 0-7s\n"
-                        "- Action: A gift arrives.\n\n### Shot 2 — Reveal\n"
-                        "- Timeline: 7-14s\n- Speech: This brings everyone together.\n\n"
-                        "### Shot 4 — Payoff\n- Timeline: 22-30s\n"
-                        "- Speech: Make this Christmas last.\n"
-                    ),
                 }
             ),
         }

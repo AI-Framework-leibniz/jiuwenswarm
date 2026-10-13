@@ -43,6 +43,11 @@ from jiuwenswarm.common.work_mode import (
 )
 from jiuwenswarm.server.runtime.designer.executor import GraphExecutor
 from jiuwenswarm.server.runtime.designer.graph_store import DesignerGraphStore
+from jiuwenswarm.server.runtime.designer.media_settings import (
+    MediaSettingsError,
+    media_capabilities,
+    update_media_settings,
+)
 from jiuwenswarm.server.runtime.designer.model_tools import DesignerLlmError
 from jiuwenswarm.server.runtime.gateway_adapter.base import (
     GatewayAdapter,
@@ -1180,9 +1185,17 @@ def _patch_graph(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | N
                 "upsert_edges",
                 "remove_node_ids",
                 "remove_edge_ids",
+                "video_settings",
+                "image_settings",
             )
             if key in params
         }
+    video_patch = None
+    image_patch = None
+    if isinstance(raw_patch, dict):
+        raw_patch = dict(raw_patch)
+        video_patch = raw_patch.pop("video_settings", None)
+        image_patch = raw_patch.pop("image_settings", None)
     try:
         # Mark upserted nodes as user-added when the patch did not already set it
         # (canvas dock / successor add paths stamp this on the client).
@@ -1202,6 +1215,8 @@ def _patch_graph(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | N
                     stamped.append(node)
                 raw_patch = {**raw_patch, "upsert_nodes": stamped}
         next_graph = apply_graph_patch(graph, raw_patch)
+        if video_patch is not None or image_patch is not None:
+            update_media_settings(next_graph, video=video_patch, image=image_patch)
         try:
             from jiuwenswarm.server.runtime.designer.orchestration import Director
 
@@ -1210,9 +1225,22 @@ def _patch_graph(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | N
             logger.debug("Director user-node onboard on patch failed", exc_info=True)
         saved = _store.save_graph(next_graph)
         _persist_uploaded_outputs(saved)
-    except DesignerGraphValidationError as exc:
+    except (DesignerGraphValidationError, MediaSettingsError) as exc:
         return None, str(exc), "BAD_REQUEST"
     return {"graph": dict(saved)}, None, None
+
+
+def _media_capabilities(
+    params: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    graph_id = str(params.get("graph_id") or "").strip()
+    graph = None
+    if graph_id:
+        graph = _store.get_graph(graph_id)
+        if graph is None:
+            return None, "graph not found", "NOT_FOUND"
+        return media_capabilities(graph, _store.get_latest_run_for_graph(graph_id)), None, None
+    return media_capabilities(), None, None
 
 
 def _is_managed_design_project_dir(project_dir: str) -> bool:
@@ -1230,7 +1258,7 @@ def _bootstrap_graph(
     _channel_id: str,
     analysis: dict[str, Any] | None = None,
     on_progress: Any | None = None,
-    allow_additional_session: bool = False,
+    media_intent: Any | None = None,
 ) -> tuple[dict[str, Any] | None, str | None, str | None]:
     prompt = str(params.get("prompt") or "").strip()
     raw_references = params.get("references")
@@ -1267,6 +1295,11 @@ def _bootstrap_graph(
         DesignerLlmError,
         LLM_REQUIRED,
     )
+    from jiuwenswarm.server.runtime.designer.media_intent import (
+        MediaIntent,
+        media_settings_from_intent,
+    )
+    from jiuwenswarm.server.runtime.designer.media_settings import write_media_settings
     from jiuwenswarm.server.runtime.designer.skills_loader import attach_skills_metadata
     from jiuwenswarm.server.runtime.designer.smart_graph import build_smart_video_graph
     from jiuwenswarm.server.runtime.designer.user_references import (
@@ -1353,6 +1386,10 @@ def _bootstrap_graph(
     if isinstance(analysis.get("scene_locks"), dict) and analysis["scene_locks"]:
         meta["scene_locks"] = analysis["scene_locks"]
     graph["metadata"] = meta
+    video, image = media_settings_from_intent(
+        media_intent if isinstance(media_intent, MediaIntent) else MediaIntent()
+    )
+    write_media_settings(graph, video=video, image=image)
     graph = attach_skills_metadata(graph, prompt)
     if callable(on_progress):
         cast_n = sum(
@@ -1735,6 +1772,7 @@ async def _bootstrap_graph_with_director_impl(
         DesignerLlmError,
         require_llm,
     )
+    from jiuwenswarm.server.runtime.designer.media_intent import extract_media_intent
     from jiuwenswarm.server.runtime.designer.script_analysis import analyze_creative_brief
     from jiuwenswarm.server.runtime.designer.user_references import (
         UserReferenceError,
@@ -1770,12 +1808,16 @@ async def _bootstrap_graph_with_director_impl(
     image_refs = image_reference_records(user_refs_preview)
 
     if callable(on_progress):
+        on_progress("thinking", "Director · Reading video format")
+    media_intent = await extract_media_intent(prompt)
+    if callable(on_progress):
         on_progress("thinking", "Director · Extracting cast and scenes (LLM)")
     try:
         analysis = await analyze_creative_brief(
             analysis_prompt,
             timeout_sec=120.0,
             reference_images=[str(item.get("path") or "") for item in image_refs],
+            film_duration_sec=media_intent.film_duration_sec,
         )
     except DesignerLlmError as exc:
         return None, exc.user_message, exc.code
@@ -1817,7 +1859,7 @@ async def _bootstrap_graph_with_director_impl(
         channel_id,
         analysis,
         on_progress,
-        allow_additional_session,
+        media_intent,
     )
     if error is not None or not isinstance(payload, dict):
         return payload, error, code
@@ -1906,6 +1948,7 @@ class DesignerAdapter(GatewayAdapter):
             ReqMethod.DESIGNER_GRAPH_BOOTSTRAP.value,
             ReqMethod.DESIGNER_GRAPH_PATCH.value,
             ReqMethod.DESIGNER_GRAPH_CHAT.value,
+            ReqMethod.DESIGNER_MEDIA_CAPABILITIES.value,
             ReqMethod.DESIGNER_RUN_START.value,
             ReqMethod.DESIGNER_RUN_GET.value,
             ReqMethod.DESIGNER_RUN_PAUSE.value,
@@ -1947,6 +1990,8 @@ class DesignerAdapter(GatewayAdapter):
                 payload, error, code = await asyncio.to_thread(_patch_graph, params)
             elif method == ReqMethod.DESIGNER_GRAPH_CHAT:
                 payload, error, code = await _chat_graph(request, params)
+            elif method == ReqMethod.DESIGNER_MEDIA_CAPABILITIES:
+                payload, error, code = await asyncio.to_thread(_media_capabilities, params)
             elif method == ReqMethod.DESIGNER_RUN_GET:
                 payload, error, code = await asyncio.to_thread(_get_run, params)
             elif method == ReqMethod.DESIGNER_RUN_START:

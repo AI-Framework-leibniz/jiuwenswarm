@@ -66,7 +66,7 @@ function toPersistableGraph(
 function buildLayoutSyncKey(graph: DesignerExecutionGraph): string {
   const nodesKey = graph.nodes
     .map((node) => {
-      const size = resolvedNodeCanvasSize(node);
+      const size = resolvedNodeCanvasSize(node, graph.metadata);
       const layout = node.layout ?? {};
       return `${node.id}:${node.type}:${layout.x ?? 0}:${layout.y ?? 0}:${size.width}:${size.height}`;
     })
@@ -265,8 +265,8 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
     onChange: ({ nodes: selectedNodes }) => {
       const only = selectedNodes.length === 1 ? selectedNodes[0] : null;
       setSelectedNodeId(only?.id ?? null);
-      const menuId = useDesignerUiStore.getState().successorMenuNodeId;
-      if (menuId && only?.id !== menuId) {
+      const menu = useDesignerUiStore.getState().nodePortMenu;
+      if (menu && only?.id !== menu.nodeId) {
         closeDock();
       }
     },
@@ -282,9 +282,6 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
   const onConnect: OnConnect = useCallback(
     (connection: Connection) => {
       if (canvasLocked) return;
-      // "+" menu sits on the source handle; ignore accidental RF connections
-      // while the user is picking a successor type.
-      if (useDesignerUiStore.getState().successorMenuNodeId) return;
       if (!connection.source || !connection.target) return;
       const source = connection.source;
       const target = connection.target;
@@ -411,7 +408,10 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
         zoomActivationKeyCode={['Control', 'Meta']}
         selectionOnDrag={!handMode && !canvasLocked}
         nodesDraggable={!handMode && !canvasLocked}
-        nodesConnectable={!handMode && !canvasLocked}
+        // Port handles stay connectable in select and hand tools; only lock blocks them.
+        nodesConnectable={!canvasLocked}
+        connectionDragThreshold={8}
+        connectOnClick={false}
         deleteKeyCode={canvasLocked ? null : ['Backspace', 'Delete']}
         elementsSelectable={!canvasLocked}
         fitView

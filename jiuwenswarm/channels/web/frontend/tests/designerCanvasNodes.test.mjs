@@ -13,12 +13,13 @@ import {
   buildNodeFromLibraryAsset,
   appendUserCanvasEdit,
   connectNodeToGraph,
-  contentAspectFromNodeConfig,
+  contentAspectForNode,
   isDefaultLandscapeNodeSize,
   nextTypeIndex,
   offsetCanvasPosition,
   packDesignerNodeLayouts,
   parseContentAspect,
+  positionLeftOfNode,
   positionRightOfNode,
   removeNodesFromGraph,
   resolvedNodeCanvasSize,
@@ -94,6 +95,18 @@ test('positionRightOfNode stacks below an occupied successor slot', () => {
   assert.equal(first.x, 40 + 280 + DESIGNER_SUCCESSOR_GAP_X);
   assert.equal(first.y, 100);
   const second = positionRightOfNode(source, [
+    { id: 'n_other', layout: { x: first.x, y: first.y } },
+  ]);
+  assert.equal(second.x, first.x);
+  assert.equal(second.y, first.y + 160 + DESIGNER_SUCCESSOR_GAP_Y);
+});
+
+test('positionLeftOfNode stacks below an occupied predecessor slot', () => {
+  const source = { id: 'n_brief', layout: { x: 400, y: 100, width: 280, height: 160 } };
+  const first = positionLeftOfNode(source, []);
+  assert.equal(first.x, 400 - 280 - DESIGNER_SUCCESSOR_GAP_X);
+  assert.equal(first.y, 100);
+  const second = positionLeftOfNode(source, [
     { id: 'n_other', layout: { x: first.x, y: first.y } },
   ]);
   assert.equal(second.x, first.x);
@@ -191,12 +204,15 @@ test('parseContentAspect reads ratio and pixel sizes', () => {
   assert.equal(parseContentAspect('1K'), null);
 });
 
-test('contentAspectFromNodeConfig prefers aspect_lock', () => {
+test('contentAspectForNode reads the canvas setting for the node media type', () => {
+  const metadata = { video_settings: { aspect_ratio: '9:16' }, image_settings: { aspect_ratio: '4:3' } };
+  assert.equal(contentAspectForNode('video', {}, metadata), 9 / 16);
+  assert.equal(contentAspectForNode('image', {}, metadata), 4 / 3);
+  assert.equal(contentAspectForNode('text', {}, metadata), null);
+  assert.equal(contentAspectForNode('video', {}, {}), null);
   assert.equal(
-    contentAspectFromNodeConfig({
-      aspect_lock: { ratio: '9:16', video_size: '1080*1920' },
-    }),
-    9 / 16,
+    contentAspectForNode('image', { comfyui: { fields: { width: 512, height: 1024 } } }, metadata),
+    0.5,
   );
 });
 
@@ -216,24 +232,24 @@ test('packDesignerNodeLayouts separates stacked portrait media nodes', () => {
       id: 'n_clip_1a',
       type: 'image',
       label: 'Scene 1',
-      config: { role: 'scene', aspect_lock: { ratio: '9:16' } },
+      config: { role: 'scene' },
       layout: { x: 1020, y: 40, width: 240, height: 140 },
     },
     {
       id: 'n_clip_2a',
       type: 'image',
       label: 'Scene 2',
-      config: { role: 'scene', aspect_lock: { ratio: '9:16' } },
+      config: { role: 'scene' },
       layout: { x: 1020, y: 200, width: 240, height: 140 },
     },
     {
       id: 'n_clip_1',
       type: 'video',
       label: 'Clip 1',
-      config: { aspect_lock: { ratio: '9:16' } },
+      config: {},
       layout: { x: 1320, y: 40, width: 240, height: 140 },
     },
-  ]);
+  ], { video_settings: { aspect_ratio: '9:16' }, image_settings: { aspect_ratio: '9:16' } });
   const scene1 = packed.find((node) => node.id === 'n_clip_1a');
   const scene2 = packed.find((node) => node.id === 'n_clip_2a');
   const clip1 = packed.find((node) => node.id === 'n_clip_1');
@@ -297,14 +313,17 @@ test('resolvedNodeCanvasSize ignores a zero stored size', () => {
   assert.equal(size.height, 160);
 });
 
-test('resolvedNodeCanvasSize uses aspect lock on default landscape cards', () => {
-  const size = resolvedNodeCanvasSize({
-    id: 'n_clip_1',
-    type: 'video',
-    label: 'Clip 1',
-    config: { aspect_lock: { ratio: '9:16' } },
-    layout: { x: 0, y: 0, width: 280, height: 160 },
-  });
+test('resolvedNodeCanvasSize uses the canvas ratio on default landscape cards', () => {
+  const size = resolvedNodeCanvasSize(
+    {
+      id: 'n_clip_1',
+      type: 'video',
+      label: 'Clip 1',
+      config: {},
+      layout: { x: 0, y: 0, width: 280, height: 160 },
+    },
+    { video_settings: { aspect_ratio: '9:16' } },
+  );
   assert.ok(size.height > size.width);
 });
 
