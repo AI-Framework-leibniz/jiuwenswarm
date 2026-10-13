@@ -8,6 +8,9 @@ import {
   type DesignerMaterial,
 } from './designerMaterials';
 
+/** Left and right paging buttons stay hidden in this preview version. */
+const SHOW_VIEWER_PAGING = false;
+
 type DesignerMaterialViewerProps = {
   materials: DesignerMaterial[];
   selectedId: string;
@@ -112,7 +115,7 @@ export function DesignerMaterialViewer({
       </button>
       <div className="designer-material-viewer__panel">
         <div className="designer-material-viewer__stage" data-testid="designer-material-viewer-stage">
-          {viewable.length > 1 ? (
+          {SHOW_VIEWER_PAGING && viewable.length > 1 ? (
             <button
               type="button"
               className="designer-material-viewer__nav designer-material-viewer__nav--prev"
@@ -150,7 +153,7 @@ export function DesignerMaterialViewer({
               <p>{t('designer.materials.placeholderHint')}</p>
             )}
           </div>
-          {viewable.length > 1 ? (
+          {SHOW_VIEWER_PAGING && viewable.length > 1 ? (
             <button
               type="button"
               className="designer-material-viewer__nav designer-material-viewer__nav--next"
