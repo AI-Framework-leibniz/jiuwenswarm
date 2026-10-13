@@ -2232,6 +2232,12 @@
   cursor: pointer;
 }
 
+.designer-node-toolbar__send-icon {
+  display: block;
+  width: 26px;
+  height: 26px;
+}
+
 .designer-node-toolbar__send:hover:not(:disabled) {
   filter: brightness(1.12);
 }
