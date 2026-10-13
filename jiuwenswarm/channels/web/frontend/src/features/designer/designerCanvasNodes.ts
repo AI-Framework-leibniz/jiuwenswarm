@@ -78,11 +78,11 @@ export const DESIGNER_ADD_TEMPLATES: DesignerAddTemplate[] = [
 
 const PORT_ADD_TYPES: Record<string, Record<DesignerNodePortSide, DesignerNodeType[]>> = {
   [DESIGNER_NODE_TYPE_TEXT]: {
-    predecessor: [DESIGNER_NODE_TYPE_IMAGE, DESIGNER_NODE_TYPE_VIDEO, DESIGNER_NODE_TYPE_AUDIO],
+    predecessor: [DESIGNER_NODE_TYPE_IMAGE],
     successor: [DESIGNER_NODE_TYPE_IMAGE, DESIGNER_NODE_TYPE_VIDEO],
   },
   [DESIGNER_NODE_TYPE_TABLE]: {
-    predecessor: [DESIGNER_NODE_TYPE_IMAGE, DESIGNER_NODE_TYPE_VIDEO, DESIGNER_NODE_TYPE_AUDIO],
+    predecessor: [DESIGNER_NODE_TYPE_IMAGE],
     successor: [DESIGNER_NODE_TYPE_IMAGE, DESIGNER_NODE_TYPE_VIDEO],
   },
   [DESIGNER_NODE_TYPE_IMAGE]: {
@@ -91,7 +91,7 @@ const PORT_ADD_TYPES: Record<string, Record<DesignerNodePortSide, DesignerNodeTy
   },
   [DESIGNER_NODE_TYPE_VIDEO]: {
     predecessor: [DESIGNER_NODE_TYPE_IMAGE, DESIGNER_NODE_TYPE_VIDEO],
-    successor: [DESIGNER_NODE_TYPE_IMAGE, DESIGNER_NODE_TYPE_VIDEO],
+    successor: [DESIGNER_NODE_TYPE_VIDEO],
   },
   [DESIGNER_NODE_TYPE_AUDIO]: {
     predecessor: [],
