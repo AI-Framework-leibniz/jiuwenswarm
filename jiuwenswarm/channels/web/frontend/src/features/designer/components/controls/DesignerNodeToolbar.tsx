@@ -1,6 +1,6 @@
-import { Send } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import SendPlaneIcon from '../../../../assets/send_plane.svg?react';
 import { isComfyuiNodeConfig } from '../../comfyuiWorkflow';
 import { hasPendingDesignerRevision } from '../../designerMaterials';
 import { useDesignerRunStore } from '../../designerRunStore';
@@ -25,11 +25,11 @@ type DesignerNodeToolbarProps = {
 export function DesignerNodeToolbar({ nodeId, nodeType }: DesignerNodeToolbarProps) {
   const { t } = useTranslation();
   const isMedia = isMediaNodeType(nodeType);
-  const uploadedVideo = useDesignerStore((state) => {
+  const uploadedMedia = useDesignerStore((state) => {
     const node = state.domainGraph?.nodes.find((item) => item.id === nodeId);
-    return nodeType === 'video' && Boolean(node && isUploadedMediaNode(node));
+    return isMedia && Boolean(node && isUploadedMediaNode(node));
   });
-  const canGenerate = nodeType !== 'audio' && !uploadedVideo;
+  const canGenerate = nodeType !== 'audio' && !uploadedMedia;
   const updateNodeConfig = useDesignerStore((state) => state.updateNodeConfig);
   const rerunNode = useDesignerRunStore((state) => state.rerunNode);
   const isRunning = useDesignerRunStore((state) => state.isRunning);
@@ -146,7 +146,7 @@ export function DesignerNodeToolbar({ nodeId, nodeType }: DesignerNodeToolbarPro
                 aria-label={t('designer.toolbar.generateAction')}
                 onClick={onGenerateNode}
               >
-                <Send size={16} fill="currentColor" strokeWidth={0} aria-hidden />
+                <SendPlaneIcon className="designer-node-toolbar__send-icon" aria-hidden />
               </button>
             </div>
           </div>
