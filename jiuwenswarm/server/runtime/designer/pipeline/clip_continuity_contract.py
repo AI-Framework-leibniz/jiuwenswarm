@@ -3,12 +3,14 @@
 
 Layers (never peer-compete):
   change  — this window's motion + speech
-  opening — first-frame spatial positions / posture
-  hold    — setting-scoped carries still true (props, occupied places, style cues)
+  opening — Director-authored first-frame spatial positions / posture
+  hold    — Director-authored carries still true (objects placed, occupied places)
   exit    — what stopped being true this window
 
-Storyboard action wins for *change*. Opening/hold are reconciled to match, then
-stamped. Final leaf prompts are verified so agent rewrite cannot drop holds.
+All layers come from Director-authored structured shot fields: ``start_state`` /
+``end_state`` / ``continuity_lock`` (scene locks and clip locks live in
+metadata). This module merges those fields, chains setting-scoped carries from
+metadata, and verifies the final prompt — it never parses scenario prose.
 """
 
 from __future__ import annotations
@@ -17,42 +19,10 @@ import re
 from typing import Any
 
 from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
-    _posture_from_text,
     _short,
-    detailed_spatial_anchor,
     merge_spatial_maps,
     normalize_shot_state,
     spatial_positions_from_shot,
-)
-
-_TRANSITION_TO = (
-    (
-        r"\b(sit|sits|sitting|seated|seating|seats|climb(?:s|ing)?\s+(?:into|onto|on))\b",
-        "seated",
-    ),
-    (r"\b(stand|stands|standing)\b", "standing"),
-    (r"\b(kneel|kneels|kneeling)\b", "kneeling"),
-    (r"\b(lie|lies|lying|reclin\w*)\b", "reclining"),
-)
-
-# Longer verb phrases first so "sets down" / "puts down" do not leave "down …" in label.
-_PROP_PLACE = re.compile(
-    r"\b(?:sets?\s+down|puts?\s+down|places?|leaves?|lays?|rests?|drops?|puts?|sets?)\s+"
-    r"(?:the\s+|a\s+|an\s+)?(?P<label>[^,.;]{2,60}?)\s+"
-    r"(?:down\s+)?(?:at|on|onto|in|upon)\s+(?P<place>[^,.;]{2,80})",
-    flags=re.IGNORECASE,
-)
-
-_PROP_REMOVE = re.compile(
-    r"\b(?:removes?|takes?\s+away|clears?|picks?\s+up)\s+"
-    r"(?:the\s+|a\s+|an\s+)?(?P<label>[^,.;]{2,60}?)"
-    r"(?:\s+from\s+(?P<place>[^,.;]{2,80}))?",
-    flags=re.IGNORECASE,
-)
-
-_AT_PLACE = re.compile(
-    r"\b(?:at|on|by|beside|near|in|along)\s+(?P<place>[^,.;]{2,80})",
-    flags=re.IGNORECASE,
 )
 
 
@@ -60,118 +30,37 @@ def _id_list(raw: Any) -> list[str]:
     return [str(x).strip() for x in (raw or []) if str(x).strip()]
 
 
-def _transition_posture(text: str) -> str:
-    low = str(text or "").lower()
-    for pattern, label in _TRANSITION_TO:
-        if re.search(pattern, low):
-            return label
-    return _posture_from_text(text)
+def extract_prop_holds(raw: Any) -> dict[str, dict[str, str]]:
+    """Director-authored object state — carried into later same-setting shots.
 
-
-def _place_from_text(text: str) -> str:
-    m = _AT_PLACE.search(str(text or ""))
-    if not m:
-        return ""
-    return m.group("place").strip()[:120]
-
-
-def _pre_posture(end_posture: str) -> str:
-    """Opening posture before a transition (domain-agnostic defaults)."""
-    end = str(end_posture or "").strip().lower()
-    if end == "seated":
-        return "standing"
-    if end == "standing":
-        return "standing"
-    if end in {"kneeling", "reclining", "crouching", "perched"}:
-        return "standing"
-    return ""
-
-
-_PRONOUN_LABELS = frozenset(
-    {"it", "them", "this", "that", "him", "her", "one", "these", "those"}
-)
-
-
-def _resolve_prop_label(action: str, label: str, match_start: int) -> str:
-    """Prefer a real noun over pronouns ('sets it at…' → prior 'casserole dish')."""
-    cleaned = re.sub(r"\s+", " ", str(label or "")).strip(" .")
-    if cleaned.lower() not in _PRONOUN_LABELS:
-        return cleaned
-    prior = str(action or "")[: max(0, match_start)]
-    # Best: object of carry/bring/hold before the placement.
-    carried = re.search(
-        r"\b(?:carries|carry|brings|bring|holding|holds|with)\s+"
-        r"(?:the\s+|a\s+|an\s+)?([a-z][\w\s\-]{1,40}?)"
-        r"(?=\s+from\b|\s+to\b|\s+into\b|\s+and\b|\s*,|\s+sets?\b|\s+places?\b)",
-        prior,
-        flags=re.IGNORECASE,
-    )
-    if carried:
-        noun = re.sub(r"\s+", " ", carried.group(1)).strip(" .,")
-        if noun and noun.lower() not in _PRONOUN_LABELS:
-            return noun[:80]
-    # Else nearest "the/a/an <noun>" not introduced by a path preposition.
-    for match in reversed(
-        list(
-            re.finditer(
-                r"(?P<pre>\b(?:from|to|toward|into|through|at|on|by|near)\s+)?"
-                r"\b(?:the|a|an)\s+(?P<noun>[a-z][\w\s\-]{1,40})",
-                prior,
-                flags=re.IGNORECASE,
-            )
-        )
-    ):
-        if match.group("pre"):
-            continue
-        noun = re.sub(r"\s+", " ", match.group("noun")).strip(" .,")
-        noun = re.sub(
-            r"\b(from|to|and|with|carries|carry|brings|bring)\b.*$",
-            "",
-            noun,
-            flags=re.I,
-        ).strip(" .,")
-        if noun and noun.lower() not in _PRONOUN_LABELS:
-            return noun[:80]
-    return cleaned
-
-
-def extract_prop_holds(action: str) -> dict[str, dict[str, str]]:
-    """Established objects placed this window — carried into later same-setting shots."""
+    Reads ``props`` from a clip's ``end_state`` (metadata only; never parsed
+    from scenario text). Accepts the end_state itself or the full shot.
+    """
+    source = raw
+    if isinstance(raw, dict) and isinstance(raw.get("end_state"), (dict, str)):
+        source = raw.get("end_state")
+    state = normalize_shot_state(source if isinstance(source, dict) else {})
+    props = state.get("props") if isinstance(state.get("props"), dict) else {}
     out: dict[str, dict[str, str]] = {}
-    text = str(action or "")
-    for match in _PROP_PLACE.finditer(text):
-        label = _resolve_prop_label(text, match.group("label") or "", match.start())
-        place = re.sub(r"\s+", " ", match.group("place") or "").strip(" .")
-        # Defensive: strip verb-split residue ("down the dish" → "the dish"/dish).
-        label = re.sub(r"^(?:down|up)\s+", "", label, flags=re.I).strip()
-        label = re.sub(r"^(?:the|a|an)\s+", "", label, flags=re.I).strip()
-        if len(label) < 2 or len(place) < 2:
+    for label, place in props.items():
+        label_s = re.sub(r"\s+", " ", str(label or "")).strip(" .")
+        place_s = re.sub(r"\s+", " ", str(place or "")).strip(" .")
+        if len(label_s) < 2:
             continue
-        if label.lower() in _PRONOUN_LABELS:
-            continue
-        # Skip if label looks like a person motion fragment.
-        if _transition_posture(label):
-            continue
-        key = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")[:48]
+        key = re.sub(r"[^a-z0-9]+", "_", label_s.lower()).strip("_")[:48]
         if not key:
             continue
-        out[key] = {"label": label[:80], "place": place[:120]}
+        out[key] = {"label": label_s[:80], "place": place_s[:120]}
     return out
 
 
-def extract_prop_removals(action: str) -> list[str]:
-    """Labels cleared this window — drop matching keys from setting hold."""
-    out: list[str] = []
-    text = str(action or "")
-    for match in _PROP_REMOVE.finditer(text):
-        label = _resolve_prop_label(text, match.group("label") or "", match.start())
-        label = re.sub(r"^(?:the|a|an)\s+", "", label, flags=re.I).strip()
-        if len(label) < 2 or label.lower() in _PRONOUN_LABELS:
-            continue
-        if _transition_posture(label):
-            continue
-        out.append(label[:80])
-    return out
+def extract_prop_removals(raw: Any) -> list[str]:
+    """Director-authored labels cleared this window (end_state.cleared)."""
+    source = raw
+    if isinstance(raw, dict) and isinstance(raw.get("end_state"), (dict, str)):
+        source = raw.get("end_state")
+    state = normalize_shot_state(source if isinstance(source, dict) else {})
+    return [str(x).strip()[:80] for x in (state.get("cleared") or []) if str(x).strip()]
 
 
 def _drop_props_by_labels(
@@ -242,12 +131,12 @@ def update_scene_hold_from_shot(
     scene_hold: dict[str, Any] | None,
     shot: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Fold this shot's end + newly established props into setting hold."""
+    """Fold this shot's authored end state + object state into the setting hold."""
     shot = shot if isinstance(shot, dict) else {}
     hold = merge_scene_hold(scene_hold, None)
     action = str(shot.get("action") or shot.get("clip_action") or "")
-    hold = merge_scene_hold(hold, {"props": extract_prop_holds(action)})
-    removed = extract_prop_removals(action)
+    hold = merge_scene_hold(hold, {"props": extract_prop_holds(shot)})
+    removed = extract_prop_removals(shot)
     if removed:
         hold["props"] = _drop_props_by_labels(hold.get("props"), removed)
     end = normalize_shot_state(shot.get("end_state"))
@@ -280,7 +169,11 @@ def reconcile_shot_to_contract(
     *,
     scene_hold: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Make opening/hold agree with this row's change. Mutates shot; returns contract."""
+    """Merge Director-authored opening/ending state with the setting hold.
+
+    Locks come from structured metadata (start_state / end_state / scene hold);
+    nothing is re-derived from action text.
+    """
     shot = shot if isinstance(shot, dict) else {}
     action = str(shot.get("action") or shot.get("clip_action") or "")
     cast_actions = (
@@ -296,76 +189,11 @@ def reconcile_shot_to_contract(
     )
     ending = merge_spatial_maps(end.get("seats"), opening)
 
-    on_screen = _id_list(
-        shot.get("on_screen") or shot.get("character_ids") or cast_actions.keys()
-    )
-    for cid in on_screen:
-        doing = str(cast_actions.get(cid) or "")
-        # Fall back to whole-row action only for single-cast rows.
-        text = doing or (action if len(on_screen) == 1 else "")
-        target = _transition_posture(text)
-        place = _place_from_text(doing) or _place_from_text(text)
-        cur_open = dict(opening.get(cid) or {})
-        cur_end = dict(ending.get(cid) or {})
-
-        if target:
-            # End posture follows the change.
-            cur_end["posture"] = target
-            # Opening must be pre-transition when change is a sit/stand/etc.
-            low = text.lower()
-            is_transition = bool(
-                re.search(
-                    r"\b("
-                    r"sit|sits|sitting|seated|seating|seats|climb|"
-                    r"stand|stands|standing|"
-                    r"kneel|kneels|kneeling|"
-                    r"lie|lies|lying|reclin\w*|"
-                    r"crouch|crouches|crouching"
-                    r")\b",
-                    low,
-                )
-            )
-            if is_transition:
-                pre = _pre_posture(target)
-                # If locks already claim the *result* posture at open, demote to pre.
-                open_posture = str(
-                    cur_open.get("posture") or cur_open.get("pose") or ""
-                ).lower()
-                if open_posture == target or not open_posture:
-                    if pre:
-                        cur_open["posture"] = pre
-                # Climb/sit into: keep place, ensure opening not already "done".
-                if target == "seated" and open_posture == "seated" and re.search(
-                    r"\b(sit|sits|sitting|seating|seats|climb)\b", low
-                ):
-                    cur_open["posture"] = "standing"
-                # Same for kneel/lie: -ing forms must demote opening (not only stem).
-                if target in {"kneeling", "reclining", "crouching"} and open_posture == target:
-                    if pre:
-                        cur_open["posture"] = pre
-
-        if place:
-            # Action/cast_actions place wins over a conflicting lock place.
-            lock_place = str(
-                cur_open.get("place") or cur_open.get("zone") or cur_open.get("seat") or ""
-            ).strip().lower()
-            if not lock_place or lock_place != place.lower():
-                # Do not assign a prop-only place as the person open place when
-                # cast_actions names a different seat.
-                cur_end["place"] = place
-                if not cur_open.get("place") or (
-                    doing and place.lower() in doing.lower()
-                ):
-                    # Opening place: if transitioning to sit, open at same place standing.
-                    cur_open["place"] = place
-
-        if cur_open:
-            opening[cid] = detailed_spatial_anchor(cur_open)
-        if cur_end:
-            ending[cid] = detailed_spatial_anchor(cur_end)
-
-    # Carry prior props into this shot's hold (positive presence).
-    hold = merge_scene_hold(scene_hold, {"props": extract_prop_holds(action)})
+    # Carry prior + this clip's authored object state; drop cleared objects.
+    hold = merge_scene_hold(scene_hold, {"props": extract_prop_holds(shot)})
+    removed = extract_prop_removals(shot)
+    if removed:
+        hold["props"] = _drop_props_by_labels(hold.get("props"), removed)
     # Drop cast from hold when we have authoritative opening for them.
     hold_cast = {
         cid: pos

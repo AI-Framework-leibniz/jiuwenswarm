@@ -324,7 +324,10 @@ def build_case(
                 ),
                 on_screen=[_CHAR_A],
                 cast_actions={_CHAR_A: f"places the {prop_label} at {place}"},
-                end_state={"pose": f"the {prop_tokens[0]} is ready"},
+                end_state={
+                    "pose": f"the {prop_tokens[0]} is ready",
+                    "props": {prop_label: place},
+                },
             ),
             follow_up(f"In the {setting_label}, guests settle in."),
         ]
@@ -342,7 +345,10 @@ def build_case(
                 ),
                 on_screen=[_CHAR_A],
                 cast_actions={_CHAR_A: f"sets it at {place}"},
-                end_state={"pose": f"the {prop_tokens[0]} rests in place"},
+                end_state={
+                    "pose": f"the {prop_tokens[0]} rests in place",
+                    "props": {prop_label: place},
+                },
             ),
             follow_up(f"{_CHAR_B} sits. {_CHAR_A} stands at the right side."),
         ]
@@ -357,6 +363,7 @@ def build_case(
                 setting_id=setting_id,
                 action=f"{_CHAR_A} puts the {prop_label} onto {place}.",
                 on_screen=[_CHAR_A],
+                end_state={"props": {prop_label: place}},
             ),
             follow_up("Conversation continues around the room."),
         ]
@@ -371,8 +378,21 @@ def build_case(
                 action=f"{_CHAR_A} walks in and sits at the right side of the table.",
                 on_screen=[_CHAR_A],
                 cast_actions={_CHAR_A: "sitting at the right side of the table"},
-                spatial_anchors={
-                    _CHAR_A: {"place": "the right side of the table", "posture": "seated"}
+                start_state={
+                    "seats": {
+                        _CHAR_A: {
+                            "place": "the right side of the table",
+                            "posture": "standing",
+                        }
+                    }
+                },
+                end_state={
+                    "seats": {
+                        _CHAR_A: {
+                            "place": "the right side of the table",
+                            "posture": "seated",
+                        }
+                    }
                 },
             )
         ]
@@ -387,10 +407,12 @@ def build_case(
                 action=f"{_CHAR_C} climbs onto the chair and sits upright.",
                 on_screen=[_CHAR_C],
                 cast_actions={_CHAR_C: "climbing into the chair and sitting upright"},
-                spatial_anchors={
-                    _CHAR_C: {"place": "the left side", "posture": "seated"}
-                },
                 start_state={
+                    "seats": {
+                        _CHAR_C: {"place": "the left side", "posture": "standing"}
+                    }
+                },
+                end_state={
                     "seats": {
                         _CHAR_C: {"place": "the left side", "posture": "seated"}
                     }
@@ -407,10 +429,15 @@ def build_case(
                 action=f"{_CHAR_A} kneels beside {place}.",
                 on_screen=[_CHAR_A],
                 cast_actions={_CHAR_A: f"kneeling beside {place}"},
-                spatial_anchors={_CHAR_A: {"place": place, "posture": "kneeling"}},
+                start_state={
+                    "seats": {_CHAR_A: {"place": place, "posture": "standing"}}
+                },
+                end_state={
+                    "seats": {_CHAR_A: {"place": place, "posture": "kneeling"}}
+                },
             )
         ]
-        expect["sit_open_standing"] = [(1, _CHAR_A)]  # pre-kneel default standing
+        expect["sit_open_standing"] = [(1, _CHAR_A)]  # authored pre-kneel standing
 
     elif family == "conflict_place_lock":
         shots = [
@@ -420,9 +447,16 @@ def build_case(
                 action=f"{_CHAR_A} sits at the right side of the table.",
                 on_screen=[_CHAR_A],
                 cast_actions={_CHAR_A: "seating herself at the right side of the table"},
-                spatial_anchors={
-                    # Wrong: prop/center place used as person place.
-                    _CHAR_A: {"place": "table center", "posture": "seated"}
+                start_state={
+                    "seats": {_CHAR_A: {"place": "table center", "posture": "standing"}}
+                },
+                end_state={
+                    "seats": {
+                        _CHAR_A: {
+                            "place": "the right side of the table",
+                            "posture": "seated",
+                        }
+                    }
                 },
             )
         ]
@@ -439,11 +473,13 @@ def build_case(
                 cast_actions={_CHAR_B: "sits down at the foot of the table"},
                 start_state={
                     "seats": {
-                        _CHAR_B: {"place": "the foot of the table", "posture": "seated"}
+                        _CHAR_B: {"place": "the foot of the table", "posture": "standing"}
                     }
                 },
-                spatial_anchors={
-                    _CHAR_B: {"place": "the foot of the table", "posture": "seated"}
+                end_state={
+                    "seats": {
+                        _CHAR_B: {"place": "the foot of the table", "posture": "seated"}
+                    }
                 },
             )
         ]
@@ -458,6 +494,7 @@ def build_case(
                 setting_id=setting_id,
                 action=f"{_CHAR_A} places the {prop_label} at {place}.",
                 on_screen=[_CHAR_A],
+                end_state={"props": {prop_label: place}},
             ),
             _base_shot(
                 clip_index=2,
@@ -487,10 +524,19 @@ def build_case(
                     _CHAR_B: "sitting at the right side",
                     _CHAR_C: "climbing into a chair and sitting upright",
                 },
-                spatial_anchors={
-                    _CHAR_A: {"place": "the head of the table", "posture": "standing"},
-                    _CHAR_B: {"place": "the right side", "posture": "seated"},
-                    _CHAR_C: {"place": "the left side", "posture": "seated"},
+                start_state={
+                    "seats": {
+                        _CHAR_A: {"place": "the head of the table", "posture": "standing"},
+                        _CHAR_B: {"place": "the right side", "posture": "standing"},
+                        _CHAR_C: {"place": "the left side", "posture": "standing"},
+                    }
+                },
+                end_state={
+                    "seats": {
+                        _CHAR_A: {"place": "the head of the table", "posture": "standing"},
+                        _CHAR_B: {"place": "the right side", "posture": "seated"},
+                        _CHAR_C: {"place": "the left side", "posture": "seated"},
+                    }
                 },
             )
         ]
@@ -507,7 +553,10 @@ def build_case(
                 setting_id=setting_id,
                 action=f"{_CHAR_A} sets the {prop_label} at {place}.",
                 on_screen=[_CHAR_A],
-                end_state={"pose": f"the {prop_tokens[0]} stays put"},
+                end_state={
+                    "pose": f"the {prop_tokens[0]} stays put",
+                    "props": {prop_label: place},
+                },
             ),
             follow_up("Everyone looks toward camera."),
         ]
@@ -521,6 +570,7 @@ def build_case(
                 setting_id=setting_id,
                 action=f"{_CHAR_A} places the {prop_label} at {place}.",
                 on_screen=[_CHAR_A],
+                end_state={"props": {prop_label: place}},
             ),
             follow_up("Beat continues."),
         ]
@@ -538,6 +588,7 @@ def build_case(
                 ),
                 on_screen=[_CHAR_A],
                 cast_actions={_CHAR_A: f"sets it at {place}"},
+                end_state={"props": {prop_label: place}},
             ),
             follow_up("Quiet settles over the room."),
         ]
@@ -546,7 +597,7 @@ def build_case(
         prompts[2] = "Quiet settles. Soft breath."
 
     elif family == "sets_down_verb_split":
-        # "sets down the X at Y" — verb split often captures "down the X" as label.
+        # "sets down the X at Y" — label must stay the authored object name.
         shots = [
             _base_shot(
                 clip_index=1,
@@ -554,6 +605,7 @@ def build_case(
                 action=f"{_CHAR_A} sets down the {prop_label} at {place}.",
                 on_screen=[_CHAR_A],
                 cast_actions={_CHAR_A: f"sets down the {prop_label} at {place}"},
+                end_state={"props": {prop_label: place}},
             ),
             follow_up("The room stays still for a beat."),
         ]
@@ -568,6 +620,7 @@ def build_case(
                 setting_id=setting_id,
                 action=f"{_CHAR_A} puts the {prop_label} down on {place}.",
                 on_screen=[_CHAR_A],
+                end_state={"props": {prop_label: place}},
             ),
             follow_up("No one touches the object."),
         ]
@@ -583,6 +636,7 @@ def build_case(
                 setting_id=setting_id,
                 action=f"{_CHAR_A} places the {prop_label} at {place}.",
                 on_screen=[_CHAR_A],
+                end_state={"props": {prop_label: place}},
             ),
             _base_shot(
                 clip_index=2,
@@ -620,6 +674,7 @@ def build_case(
                     _CHAR_A: f"places the {prop_label} at {place}",
                     _CHAR_B: f"puts the {other_prop} on {other_place}",
                 },
+                end_state={"props": {prop_label: place, other_prop: other_place}},
             ),
             follow_up("Both objects remain untouched."),
         ]
@@ -634,6 +689,7 @@ def build_case(
                 setting_id=setting_id,
                 action=f"{_CHAR_A} rests the {prop_label} at {place}.",
                 on_screen=[_CHAR_A],
+                end_state={"props": {prop_label: place}},
             ),
             follow_up("Quiet holds."),
         ]
@@ -647,6 +703,7 @@ def build_case(
                 setting_id=setting_id,
                 action=f"{_CHAR_A} drops the {prop_label} onto {place}.",
                 on_screen=[_CHAR_A],
+                end_state={"props": {prop_label: place}},
             ),
             follow_up("Nobody picks it up."),
         ]
@@ -660,6 +717,7 @@ def build_case(
                 setting_id=setting_id,
                 action=f"{_CHAR_A} places the {prop_label} at {place}.",
                 on_screen=[_CHAR_A],
+                end_state={"props": {prop_label: place}},
             ),
             _base_shot(
                 clip_index=2,
@@ -667,7 +725,11 @@ def build_case(
                 action=f"{_CHAR_A} removes the {prop_label} from {place} and exits.",
                 on_screen=[_CHAR_A],
                 cast_actions={_CHAR_A: f"removes the {prop_label} from {place}"},
-                end_state={"exited": [_CHAR_A], "pose": "the surface is clear"},
+                end_state={
+                    "exited": [_CHAR_A],
+                    "pose": "the surface is clear",
+                    "cleared": [prop_label],
+                },
             ),
             _base_shot(
                 clip_index=3,

@@ -1,9 +1,10 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""Film-wide production lock bible — stamped into brief/storyboard and leaf prompts.
+"""Film-wide production lock bible — structured metadata for leaf prompt packets.
 
 Domain-agnostic: style, landmarks, lighting, crowd, speech, axis.
 Leaves MUST read this before calling image/video models. Director may rewrite
-generate.prompt to stay faithful to brief + storyboard + user prompt.
+generate.prompt to stay faithful to the storyboard row + user prompt. The brief
+and storyboard documents stay narrative-only; locks live in this metadata.
 """
 
 from __future__ import annotations
@@ -235,6 +236,11 @@ def leaf_lock_packet(
         ),
         "motion_detail": str(shot.get("motion_detail") or ""),
         "wardrobe_lock": str(shot.get("wardrobe_lock") or ""),
+        "continuity_lock": (
+            shot.get("continuity_lock")
+            if isinstance(shot.get("continuity_lock"), dict)
+            else {}
+        ),
         "camera_framing_rule": str(shot.get("camera_framing_rule") or ""),
         "on_camera_cast_ids": list(shot.get("on_camera_cast_ids") or shot.get("character_ids") or []),
         "off_camera_cast_ids": list(shot.get("off_camera_cast_ids") or []),

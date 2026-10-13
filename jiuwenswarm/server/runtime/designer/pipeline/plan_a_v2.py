@@ -550,7 +550,8 @@ def apply_plan_a_v2(prompt: str, analysis: dict[str, Any]) -> dict[str, Any]:
         out["clip_policy"] = "scene_specs_plus_clips"
         out["scene_consistency_mode"] = "scene_specs_plus_clips"
 
-    # Identity / bleed clauses on featured (camera-focus) cast after ensemble stamp.
+    # Identity / bleed locks stay structured metadata on the shot — never text in the
+    # action/clip_prompt (brief and storyboard documents must stay narrative-clean).
     by_id = {str(c.get("id")): c for c in characters}
     for shot in out.get("clips") or []:
         if not isinstance(shot, dict):
@@ -566,16 +567,10 @@ def apply_plan_a_v2(prompt: str, analysis: dict[str, Any]) -> dict[str, Any]:
             if cid in by_id
         ]
         if id_bits:
-            clause = " IDENTITY LOCK: " + " | ".join(id_bits)
-            action = str(shot.get("action") or "")
-            if "IDENTITY LOCK:" not in action:
-                shot["action"] = (action + clause)[:650]
-            kp = str(shot.get("clip_prompt") or action)
-            if "IDENTITY LOCK:" not in kp:
-                shot["clip_prompt"] = (kp + clause)[:650]
+            shot["identity_lock"] = " | ".join(id_bits)[:650]
         bleed = str(shot.get("forbid_bleed") or spatial.get("forbid_bleed") or "")
-        if bleed and "FORBIDDEN BLEED" not in str(shot.get("action") or ""):
-            shot["action"] = (str(shot.get("action") or "") + " " + bleed)[:700]
+        if bleed:
+            shot["forbid_bleed"] = bleed[:400]
 
     try:
         from jiuwenswarm.server.runtime.designer.pipeline.axis_locks import stamp_axis_locks

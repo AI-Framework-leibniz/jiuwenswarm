@@ -6,7 +6,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from jiuwenswarm.server.runtime.designer.continuity import infer_continuity_lock
+from jiuwenswarm.server.runtime.designer.continuity import (
+    normalize_continuity_lock,
+)
 
 
 _START_VERBS = (
@@ -153,6 +155,7 @@ def character_consistency_from_prior(
     speech_line: str = "",
     bible: dict[str, Any] | None = None,
     storyboard_hints: str = "",
+    continuity_lock: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a slim character consistency Director/leaves can inject (never the full prior prompt)."""
     seed = prior_action or _clean_action_snippet(prior_prompt, limit=240)
@@ -161,7 +164,8 @@ def character_consistency_from_prior(
         clip_index=clip_index,
         allow_repeat_hints=storyboard_hints,
     )
-    lock = infer_continuity_lock(seed)
+    # Lock must come from Director-authored metadata, never inferred from text.
+    lock = normalize_continuity_lock(continuity_lock)
     card = {
         "from_clip_index": int(clip_index or 0) or None,
         "from_node_id": str(node_id or "") or None,

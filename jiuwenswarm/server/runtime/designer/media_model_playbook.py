@@ -118,20 +118,23 @@ configured VIDEO_GEN backend.
 
 STORYBOARD_DETAIL_RULES = """
 ## Storyboard detail (Director authors — hierarchical by SCENE then clips)
-Group shots by setting_id / place. For EACH scene block author a SCENE SPECS:
-objects + locations, lighting, crowd size/positions, and hierarchical views
-(front/left/right/side/top/bottom) so coverage is coherent and things do not appear
-from nowhere. For EACH scene:
+Group shots by setting_id / place. Author scene specs (objects + locations, lighting,
+crowd size/positions, hierarchical views front/left/right/side/top/bottom) as STRUCTURED
+plan data so coverage is coherent and things do not appear from nowhere. Scene specs and
+all locks (scene locks, character locks, scene bible, clip locks with each clip's initial
+and final positioning, continuity/weather locks) live in structured metadata ONLY — never
+write lock sections or lock text into the brief or the storyboard table. For EACH scene:
 1. First clip = compose_from_character_specs: Qwen generates the setting AND places cast
-   from character spec sheets. Include scene specs in the brief.
+   from character spec sheets.
 2. Later clips in the SAME scene = compose_from_character_specs again with scene specs
    as architecture locks (change view/cast/action only for THIS row).
 3. New setting_id → new scene specs + compose master.
-Per shot also list: timeline, camera/view_key, placements, sit/stand posture,
-cast_actions, motion, speech_line / speech_by_character unique to that window,
-character_ids, continuity_lock, style_lock, shot_relation, clip_strategy,
-clip_prompt. Do not copy the same spoken line as the main dialogue of two adjacent
-shots unless the brief clearly wants a separate spoken response later.
+Per shot also author (structured fields): timeline, camera/view_key, cast_actions,
+motion, speech_line / speech_by_character unique to that window, character_ids,
+start_state / end_state (initial + final positioning per clip), continuity_lock,
+style_lock, shot_relation, clip_strategy, clip_prompt. Do not copy the same spoken
+line as the main dialogue of two adjacent shots unless the brief clearly wants a
+separate spoken response later.
 Diversify angles within a locked geography/style.
 Node labels should read like: character: [Name]; scene [n]: clip [n]; scene [n]: clip [n].
 """.strip()

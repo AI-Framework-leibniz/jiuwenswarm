@@ -16,8 +16,8 @@ from jiuwenswarm.common.schema.designer_graph import (
 )
 from jiuwenswarm.server.runtime.designer.continuity import (
     continuity_prompt_clause as _continuity_prompt_clause,
-    infer_continuity_lock as _infer_continuity_lock,
     merge_lock_with_previous,
+    normalize_continuity_lock as _normalize_continuity_lock,
 )
 from jiuwenswarm.server.runtime.designer.feedback import (
     save_feedback,
@@ -84,7 +84,13 @@ def _tools_for_node(node: DesignerGraphNode) -> list[str]:
 
 
 def _spatial_continuity_patch(graph: DesignerExecutionGraph) -> list[str]:
-    """Director gate: stamp consistency locks so clip/shot prompts share blocking."""
+    """Director gate: stamp Director-authored continuity locks from metadata.
+
+    Locks are authored by the Director LLM from the user prompt during analysis /
+    storyboard authoring and live on ``script_analysis.clips[i].continuity_lock``.
+    This gate only normalizes them, chains carried state forward, and mirrors them
+    onto clip/storyboard node configs — it never invents locks from shot text.
+    """
     notes: list[str] = []
     meta = dict(graph.get("metadata") or {})
     analysis = meta.get("script_analysis") if isinstance(meta.get("script_analysis"), dict) else {}
@@ -99,22 +105,15 @@ def _spatial_continuity_patch(graph: DesignerExecutionGraph) -> list[str]:
             idx = 0
         if idx < 1:
             continue
-        action = str(shot.get("action") or shot.get("clip_prompt") or "")
-        carried = shot.get("continuity_lock") if isinstance(shot.get("continuity_lock"), dict) else {}
-        lock = merge_lock_with_previous(
-            _infer_continuity_lock(action), shot_locks.get(idx - 1)
-        )
-        for key in ("brief", "story"):
-            value = str(carried.get(key) or "").strip()
-            if value:
-                lock[key] = value
+        lock = _normalize_continuity_lock(shot.get("continuity_lock"))
+        lock = merge_lock_with_previous(lock, shot_locks.get(idx - 1))
+        if not lock:
+            shot_locks[idx] = {}
+            notes.append(f"analysis shot {idx}: waiting for Director continuity lock")
+            continue
         shot["continuity_lock"] = lock
         shot_locks[idx] = lock
-        clause = _continuity_prompt_clause(lock)
-        prompt = str(shot.get("clip_prompt") or action)
-        if clause and "CONSISTENCY LOCK" not in prompt:
-            shot["clip_prompt"] = prompt + clause
-            notes.append(f"analysis shot {idx}: consistency lock stamped")
+        notes.append(f"analysis shot {idx}: continuity lock from metadata")
 
     if analysis.get("clips"):
         meta["script_analysis"] = analysis
@@ -126,12 +125,9 @@ def _spatial_continuity_patch(graph: DesignerExecutionGraph) -> list[str]:
         if role not in {"clip", "storyboard"}:
             continue
         idx = int(cfg.get("clip_index") or 0) or 0
-        action = str(cfg.get("clip_action") or "")
-        lock = dict(cfg.get("continuity_lock") or {}) if isinstance(cfg.get("continuity_lock"), dict) else {}
-        if idx and idx in shot_locks:
+        lock = _normalize_continuity_lock(cfg.get("continuity_lock"))
+        if not lock and idx and idx in shot_locks:
             lock = shot_locks[idx]
-        elif action and not lock:
-            lock = _infer_continuity_lock(action)
         if not lock:
             continue
         cfg["continuity_lock"] = lock
@@ -139,18 +135,20 @@ def _spatial_continuity_patch(graph: DesignerExecutionGraph) -> list[str]:
         gen = dict(cfg.get("generate") or {}) if isinstance(cfg.get("generate"), dict) else {}
         prompt = str(gen.get("prompt") or "").strip()
         if clause and "CONSISTENCY LOCK" not in prompt:
-            if not prompt:
+            if not prompt and role == "clip":
                 camera = str(cfg.get("camera") or "medium / eye-level")
+                action = str(cfg.get("clip_action") or "")
                 prompt = f"Film shot {idx or '?'} only. Camera {camera}. Action: {action}."
-            gen["prompt"] = prompt + clause
-            cfg["generate"] = gen
-            notes.append(f"{node.get('id')}: consistency lock in generate.prompt")
+            if prompt:
+                gen["prompt"] = prompt + clause
+                cfg["generate"] = gen
+                notes.append(f"{node.get('id')}: continuity lock in generate.prompt")
         elif role == "storyboard":
-            notes.append(f"{node.get('id')}: consistency locks available for planned shots")
+            notes.append(f"{node.get('id')}: continuity locks available for planned shots")
         node["config"] = cfg
 
     # Keep the storyboard agent's structured shot plan current.
-    if shot_locks:
+    if any(shot_locks.get(k) for k in shot_locks):
         shots = list(analysis.get("clips") or [])
         if shots:
             for node in graph.get("nodes") or []:
@@ -1318,13 +1316,19 @@ class Director:
                 "dialogue or voiceover lines with speaker and timing. Speech is the default. "
                 "Do not choose visual-only storytelling, silent lip-sync, or 无声 unless the "
                 "user explicitly asked for mime, a silent film, or no dialogue. Never add "
-                "speech when the user requested that. Also cover: character identity locks "
-                "(face/hair/body/costume) for every on-screen person, including unnamed groups "
-                "that share one look; list that character on every shot where they are visible, "
-                "scene geography (spatial lock), motion consistency, time-coherent continuity "
-                "(do not undo a completed shot on a later shot), "
-                "shot-view coverage for every named beat, audio policy, and one explicit "
-                "Visual Style section. Preserve the user's exact visual medium and rendering "
+                "speech when the user requested that. Also cover as narrative direction, "
+                "never as lock machinery: who every on-screen person is (face/hair/body/"
+                "costume description woven into the story text), including unnamed groups "
+                "that share one look; list that character on every shot where they are visible; "
+                "the scene geography as story prose; shot-view coverage for every named beat; "
+                "audio policy; and one explicit Visual Style section. "
+                "Never undo a completed shot on a later shot. "
+                "Do NOT write lock sections, lock tables, lock notes, continuity banners, or "
+                "spatial-lock / identity-lock wording anywhere in the brief — the Director "
+                "authors all continuity locks (scene locks, character locks, scene bible, "
+                "clip locks describing each clip's initial and final positioning, "
+                "weather/light/continuity locks) separately as structured data. "
+                "Preserve the user's exact visual medium and rendering "
                 "details; use the provided style_lock when present. "
                 "Preserve all explicit people, places, brand facts, claims, and requested events; "
                 "creative enrichment may fill only details the user left unspecified. "
@@ -1451,8 +1455,8 @@ class Director:
                 "A shot duration already written in the approved brief is fixed: copy that "
                 "length exactly and do not shorten it. Character names, wardrobe, and body "
                 "locks written there stay on those characters. Place names and geography "
-                "written there stay on those scenes. Continuity notes and per-shot story "
-                "beats written there stay in the shot; do not rename people, move the scene, "
+                "written there stay on those scenes. Per-shot story beats written there stay "
+                "in the shot; do not rename people, move the scene, "
                 "or replace the beat. "
                 "Materialize the Brief's Script/speech plan as exact speech_by_character and "
                 "speech_line values so later clips can speak them. Speech is the default: "
@@ -1474,11 +1478,24 @@ class Director:
                 "NO scene specs. Crowd/extras persist across same-setting shots "
                 "unless they exit. Each shot needs timeline, camera, action, "
                 "on_screen, offscreen, cast_actions, featured_cast_ids, setting_id, "
-                "start_state {pose,seats,facing,on_screen,offscreen}, "
-                "end_state {pose,seats,facing,exited,speech_done,on_screen}, "
-                "continuity_lock, clip_prompt, exiting_character_ids, "
+                "lighting, "
+                "start_state {pose, seats:{character_id:{place,posture,facing}}, facing}, "
+                "end_state {pose, seats:{character_id:{place,posture,facing}}, exited, "
+                "props:{object label: place it now sits/stays}, cleared:[object labels removed], "
+                "speech_done, on_screen}, "
+                "continuity_lock {motion, facing, screen_direction, forbid}, clip_prompt, "
+                "exiting_character_ids, "
                 "speech_by_character (map character_id→exact spoken line for this shot; "
                 "empty {} only when nobody speaks in this window), speech_line (joined fallback). "
+                "You AUTHOR the clip locks yourself from the user prompt: "
+                "start_state = the INITIAL positioning of every on-screen person at this "
+                "clip's first frame; end_state = the FINAL positioning and state at its last "
+                "frame; continuity_lock = this window's motion direction, facing/screen "
+                "direction, and what must NOT happen (forbid), e.g. do not reverse motion, "
+                "do not walk toward the camera, do not reseat someone who left. "
+                "These locks live in the structured shot data ONLY — never write lock "
+                "sections, lock tables, lock notes, or continuity banners into the brief or "
+                "the storyboard text. "
                 "Same setting_id: next shot start_state MUST match prior end_state. "
                 "Exactly one shot has emotion=climax. Each shot includes irreversible "
                 "(what is newly true at the last frame) and cast_states "
@@ -1499,9 +1516,14 @@ class Director:
                 '"featured_cast_ids":["char_1"],"cast_actions":{"char_1":"preaching"},'
                 '"ensemble_cast_ids":["char_1","char_2"],"setting_id":"set_1",'
                 '"clip_strategy":"compose_from_character_specs",'
-                '"start_state":{"pose":"...","seats":{},"facing":"..."},'
-                '"end_state":{"pose":"...","exited":[],"speech_done":"..."},'
-                '"continuity_lock":{"forbid":"..."},"clip_prompt":"...",'
+                '"start_state":{"pose":"...",'
+                '"seats":{"char_1":{"place":"...","posture":"standing","facing":"..."}}},'
+                '"end_state":{"pose":"...",'
+                '"seats":{"char_1":{"place":"...","posture":"seated","facing":"..."}},'
+                '"exited":[],"props":{"steaming casserole dish":"center of the table"},'
+                '"cleared":[],"speech_done":"..."},'
+                '"continuity_lock":{"motion":"...","facing":"...",'
+                '"screen_direction":"...","forbid":"..."},"clip_prompt":"...",'
                 '"exiting_character_ids":[],'
                 '"speech_by_character":{"char_1":"exact line"},"speech_line":"..."}],'
                 '"language_lock":"en",'
@@ -1561,14 +1583,10 @@ class Director:
                     shot["clip_index"] = int(shot.get("clip_index") or i)
                     if not str(shot.get("timeline") or "").strip():
                         shot["timeline"] = f"{(i - 1) * 5:.1f}-{i * 5:.1f}s"
-                    if isinstance(shot.get("continuity_lock"), dict):
-                        shot["continuity_lock"] = {
-                            str(k): str(v) for k, v in shot["continuity_lock"].items()
-                        }
-                    elif str(shot.get("action") or "").strip():
-                        shot["continuity_lock"] = _infer_continuity_lock(
-                            str(shot.get("action") or "")
-                        )
+                    # Director-authored clip lock (structured metadata only).
+                    shot["continuity_lock"] = _normalize_continuity_lock(
+                        shot.get("continuity_lock")
+                    )
                     if isinstance(shot.get("speech_by_character"), dict):
                         shot["speech_by_character"] = {
                             str(k): str(v)
@@ -3713,7 +3731,7 @@ class Director:
                     shot["action"] = action
                     shot["clip_prompt"] = action
                 if lock:
-                    shot["continuity_lock"] = {str(k): str(v) for k, v in lock.items()}
+                    shot["continuity_lock"] = _normalize_continuity_lock(lock)
                     clause = _continuity_prompt_clause(shot["continuity_lock"])
                     prompt = str(shot.get("clip_prompt") or "")
                     if clause and "CONSISTENCY LOCK" not in prompt:
@@ -3739,7 +3757,7 @@ class Director:
                 if costume:
                     cfg["costume_lock"] = costume
                 if lock:
-                    cfg["continuity_lock"] = {str(k): str(v) for k, v in lock.items()}
+                    cfg["continuity_lock"] = _normalize_continuity_lock(lock)
                     gen = dict(cfg.get("generate") or {}) if isinstance(cfg.get("generate"), dict) else {}
                     prompt = str(gen.get("prompt") or cfg.get("clip_action") or "")
                     clause = _continuity_prompt_clause(cfg["continuity_lock"])
@@ -4253,11 +4271,10 @@ def _shot_distinctness_patch(graph: DesignerExecutionGraph) -> list[str]:
         marker = f"shot {idx}"
         cast_names = [str(x) for x in (cfg.get("cast_names") or []) if str(x).strip()]
         cast_who = ", ".join(cast_names)
-        lock = cfg.get("continuity_lock") if isinstance(cfg.get("continuity_lock"), dict) else None
-        if not lock and action:
-            lock = _infer_continuity_lock(action)
+        lock = _normalize_continuity_lock(cfg.get("continuity_lock"))
+        if lock:
             cfg["continuity_lock"] = lock
-        clause = _continuity_prompt_clause(lock if isinstance(lock, dict) else None)
+        clause = _continuity_prompt_clause(lock if lock else None)
         if not prompt or marker not in prompt.lower():
             gen["prompt"] = (
                 f"Film {marker} only. Camera {camera}. Action: {action}. "

@@ -750,14 +750,13 @@ def build_clip_prompt(
             "Match faces and wardrobe exactly. One instance per person — no clones. "
             "Place them into the scene-card geography for this shot."
         )
-    lock = cfg.get("continuity_lock") if isinstance(cfg.get("continuity_lock"), dict) else None
-    if not lock and action:
-        from jiuwenswarm.server.runtime.designer.continuity import infer_continuity_lock
+    from jiuwenswarm.server.runtime.designer.continuity import (
+        continuity_prompt_clause,
+        normalize_continuity_lock,
+    )
 
-        lock = infer_continuity_lock(action)
+    lock = normalize_continuity_lock(cfg.get("continuity_lock"))
     if lock:
-        from jiuwenswarm.server.runtime.designer.continuity import continuity_prompt_clause
-
         clause = continuity_prompt_clause(lock)
         if clause:
             parts.append(clause.strip())

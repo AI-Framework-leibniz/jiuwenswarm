@@ -24,7 +24,8 @@ except ImportError:
     sys.modules["openjiuwen.core.kv_cache"] = _kv
 
 
-def test_reconcile_fixes_opening_already_at_result_posture() -> None:
+def test_reconcile_uses_director_authored_positions() -> None:
+    """Opening/ending positioning come from authored states — no text inference."""
     from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
         reconcile_shot_to_contract,
     )
@@ -35,11 +36,11 @@ def test_reconcile_fixes_opening_already_at_result_posture() -> None:
         "action": "The child climbs onto the chair and sits upright.",
         "on_screen": ["char_a"],
         "cast_actions": {"char_a": "climbing into the chair and sitting upright"},
-        "spatial_anchors": {
-            "char_a": {"place": "the left side", "posture": "seated"},
-        },
         "start_state": {
-            "seats": {"char_a": {"place": "the left side", "posture": "seated"}},
+            "seats": {"char_a": {"place": "left side", "posture": "standing"}},
+        },
+        "end_state": {
+            "seats": {"char_a": {"place": "left side", "posture": "seated"}},
         },
     }
     contract = reconcile_shot_to_contract(shot)
@@ -49,8 +50,27 @@ def test_reconcile_fixes_opening_already_at_result_posture() -> None:
     assert ending.get("posture") == "seated"
 
 
-def test_sets_down_and_rests_and_remove_use_backend_verbs() -> None:
+def test_reconcile_without_authored_states_invents_nothing() -> None:
+    """No authored positioning means the contract stays empty — never guessed."""
     from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
+        reconcile_shot_to_contract,
+    )
+
+    shot = {
+        "clip_index": 2,
+        "setting_id": "set_1",
+        "action": "The child climbs onto the chair and sits upright.",
+        "on_screen": ["char_a"],
+        "cast_actions": {"char_a": "climbing into the chair and sitting upright"},
+    }
+    contract = reconcile_shot_to_contract(shot)
+    assert contract["opening"] == {}
+    assert not (shot.get("end_state") or {}).get("seats")
+
+
+def test_prop_holds_use_director_authored_state() -> None:
+    from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
+        enforce_prompt_continuity,
         extract_prop_holds,
         extract_prop_removals,
     )
@@ -58,35 +78,41 @@ def test_sets_down_and_rests_and_remove_use_backend_verbs() -> None:
         ensure_clip_start_end_states,
         stamp_shot_states_on_clip_cfg,
     )
-    from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
-        enforce_prompt_continuity,
-    )
 
-    down = extract_prop_holds("Host sets down the blue ceramic teapot at the mantel.")
-    assert down
-    label = " ".join(str(v.get("label") or "") for v in down.values()).lower()
+    placed = {
+        "clip_index": 1,
+        "setting_id": "set_1",
+        "action": "Host sets the blue ceramic teapot on the mantel.",
+        "on_screen": ["char_1"],
+        "end_state": {"props": {"blue ceramic teapot": "the mantel"}},
+    }
+    holds = extract_prop_holds(placed)
+    assert holds
+    label = " ".join(str(v.get("label") or "") for v in holds.values()).lower()
     assert "teapot" in label
-    assert not label.startswith("down")
 
-    rests = extract_prop_holds("Host rests the brass desk lamp at the shelf.")
-    assert any("lamp" in str(v.get("label") or "").lower() for v in rests.values())
+    cleared = {
+        "clip_index": 2,
+        "setting_id": "set_1",
+        "action": "Host lifts the teapot away.",
+        "on_screen": ["char_1"],
+        "end_state": {"cleared": ["blue ceramic teapot"]},
+    }
+    assert extract_prop_removals(cleared)
 
-    assert extract_prop_removals("Host removes the brass desk lamp from the shelf.")
+    # Scenario prose is NEVER parsed for props — authored state only.
+    prose_only = {
+        "clip_index": 9,
+        "setting_id": "set_1",
+        "action": "Host sets down the blue ceramic teapot at the mantel.",
+    }
+    assert extract_prop_holds(prose_only) == {}
+    assert extract_prop_removals(prose_only) == []
 
     shots = ensure_clip_start_end_states(
         [
-            {
-                "clip_index": 1,
-                "setting_id": "set_1",
-                "action": "Host places the gift box on the mantel.",
-                "on_screen": ["char_1"],
-            },
-            {
-                "clip_index": 2,
-                "setting_id": "set_1",
-                "action": "Host removes the gift box from the mantel.",
-                "on_screen": ["char_1"],
-            },
+            placed,
+            cleared,
             {
                 "clip_index": 3,
                 "setting_id": "set_1",
@@ -97,42 +123,33 @@ def test_sets_down_and_rests_and_remove_use_backend_verbs() -> None:
     )
     cfg3 = stamp_shot_states_on_clip_cfg({}, shot=shots[2])
     fixed, _ = enforce_prompt_continuity("Guest looks around.", cfg3)
-    assert "gift" not in fixed.lower() and "box" not in fixed.lower()
+    assert "teapot" not in fixed.lower()
 
 
-def test_prop_hold_resolves_pronoun_past_path_preposition() -> None:
-    """'carries X from the doorway and sets it at Y' must hold X, not doorway."""
+def test_authored_prop_hold_survives_agent_rewrite() -> None:
+    """A prop the Director placed stays true until cleared — even after rewrites."""
     from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
         apply_continuity_contracts,
         enforce_prompt_continuity,
-        extract_prop_holds,
     )
     from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
         stamp_shot_states_on_clip_cfg,
     )
-
-    holds = extract_prop_holds(
-        "Mom carries a steaming casserole dish from the kitchen doorway "
-        "and sets it at the center of the wooden dining table."
-    )
-    assert holds
-    labels = " ".join(str(v.get("label") or "") for v in holds.values()).lower()
-    assert "casserole" in labels or "dish" in labels
-    assert "doorway" not in labels
-    assert "kitchen" not in labels
 
     shots = apply_continuity_contracts(
         [
             {
                 "clip_index": 1,
                 "setting_id": "set_1",
-                "action": (
-                    "Mom carries a steaming casserole dish from the kitchen doorway "
-                    "and sets it at the center of the wooden dining table."
-                ),
+                "action": "Mom sets the steaming casserole on the wooden dining table.",
                 "on_screen": ["char_2"],
                 "cast_actions": {"char_2": "sets the dish"},
-                "end_state": {"pose": "the meal is on the table"},
+                "end_state": {
+                    "pose": "the meal is on the table",
+                    "props": {
+                        "steaming casserole dish": "the center of the wooden dining table"
+                    },
+                },
             },
             {
                 "clip_index": 2,
@@ -141,7 +158,7 @@ def test_prop_hold_resolves_pronoun_past_path_preposition() -> None:
                 "on_screen": ["char_2", "char_3"],
                 "cast_actions": {
                     "char_2": "seating herself at the right side",
-                    "char_3": "climbing into her chair and sitting upright",
+                    "char_3": "climbing into her chair",
                 },
             },
         ]
@@ -150,7 +167,6 @@ def test_prop_hold_resolves_pronoun_past_path_preposition() -> None:
     fixed, _ = enforce_prompt_continuity("Mom sits. Kids climb into chairs.", cfg)
     assert "casserole" in fixed.lower() or "dish" in fixed.lower()
     assert "meal" in fixed.lower()
-    assert "doorway" not in fixed.lower()
 
 
 def test_prop_hold_carries_to_next_shot_and_prompt() -> None:
@@ -177,6 +193,7 @@ def test_prop_hold_carries_to_next_shot_and_prompt() -> None:
                 "cast_actions": {"char_a": "setting the platter down"},
                 "end_state": {
                     "pose": "the meal is on the table",
+                    "props": {"steaming platter": "the center of the table"},
                     "seats": {"char_a": {"place": "near table", "posture": "standing"}},
                 },
             },
@@ -213,7 +230,7 @@ def test_prop_hold_carries_to_next_shot_and_prompt() -> None:
     assert notes
 
 
-def test_cast_action_place_wins_over_conflicting_lock_place() -> None:
+def test_authored_end_state_position_wins_without_text_overrides() -> None:
     from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
         reconcile_shot_to_contract,
     )
@@ -224,9 +241,16 @@ def test_cast_action_place_wins_over_conflicting_lock_place() -> None:
         "action": "Mom sits at the right side of the table.",
         "on_screen": ["char_mom"],
         "cast_actions": {"char_mom": "seating herself at the right side of the table"},
-        "spatial_anchors": {
-            # Wrong: prop place used as person place.
-            "char_mom": {"place": "table center", "posture": "seated"},
+        "start_state": {
+            "seats": {"char_mom": {"place": "table center", "posture": "standing"}},
+        },
+        "end_state": {
+            "seats": {
+                "char_mom": {
+                    "place": "the right side of the table",
+                    "posture": "seated",
+                }
+            },
         },
     }
     contract = reconcile_shot_to_contract(shot)
@@ -260,6 +284,7 @@ def test_ensure_chains_contracts() -> None:
                 "action": "Host places the gift box on the mantel.",
                 "on_screen": ["char_1"],
                 "cast_actions": {"char_1": "places the gift box on the mantel"},
+                "end_state": {"props": {"gift box": "the mantel"}},
             },
             {
                 "clip_index": 2,

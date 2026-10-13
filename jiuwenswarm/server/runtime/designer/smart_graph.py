@@ -772,12 +772,16 @@ def build_smart_video_graph(
                 "skill_id": "brief",
                 "delegate": "agent",
                 "director_task": (
-                    "Author a DETAILED creative brief from the user prompt: every named "
-                    "character with wardrobe/face locks, scene geography, language/speech, "
-                    "opening blocking, motion/consistency rules, shot-view coverage, audio, "
+                    "Author a DETAILED creative brief from the user prompt: who each "
+                    "character is (wardrobe/face described as story text), scene geography "
+                    "as prose, language/speech, opening blocking, shot-view coverage, audio, "
                     "and one explicit visual style. Preserve the user's style wording; if "
                     "none can be inferred, use the cartoonish default. "
-                    "Preserve every named shot. Obey and include the PRODUCTION LOCK SPECS."
+                    "Preserve every named shot. Keep the brief NARRATIVE-ONLY — no lock "
+                    "sections, lock tables, or lock/continuity notes: all locks (scene "
+                    "locks, character locks, scene bible, clip locks with each clip's "
+                    "initial and final positioning) are authored separately as structured "
+                    "metadata."
                 ),
             },
             "layout": {"x": 40, "y": 220, "width": 260, "height": 140},
@@ -800,11 +804,12 @@ def build_smart_video_graph(
             "materialize its full narrative/content arc and timed speech plan; every shot "
             "must advance action, information, product proof, or emotion without filler, "
             "repeated action, or duplicate coverage. Include per-shot duration, camera/view, "
-            "on-screen cast, full blocking/action, "
-            "exact speech_line, language lock, consistency forbids "
-            "and the Brief's visual style in every composed-scene description "
-            "(do not undo a completed shot). Each row is THAT window in full detail — "
-            "not a camera restage of the whole prompt, and not a stripped one-liner."
+            "on-screen cast, full blocking/action, and exact speech_line — the storyboard "
+            "table stays narrative-only. Author all locks (start/end positioning, "
+            "consistency forbids, language, style) as structured shot fields; never write "
+            "lock sections or lock text into the table. "
+            "Each row is THAT window in full detail — not a camera restage of the whole "
+            "prompt, and not a stripped one-liner."
         ),
         "tools": ["call_model", "write_artifact"],
     }
@@ -1288,11 +1293,6 @@ def build_smart_video_graph(
                 + (f"ACTIVE {view_line}. " if view_line else "")
             )
         consistency = shot.get("continuity_lock") if isinstance(shot.get("continuity_lock"), dict) else {}
-        if not consistency:
-            from jiuwenswarm.server.runtime.designer.continuity import infer_continuity_lock
-
-            consistency = infer_continuity_lock(action)
-            shot["continuity_lock"] = consistency
         cont_bits = ", ".join(f"{k}={v}" for k, v in consistency.items()) if consistency else ""
         occ_bits = ""
         if occupancy:

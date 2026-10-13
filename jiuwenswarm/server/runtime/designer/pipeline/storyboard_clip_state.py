@@ -1,10 +1,14 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""Storyboard start/end state — sole continuity authority (domain-agnostic).
+"""Storyboard start/end state — Director-authored clip locks (domain-agnostic).
 
 Each shot is a closed window:
   start_state → action/camera/speech → end_state
 Same-setting chain: shot N start_state must match shot N-1 end_state.
-No prior-clip Wan text required.
+
+The Director LLM authors start_state (initial positioning), end_state (final
+positioning, exits, object state) and continuity_lock per clip in the storyboard
+JSON; this module only normalizes those structured fields, chains same-setting
+carries, and stamps them onto clip configs. It never infers state from prose.
 """
 
 from __future__ import annotations
@@ -37,18 +41,6 @@ _SPATIAL_DETAIL_KEYS = (
     "landmark",
     "near",
     "beside",
-)
-
-_POSTURE_PATTERNS: tuple[tuple[str, str], ...] = (
-    (r"\b(sit|sits|sitting|seated)\b", "seated"),
-    (r"\b(stand|stands|standing)\b", "standing"),
-    (r"\b(lean|leans|leaning)\b", "leaning"),
-    (r"\b(kneel|kneels|kneeling)\b", "kneeling"),
-    (r"\b(crouch|crouches|crouching)\b", "crouching"),
-    (r"\b(reclin\w*|lie|lies|lying|laid)\b", "reclining"),
-    (r"\b(walk|walks|walking|pace|paces|pacing)\b", "walking"),
-    (r"\b(run|runs|running)\b", "running"),
-    (r"\b(perch|perches|perched)\b", "perched"),
 )
 
 
@@ -112,21 +104,39 @@ def merge_spatial_maps(*maps: Any) -> dict[str, dict[str, str]]:
 merge_seat_maps = merge_spatial_maps
 
 
-def _posture_from_text(text: str) -> str:
-    low = str(text or "").strip().lower()
-    if not low:
-        return ""
-    for pattern, label in _POSTURE_PATTERNS:
-        if re.search(pattern, low):
-            return label
-    return ""
+def _normalize_props(raw: Any) -> dict[str, str]:
+    """Director-authored object state: object label -> place it now sits/stays."""
+    out: dict[str, str] = {}
+    if isinstance(raw, dict):
+        for label, place in raw.items():
+            key = str(label or "").strip()
+            if not key:
+                continue
+            if isinstance(place, dict):
+                place_s = str(place.get("place") or place.get("at") or "").strip()
+            else:
+                place_s = str(place or "").strip()
+            out[key[:80]] = place_s[:120]
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, str):
+                label, place = item.strip(), ""
+            elif isinstance(item, dict):
+                label = str(item.get("label") or item.get("object") or "").strip()
+                place = str(item.get("place") or item.get("at") or "").strip()
+            else:
+                continue
+            if label:
+                out[label[:80]] = str(place)[:120]
+    return out
 
 
 def spatial_positions_from_shot(shot: dict[str, Any] | None) -> dict[str, dict[str, str]]:
     """Build detailed spatial positioning plan (place + posture for any stance).
 
-    Not seating-only: standing, walking, leaning, kneeling, etc. are first-class.
-    Reads spatial_anchors (preferred) and seat_anchors (legacy wire key).
+    Director-authored metadata only: spatial_anchors (preferred), seat_anchors
+    (legacy wire key), start/end state seats, and structured blocking positions.
+    Never parses scenario prose.
     """
     shot = shot if isinstance(shot, dict) else {}
     start = shot.get("start_state") if isinstance(shot.get("start_state"), dict) else {}
@@ -154,27 +164,6 @@ def spatial_positions_from_shot(shot: dict[str, Any] | None) -> dict[str, dict[s
                 "beside": pos.get("beside"),
             }
         )
-    # cast_actions may encode posture + place ("standing by the door", "seated at table").
-    from_actions: dict[str, dict[str, str]] = {}
-    cast_actions = shot.get("cast_actions") if isinstance(shot.get("cast_actions"), dict) else {}
-    for cid, action in cast_actions.items():
-        key = str(cid or "").strip()
-        text = str(action or "").strip()
-        if not key or not text:
-            continue
-        detail: dict[str, str] = {}
-        posture = _posture_from_text(text)
-        if posture:
-            detail["posture"] = posture
-        m = re.search(
-            r"\b(?:at|on|by|beside|near|in|along)\s+([^,.;]{2,80})",
-            text,
-            flags=re.IGNORECASE,
-        )
-        if m:
-            detail["place"] = m.group(1).strip()[:120]
-        if detail:
-            from_actions[key] = detail
     return merge_spatial_maps(
         shot.get("spatial_anchors"),
         shot.get("seat_anchors"),
@@ -184,7 +173,6 @@ def spatial_positions_from_shot(shot: dict[str, Any] | None) -> dict[str, dict[s
         end.get("seats") if isinstance(end.get("seats"), dict) else None,
         end.get("spatial_anchors") if isinstance(end.get("spatial_anchors"), dict) else None,
         from_positions,
-        from_actions,
     )
 
 
@@ -232,6 +220,14 @@ def normalize_shot_state(raw: Any) -> dict[str, Any]:
     speech_done = _short(str(st.get("speech_done") or st.get("speech") or ""), limit=160)
     if speech_done:
         out["speech_done"] = speech_done
+    # Director-authored object state: props placed this clip, props removed.
+    props = _normalize_props(st.get("props") or st.get("holds"))
+    if props:
+        out["props"] = props
+    cleared_raw = st.get("cleared") or st.get("props_removed") or st.get("removed")
+    cleared = [str(x).strip() for x in (cleared_raw or []) if str(x).strip()]
+    if cleared:
+        out["cleared"] = cleared[:12]
     on_screen = [str(x).strip() for x in (st.get("on_screen") or []) if str(x).strip()]
     if on_screen:
         out["on_screen"] = on_screen[:12]

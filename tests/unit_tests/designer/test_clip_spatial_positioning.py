@@ -49,11 +49,12 @@ def _cfg_positions(cfg: dict) -> dict:
         "posture_only_walking",
         "thin_zone_no_place",
         "legacy_seat_key_standing",
-        "cast_action_standing_by_door",
-        "cast_action_walking_along_path",
+        "authored_state_standing_by_door",
+        "authored_state_walking_along_path",
         "mixed_cast_sit_and_stand",
         "clip2_must_not_replay_clip1_motion",
         "offscreen_not_forced_on_screen",
+        "cast_actions_text_ignored",
     ),
 )
 def test_spatial_positioning_failure_cases(failure_case: str) -> None:
@@ -86,7 +87,9 @@ def test_spatial_positioning_failure_cases(failure_case: str) -> None:
             "setting_id": "set_1",
             "action": "walks through the hall",
             "on_screen": ["char_a"],
-            "cast_actions": {"char_a": "walking along hallway arch"},
+            "spatial_anchors": {
+                "char_a": {"posture": "walking", "place": "hallway arch"},
+            },
         }
         cfg = stamp_shot_states_on_clip_cfg({}, shot=ensure_clip_start_end_states([shot])[0])
         pos = _cfg_positions(cfg)["char_a"]
@@ -120,26 +123,32 @@ def test_spatial_positioning_failure_cases(failure_case: str) -> None:
         assert cfg.get("spatial_anchors", {}).get("char_a", {}).get("posture") == "standing"
         assert cfg.get("seat_anchors", {}).get("char_a", {}).get("place") == "balcony rail"
 
-    elif failure_case == "cast_action_standing_by_door":
+    elif failure_case == "authored_state_standing_by_door":
         shot = {
             "clip_index": 1,
             "setting_id": "set_1",
             "action": "greets arrivals",
             "on_screen": ["char_a"],
             "cast_actions": {"char_a": "standing by the door"},
+            "start_state": {
+                "seats": {"char_a": {"posture": "standing", "place": "by the door"}},
+            },
         }
         cfg = stamp_shot_states_on_clip_cfg({}, shot=ensure_clip_start_end_states([shot])[0])
         pos = _cfg_positions(cfg)["char_a"]
         assert pos.get("posture") == "standing"
         assert "door" in str(pos.get("place") or "").lower()
 
-    elif failure_case == "cast_action_walking_along_path":
+    elif failure_case == "authored_state_walking_along_path":
         shot = {
             "clip_index": 1,
             "setting_id": "set_1",
             "action": "crosses the garden",
             "on_screen": ["char_a"],
             "cast_actions": {"char_a": "walking along garden path"},
+            "spatial_anchors": {
+                "char_a": {"posture": "walking", "place": "garden path"},
+            },
         }
         cfg = stamp_shot_states_on_clip_cfg({}, shot=ensure_clip_start_end_states([shot])[0])
         pos = _cfg_positions(cfg)["char_a"]
@@ -191,6 +200,18 @@ def test_spatial_positioning_failure_cases(failure_case: str) -> None:
         pose = str((cfg2.get("start_state") or {}).get("pose") or "").lower()
         assert "walks to the window" not in pose
         assert _cfg_positions(cfg2)["char_a"].get("place")
+
+    elif failure_case == "cast_actions_text_ignored":
+        # Scenario prose must never be parsed into clip locks; metadata only.
+        shot = {
+            "clip_index": 1,
+            "setting_id": "set_1",
+            "action": "waits",
+            "on_screen": ["char_a"],
+            "cast_actions": {"char_a": "leaning by the mantel"},
+        }
+        cfg = stamp_shot_states_on_clip_cfg({}, shot=ensure_clip_start_end_states([shot])[0])
+        assert not _cfg_positions(cfg)
 
     else:  # offscreen_not_forced_on_screen
         shot = {

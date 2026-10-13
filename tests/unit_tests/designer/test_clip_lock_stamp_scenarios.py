@@ -79,7 +79,7 @@ _SOURCES = (
     "spatial_anchors",
     "seat_anchors_legacy",
     "blocking",
-    "cast_actions",
+    "end_state",
     "start_state",
 )
 _CHAR_LAYOUTS = (
@@ -199,8 +199,12 @@ def _shot_for(
                 for cid in chars
             ],
         }
-    elif source == "cast_actions":
-        pass
+    elif source == "end_state":
+        base["end_state"] = {
+            "pose": f"Ending {posture} at {place}",
+            "seats": positions,
+            "on_screen": list(chars),
+        }
     else:
         base["start_state"] = {
             "pose": f"Already {posture} at {place}",
@@ -208,6 +212,21 @@ def _shot_for(
             "on_screen": list(chars),
         }
     return base
+
+
+def test_cast_actions_text_is_not_parsed_for_positions() -> None:
+    """Director-authored metadata only: scenario prose never creates clip locks."""
+    shot = {
+        "clip_index": 1,
+        "setting_id": "set_1",
+        "action": "Beat: stands at head of table",
+        "on_screen": ["char_a"],
+        "cast_actions": {"char_a": "standing at the head of the table"},
+    }
+    ensured = ensure_clip_start_end_states([shot])[0]
+    assert spatial_positions_from_shot(ensured) == {}
+    cfg = stamp_shot_states_on_clip_cfg({"role": "clip"}, shot=ensured)
+    assert not _cfg_positions(cfg)
 
 
 @pytest.mark.parametrize("case_id", range(_MATRIX_SIZE))

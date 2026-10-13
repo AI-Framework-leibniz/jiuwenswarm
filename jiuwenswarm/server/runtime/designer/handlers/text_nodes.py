@@ -42,8 +42,10 @@ Write English Markdown with these narrative sections ONLY (no lock tables, no lo
 - Audio policy (speech vs music)
 - What to avoid
 FORBIDDEN in the brief: sections titled Lock / Locks / Seating lock / Spatial Lock /
-Identity locks / Production Lock Bible / occupancy tables / axis lock tables.
-Structured continuity locks are stamped later from script_analysis onto each clip — not here.
+Identity locks / Production Lock Bible / occupancy tables / axis lock tables / continuity notes.
+All continuity locks (scene locks, character locks, scene bible, clip locks with each clip's
+initial and final positioning, weather/continuity locks) are authored separately by the Director
+as structured metadata — never written into this brief.
 Preserve every on-screen person, including unnamed groups that share one look, and every shot from the user prompt in FULL DETAIL. Output Markdown only.
 Explicit user facts and constraints are authoritative. For a sparse request, develop a coherent
 story, celebration, advertisement, or other fitting concept rather than stretching one premise.
