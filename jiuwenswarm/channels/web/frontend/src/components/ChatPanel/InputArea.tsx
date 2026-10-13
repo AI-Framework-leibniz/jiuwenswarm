@@ -772,7 +772,6 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const [speechError, setSpeechError] = useState('');
   const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
-  const [videoGenerationEnabled, setVideoGenerationEnabled] = useState(false);
   const [attachments, setAttachments] = useState<AttachmentDraft[]>(() =>
     activeSessionId ? (attachmentDraftsBySession.get(activeSessionId) ?? []) : [],
   );
@@ -4549,15 +4548,9 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                 </div>
                 {workMode === 'design' && showWorkContextRow && (
                   <div className="chat-mode-select" data-testid="chat-panel-video-generation">
-                    <button
-                      type="button"
-                      className={clsx(
-                        'chat-mode-select__trigger',
-                        videoGenerationEnabled && 'chat-mode-select__trigger--feature-on',
-                      )}
+                    <div
+                      className="chat-mode-select__trigger chat-mode-select__trigger--feature-on chat-mode-select__trigger--current"
                       data-testid="chat-panel-video-generation-trigger"
-                      aria-pressed={videoGenerationEnabled}
-                      onClick={() => setVideoGenerationEnabled((enabled) => !enabled)}
                     >
                       <span className="chat-mode-select__value">
                         <span className="chat-mode-select__icon" aria-hidden="true">
@@ -4565,7 +4558,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
                         </span>
                         <span className="chat-mode-select__label">{t('chat.videoGeneration')}</span>
                       </span>
-                    </button>
+                    </div>
                   </div>
                 )}
                 {workMode !== 'design' && (
