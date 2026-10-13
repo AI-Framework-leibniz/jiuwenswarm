@@ -1,13 +1,8 @@
-import { Headphones, Image as ImageIcon, Video, Workflow } from 'lucide-react';
+import { Workflow } from 'lucide-react';
 import { useRef, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DesignerAddTemplate } from '../designerCanvasNodes';
-
-function TypeIcon({ type }: { type: string }) {
-  if (type === 'video') return <Video size={14} aria-hidden />;
-  if (type === 'audio') return <Headphones size={14} aria-hidden />;
-  return <ImageIcon size={14} aria-hidden />;
-}
+import { DesignerAddNodeTypeIcon } from '../designerIcons';
 
 type DesignerAddNodeMenuProps = {
   title?: string;
@@ -55,7 +50,7 @@ export function DesignerAddNodeMenu({
         >
           <span className="chat-mode-select__option-main">
             <span className="chat-mode-select__icon chat-mode-select__icon--asset" aria-hidden>
-              <TypeIcon type={item.type} />
+              <DesignerAddNodeTypeIcon type={item.type} />
             </span>
             <span className="chat-mode-select__label">{t(`designer.dock.node.${item.id}`)}</span>
           </span>
