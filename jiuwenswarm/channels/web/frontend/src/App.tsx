@@ -3865,7 +3865,7 @@ const showWorkspaceDivider = effectiveTeamAreaExpanded && !showConversationNotFo
                   } as CSSProperties}
                   data-testid="app-chat-surface"
                 >
-                  <SingleAgentSurface
+<SingleAgentSurface
                     activeView={chatSurfaceView}
                     chat={(
                       <ChatPanel

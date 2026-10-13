@@ -444,7 +444,6 @@ function devWsTrafficLogger(): Plugin {
   }
 }
 
-/** 将文件读取接口挂到 Vite dev server，避免额外占用 3003 端口 */
 const DESIGNER_UPLOAD_MAX_BYTES = 32 * 1024 * 1024
 
 interface MultipartFilePart {
@@ -489,6 +488,7 @@ function parseMultipartFiles(contentType: string, body: Buffer): MultipartFilePa
   return files
 }
 
+/** 将文件读取接口挂到 Vite dev server，避免额外占用 3003 端口 */
 function devFileContentApi(): Plugin {
   const projectRootDir = resolveProjectRootDir()
   const sourceRepoRootDir = path.resolve(__dirname, '../../../..')
