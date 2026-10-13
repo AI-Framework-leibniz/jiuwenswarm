@@ -528,4 +528,3 @@ test('autoLayoutDesignerNodes does not put scene specs in the clip column', () =
     }
   }
 });
-
