@@ -830,12 +830,11 @@ def test_bootstrap_keeps_an_unselected_project_on_default(designer_store: Design
     assert error is None
     assert code is None
     assert payload is not None
-    assert payload["project_id"] == "proj_created01"
-    assert payload["graph"]["title"] == "火车站短片，竖屏"
+    assert payload["project_id"] == "default"
+    assert payload["graph"]["title"] == "设计项目"
     meta = payload["graph"]["metadata"]
     assert meta["video_settings"] == {"aspect_ratio": "9:16", "resolution": "1080P"}
     assert meta["image_settings"] == {"aspect_ratio": "9:16", "resolution": "1K"}
-    assert created
 
 
 def test_start_run_rejects_run_from_another_graph(

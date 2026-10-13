@@ -117,13 +117,11 @@ async def _require_image(
     except Exception:  # noqa: BLE001
         pass
 
-    save_dir = _canvas_media_dir(ctx)
     generated = await handler_io.generate_designer_image(
         prompt,
         size=size,
         reference_images=clean_refs or None,
         max_tries=max_tries,
-        save_dir=save_dir,
     )
     err = str((generated or {}).get("error") or "")
     # DashScope often rejects ref uploads ("Cannot determine file type") — retry T2I-only.
@@ -141,7 +139,6 @@ async def _require_image(
             size=size,
             reference_images=None,
             max_tries=max(2, max_tries // 2),
-            save_dir=save_dir,
         )
     if generated and generated.get("image_path"):
         path = Path(generated["image_path"])

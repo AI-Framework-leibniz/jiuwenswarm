@@ -1273,9 +1273,7 @@ def _bootstrap_graph(
     project_id = str(params.get("project_id") or "").strip()
     requested_project_dir = str(params.get("project_dir") or "").strip()
     # Same rule as work: a canvas does not create a project. No selection, or
-    # the virtual default id, stays on ``default``. ``allow_additional_session``
-    # remains so older callers keep working.
-    _ = allow_additional_session
+    # the virtual default id, stays on ``default``.
     project_payload: dict[str, Any] | None = None
     resolved_project_dir = ""
 
