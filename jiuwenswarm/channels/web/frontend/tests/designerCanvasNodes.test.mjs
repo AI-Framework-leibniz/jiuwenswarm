@@ -19,6 +19,7 @@ import {
   offsetCanvasPosition,
   packDesignerNodeLayouts,
   parseContentAspect,
+  portAddTemplatesFor,
   positionLeftOfNode,
   positionRightOfNode,
   removeNodesFromGraph,
@@ -529,3 +530,18 @@ test('autoLayoutDesignerNodes does not put scene specs in the clip column', () =
   }
 });
 
+
+test('portAddTemplatesFor limits port menus to the allowed node types', () => {
+  const types = (nodeType, side) => portAddTemplatesFor(nodeType, side).map((item) => item.type);
+  for (const docType of ['text', 'table']) {
+    assert.deepEqual(types(docType, 'predecessor'), ['image', 'video', 'audio']);
+    assert.deepEqual(types(docType, 'successor'), ['image', 'video']);
+  }
+  assert.deepEqual(types('image', 'predecessor'), ['image']);
+  assert.deepEqual(types('image', 'successor'), ['image', 'video']);
+  assert.deepEqual(types('video', 'predecessor'), ['image']);
+  assert.deepEqual(types('video', 'successor'), ['video']);
+  assert.deepEqual(types('audio', 'predecessor'), []);
+  assert.deepEqual(types('audio', 'successor'), ['video']);
+  assert.deepEqual(types('unknown', 'successor'), []);
+});
