@@ -6,6 +6,7 @@ import {
   buildManualDesignerNode,
   positionLeftOfNode,
   portAddTemplatesFor,
+  portAllowsComfyui,
   positionRightOfNode,
   type DesignerAddTemplate,
   type DesignerNodePortSide,
@@ -30,9 +31,8 @@ export function DesignerNodePortControl({ nodeId, side }: DesignerNodePortContro
     (state) => state.domainGraph?.nodes.find((node) => node.id === nodeId)?.type ?? '',
   );
   const templates = useMemo(() => portAddTemplatesFor(nodeType, side), [nodeType, side]);
-  const hasOptions = templates.length > 0;
-  const showComfyui =
-    templates.some((item) => item.type === 'image') && templates.some((item) => item.type === 'video');
+  const showComfyui = portAllowsComfyui(nodeType, side);
+  const hasOptions = templates.length > 0 || showComfyui;
   const addNode = useDesignerStore((state) => state.addNode);
   const nodePortMenu = useDesignerUiStore((state) => state.nodePortMenu);
   const toggleNodePortMenu = useDesignerUiStore((state) => state.toggleNodePortMenu);
