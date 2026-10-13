@@ -19,7 +19,7 @@ from jiuwenswarm.agents.harness.common.tools.vllm_omni_gen import (
         ("MiniMaxAI/MiniMax-H3", "minimax-h3"),
         ("/models/MiniMax-H3", "minimax-h3"),
         ("/models/MiniMax-H3/FL2VA", "minimax-h3"),
-        ("minimax-h3-max", "minimax-h3"),
+        ("minimax-h3-max", "minimax-h3-max"),
         ("Qwen/Qwen-Image", None),
         ("Wan-AI/Wan2.2-T2V-A14B-Diffusers", None),
         ("", None),
