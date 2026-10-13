@@ -1107,6 +1107,7 @@
     "modePlan": "Planning Mode",
     "modeAgent": "Performance Mode",
     "modeAgentTeam": "Cluster Mode",
+    "videoGeneration": "Video generation",
     "modeAutoHarness": "Auto-Harness Mode",
     "modeAutoHarnessDesc": "Automatically analyze and optimize target repository",
     "recording": "Recording... (click the microphone again to finish)",
