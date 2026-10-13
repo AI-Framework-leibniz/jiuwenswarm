@@ -90,7 +90,7 @@ const PORT_ADD_TYPES: Record<string, Record<DesignerNodePortSide, DesignerNodeTy
     successor: [DESIGNER_NODE_TYPE_IMAGE, DESIGNER_NODE_TYPE_VIDEO],
   },
   [DESIGNER_NODE_TYPE_VIDEO]: {
-    predecessor: [DESIGNER_NODE_TYPE_IMAGE],
+    predecessor: [DESIGNER_NODE_TYPE_IMAGE, DESIGNER_NODE_TYPE_VIDEO],
     successor: [DESIGNER_NODE_TYPE_VIDEO],
   },
   [DESIGNER_NODE_TYPE_AUDIO]: {

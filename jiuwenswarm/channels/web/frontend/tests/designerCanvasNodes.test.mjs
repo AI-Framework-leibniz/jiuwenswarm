@@ -539,7 +539,7 @@ test('portAddTemplatesFor limits port menus to the allowed node types', () => {
   }
   assert.deepEqual(types('image', 'predecessor'), ['image']);
   assert.deepEqual(types('image', 'successor'), ['image', 'video']);
-  assert.deepEqual(types('video', 'predecessor'), ['image']);
+  assert.deepEqual(types('video', 'predecessor'), ['image', 'video']);
   assert.deepEqual(types('video', 'successor'), ['video']);
   assert.deepEqual(types('audio', 'predecessor'), []);
   assert.deepEqual(types('audio', 'successor'), ['video']);
