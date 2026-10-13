@@ -238,8 +238,6 @@
     "edge": {
       "delete": "Delete connection"
     },
-    "recentGraphs": "Recent graphs",
-    "hasVideo": "Has finished clip",
     "revision": {
       "title": "Choose which version to keep",
       "hint": "{{label}} was regenerated. The original is still here — pick which one to keep.",

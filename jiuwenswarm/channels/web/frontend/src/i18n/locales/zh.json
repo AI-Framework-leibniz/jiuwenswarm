@@ -238,8 +238,6 @@
     "edge": {
       "delete": "删除连线"
     },
-    "recentGraphs": "最近设计图",
-    "hasVideo": "已有成片",
     "revision": {
       "title": "选择要保留的版本",
       "hint": "{{label}} 已重新生成。原版还在，请选择保留哪一份。",
