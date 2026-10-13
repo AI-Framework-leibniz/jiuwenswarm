@@ -636,10 +636,10 @@ function isAudioFile(file: File): boolean {
 }
 
 /** Classify a picked file for routing to media.persist vs document.persist. */
-function resolveAttachmentKind(file: File): AttachmentKind | null {
+function resolveAttachmentKind(file: File, designMode: boolean): AttachmentKind | null {
   if (isImageFile(file)) return 'image';
-  if (isVideoFile(file)) return 'video';
-  if (isAudioFile(file)) return 'audio';
+  if (designMode && isVideoFile(file)) return 'video';
+  if (designMode && isAudioFile(file)) return 'audio';
   if (isForbiddenDocumentFile(file)) return null;
   return 'document';
 }
@@ -1943,7 +1943,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
       }
 
       const drafts = filesToAdd.reduce<AttachmentDraft[]>((items, file) => {
-        const kind = resolveAttachmentKind(file);
+        const kind = resolveAttachmentKind(file, workMode === 'design');
         if (!kind) {
           const message = isForbiddenDocumentFile(file)
             ? t('chat.inputAttachment.forbiddenFileType', { name: file.name || t('chat.inputAttachment.unnamedFile') })
@@ -1996,7 +1996,7 @@ export const InputArea = forwardRef<InputAreaHandle, InputAreaProps>(function In
         uploadAttachment(draft);
       });
     },
-    [attachments, pushAttachmentAlert, uploadAttachment, t],
+    [attachments, pushAttachmentAlert, uploadAttachment, t, workMode],
   );
 
   const appendLocalFilePicks = useCallback(
