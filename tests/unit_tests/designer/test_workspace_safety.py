@@ -253,46 +253,6 @@ def test_default_session_rehomes_a_graph_saved_under_another_project(monkeypatch
     assert hidden == ["proj_stray"]
 
 
-def test_project_assets_are_shared_and_skip_text():
-    assets = designer_adapter._graph_media_assets(
-        {
-            "graph_id": "g1",
-            "metadata": {
-                "user_references": [
-                    {"kind": "image", "uri": "file:///a.png", "filename": "a.png"},
-                ]
-            },
-            "nodes": [
-                {
-                    "id": "n1",
-                    "config": {},
-                    "output_ref": {
-                        "kind": "text",
-                        "uri": "file:///brief.md",
-                        "mime_type": "text/markdown",
-                        "label": "brief.md",
-                    },
-                },
-                {
-                    "id": "n2",
-                    "config": {},
-                    "output_ref": {
-                        "kind": "video",
-                        "uri": "file:///clip.mp4",
-                        "label": "clip",
-                    },
-                },
-            ],
-        },
-        None,
-        "s1",
-    )
-
-    uris = [item["uri"] for item in assets]
-    assert uris == ["file:///a.png", "file:///clip.mp4"]
-    assert all(item["session_id"] == "s1" for item in assets)
-
-
 def test_graph_workspace_uses_authoritative_project_directory(tmp_path, monkeypatch):
     root = tmp_path / "agent"
     project_dir = root / "workspace" / "design" / "managed-project"
@@ -643,29 +603,3 @@ def test_canvas_title_uses_model_phrase_not_the_prompt():
     assert designer_adapter._replacement_display_title(prompt, prompt, "雨夜追凶") == "雨夜追凶"
     assert designer_adapter._replacement_display_title("A" * 50, "", "雨夜追凶") == "雨夜追凶"
     assert designer_adapter._replacement_display_title("AT10", "", "雨夜追凶") == ""
-
-
-def test_design_references_and_assets_use_session_uploads(tmp_path, monkeypatch):
-    sessions = tmp_path / "agent" / "sessions"
-    monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.attachments.media_attachments.get_agent_sessions_dir",
-        lambda: sessions,
-    )
-    refs = designer_adapter._design_reference_dir("design_abc", str(tmp_path / "unused"))
-    assert refs == sessions / "design_abc" / "uploads"
-    assert refs.is_dir()
-    assert designer_adapter._design_reference_dir("", str(tmp_path / "proj")) == (
-        tmp_path / "proj" / ".designer" / "refs"
-    )
-
-    upload = sessions / "design_abc" / "uploads"
-    (upload / "still.png").write_bytes(b"png")
-    (upload / "notes.txt").write_bytes(b"skip")
-    assets: list[dict] = []
-    seen: set[str] = set()
-    designer_adapter._append_session_upload_assets("design_abc", assets, seen)
-    assert len(assets) == 1
-    assert assets[0]["filename"] == "still.png"
-    assert assets[0]["kind"] == "image"
-    assert assets[0]["session_id"] == "design_abc"
-    assert assets[0]["source"] == "uploaded"

@@ -12,8 +12,6 @@ import {
   designerReferenceKindFromMime,
   designerReferencePreviewUrl,
   filesToBootstrapReferences,
-  mediaItemsToBootstrapReferences,
-  persistDesignSessionMedia,
   type DesignerReferenceKind,
   type DesignerStoredReference,
 } from '../designerReferences';
@@ -199,23 +197,7 @@ export function DesignerChatPanel() {
         const existingGraph = domainGraph && !isDesignerPreviewGraph(domainGraph) ? domainGraph : null;
         const sessionId = String(existingGraph?.metadata?.session_id || '');
         const projectId = String(existingGraph?.project_id || '');
-        let references = converted.refs;
-        if (sessionId && references.length > 0) {
-          const persisted = await persistDesignSessionMedia(
-            sessionId,
-            references.map((item) => ({
-              type: item.kind,
-              filename: item.filename,
-              mimeType: item.mime_type,
-              mime_type: item.mime_type,
-              path: item.path,
-              base64Data: item.base64_data,
-              size_bytes: item.size_bytes,
-            })),
-          );
-          const stored = mediaItemsToBootstrapReferences(persisted);
-          if (!stored.error) references = stored.refs;
-        }
+        const references = converted.refs;
         if (existingGraph?.graph_id && existingGraph.nodes.length === 0 && sessionId && projectId) {
           return composeDesignerSession({
             projectId,

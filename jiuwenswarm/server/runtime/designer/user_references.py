@@ -1108,11 +1108,7 @@ def _existing_file(raw: str) -> Path | None:
             return candidate
     except OSError:
         return None
-    from jiuwenswarm.server.runtime.attachments.media_attachments import (
-        resolve_listed_session_file,
-    )
-
-    return resolve_listed_session_file(value)
+    return None
 
 
 def _decode_inline_bytes(item: dict[str, Any]) -> bytes | None:

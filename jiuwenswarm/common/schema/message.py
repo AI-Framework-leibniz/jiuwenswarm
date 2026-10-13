@@ -152,8 +152,6 @@ class ReqMethod(Enum):
     DESIGNER_WORKSPACE_GET = "designer.workspace.get"
     DESIGNER_WORKSPACE_SESSION_CREATE = "designer.workspace.session.create"
     DESIGNER_WORKSPACE_SESSION_COMPOSE = "designer.workspace.session.compose"
-    DESIGNER_WORKSPACE_ASSETS = "designer.workspace.assets"
-    DESIGNER_TRAJECTORY_GET = "designer.trajectory.get"
     DESIGNER_GRAPH_GET = "designer.graph.get"
     DESIGNER_GRAPH_LIST = "designer.graph.list"
     DESIGNER_GRAPH_SAVE = "designer.graph.save"

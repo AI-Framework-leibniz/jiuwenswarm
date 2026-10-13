@@ -1,5 +1,5 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""Per-canvas trajectory files for Designer runs.
+"""Per-project trajectory files for Designer runs.
 
 Two append-only JSONL files live under ``<data dir>/.trace/designer/``:
 
@@ -34,7 +34,6 @@ from jiuwenswarm.observability.config import (
 )
 from jiuwenswarm.server.runtime.designer.paths import (
     design_otlp_trajectory_path,
-    design_project_trajectory_key,
     design_record_trajectory_path,
     design_trajectory_dir,
     design_trajectory_key,
@@ -217,7 +216,7 @@ class _JsonlFile:
 
 
 class TrajectoryRecorder:
-    """Streams one Designer run into that canvas session's OTLP and design files.
+    """Streams one Designer run into its project's OTLP and design files.
 
     A recorder without paths is disabled: spans and records become no-ops.
     """
@@ -228,7 +227,6 @@ class TrajectoryRecorder:
         run_id: str,
         *,
         project_id: str,
-        session_id: str = "",
         key: str = "",
         otlp_path: Path | None = None,
         design_path: Path | None = None,
@@ -236,7 +234,6 @@ class TrajectoryRecorder:
         self.graph_id = graph_id
         self.run_id = run_id
         self.project_id = project_id
-        self.session_id = session_id
         self.key = key
         self.trace_id = secrets.token_hex(16)
         self.started_at_ms = utc_now_ms()
@@ -279,7 +276,6 @@ class TrajectoryRecorder:
                 "kind": kind,
                 "ts_ms": utc_now_ms(),
                 "project_id": self.project_id,
-                "session_id": self.session_id,
                 "graph_id": self.graph_id,
                 "run_id": self.run_id,
                 "trace_id": self.trace_id,
@@ -309,8 +305,8 @@ class TrajectoryRecorder:
             name, kind, attributes = f"{scope.agent_id}.{scope.action}", _OTLP_SPAN_KIND_INTERNAL, {}
         attributes.update(
             {
-                "session.id": self.session_id or self.key,
-                "gen_ai.conversation.id": self.session_id or self.key,
+                "session.id": self.key,
+                "gen_ai.conversation.id": self.key,
                 "gen_ai.agent.id": scope.agent_id,
                 "gen_ai.agent.name": scope.role or scope.agent_id,
                 "openjiuwen.run.id": self.run_id,
@@ -469,34 +465,18 @@ def begin_trajectory(
     run_id: str,
     *,
     project_id: str,
-    session_id: str,
     meta: dict[str, Any] | None = None,
     settings: TrajectoryStoreSettings | None = None,
 ) -> TrajectoryRecorder:
-    resolved_session = session_id.strip() if isinstance(session_id, str) else ""
-    if not resolved_session:
-        logger.info("Designer trajectory skipped because session_id is required")
-        return TrajectoryRecorder(
-            graph_id,
-            run_id,
-            project_id=project_id,
-            session_id="",
-        )
     resolved = settings or load_trajectory_store_settings()
     if not resolved.enabled:
-        return TrajectoryRecorder(
-            graph_id,
-            run_id,
-            project_id=project_id,
-            session_id=resolved_session,
-        )
-    key = design_trajectory_key(project_id, graph_id, resolved_session)
+        return TrajectoryRecorder(graph_id, run_id, project_id=project_id)
+    key = design_trajectory_key(project_id)
     _prune_expired(design_trajectory_dir(), resolved.retention_days)
     rec = TrajectoryRecorder(
         graph_id,
         run_id,
         project_id=project_id,
-        session_id=resolved_session,
         key=key,
         otlp_path=design_otlp_trajectory_path(key),
         design_path=design_record_trajectory_path(key),
@@ -550,149 +530,3 @@ def end_trajectory(run_id: str) -> str | None:
         return None
     rec.finish()
     return str(rec.design_path) if rec.design_path is not None else None
-
-
-def _tail_jsonl(path: Path, limit: int) -> list[dict[str, Any]]:
-    if limit <= 0 or not path.is_file():
-        return []
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        logger.debug("Designer trajectory read failed for %s", path, exc_info=True)
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in lines[-limit:]:
-        text = line.strip()
-        if not text:
-            continue
-        try:
-            item = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(item, dict):
-            rows.append(item)
-    return rows
-
-
-def _span_attr_map(span: dict[str, Any]) -> dict[str, str]:
-    mapped: dict[str, str] = {}
-    for item in span.get("attributes") or []:
-        if not isinstance(item, dict):
-            continue
-        key = str(item.get("key") or "")
-        value = item.get("value") if isinstance(item.get("value"), dict) else {}
-        if "stringValue" in value:
-            mapped[key] = str(value["stringValue"])
-        elif "intValue" in value:
-            mapped[key] = str(value["intValue"])
-    return mapped
-
-
-def _compact_design_record(record: dict[str, Any]) -> dict[str, Any]:
-    kind = str(record.get("kind") or "")
-    summary = ""
-    if kind == "event":
-        summary = " ".join(
-            part
-            for part in (
-                str(record.get("agent_id") or ""),
-                str(record.get("action") or ""),
-                str(record.get("tool") or ""),
-            )
-            if part
-        )
-    elif kind == "run_started":
-        meta = record.get("meta") if isinstance(record.get("meta"), dict) else {}
-        summary = str(meta.get("scenario") or meta.get("target_node_id") or "run started")
-    elif kind == "run_ended":
-        agents = record.get("agents") if isinstance(record.get("agents"), dict) else {}
-        summary = f"{len(agents)} agents"
-    elif kind == "feedback":
-        summary = "feedback"
-    return {
-        "ts_ms": record.get("ts_ms") or 0,
-        "kind": kind,
-        "run_id": str(record.get("run_id") or ""),
-        "graph_id": str(record.get("graph_id") or ""),
-        "action": str(record.get("action") or ""),
-        "agent_id": str(record.get("agent_id") or ""),
-        "phase": str(record.get("phase") or ""),
-        "status": str(record.get("status") or ""),
-        "tool": str(record.get("tool") or ""),
-        "summary": summary[:160],
-    }
-
-
-def _compact_span(envelope: dict[str, Any]) -> dict[str, Any] | None:
-    try:
-        span = envelope["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
-    except (KeyError, IndexError, TypeError):
-        return None
-    if not isinstance(span, dict):
-        return None
-    attrs = _span_attr_map(span)
-    status = span.get("status") if isinstance(span.get("status"), dict) else {}
-    error = str(status.get("message") or "")
-    try:
-        ts_ms = int(span.get("startTimeUnixNano") or 0) // 1_000_000
-    except (TypeError, ValueError):
-        ts_ms = 0
-    return {
-        "ts_ms": ts_ms,
-        "kind": "span",
-        "run_id": attrs.get("openjiuwen.run.id") or "",
-        "graph_id": attrs.get("designer.graph.id") or "",
-        "action": attrs.get("designer.action") or "",
-        "agent_id": attrs.get("gen_ai.agent.id") or "",
-        "phase": attrs.get("designer.phase") or "",
-        "status": "error" if error else "ok",
-        "tool": attrs.get("designer.tool") or "",
-        "summary": str(span.get("name") or "")[:160],
-    }
-
-
-def read_canvas_trajectory(
-    *,
-    project_id: str,
-    graph_id: str,
-    session_id: str = "",
-    limit: int = 80,
-) -> list[dict[str, Any]]:
-    """Return this canvas's trajectory, including older project-keyed files.
-
-    New runs are stored under the session id. Files written before sessions
-    used the project id; those lines are kept only when their graph id matches
-    this canvas.
-    """
-    keys: list[str] = []
-    if isinstance(session_id, str) and session_id.strip():
-        keys.append(design_trajectory_key(project_id, graph_id, session_id))
-    if str(project_id or "").strip():
-        legacy = design_project_trajectory_key(project_id)
-        if legacy not in keys:
-            keys.append(legacy)
-    events: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, int, str]] = set()
-    for key in keys:
-        for record in _tail_jsonl(design_record_trajectory_path(key), limit):
-            item = _compact_design_record(record)
-            if graph_id and item["graph_id"] and item["graph_id"] != graph_id:
-                continue
-            ident = (item["kind"], item["run_id"], int(item["ts_ms"] or 0), item["summary"])
-            if ident in seen:
-                continue
-            seen.add(ident)
-            events.append(item)
-        for envelope in _tail_jsonl(design_otlp_trajectory_path(key), limit):
-            item = _compact_span(envelope)
-            if item is None:
-                continue
-            if graph_id and item["graph_id"] and item["graph_id"] != graph_id:
-                continue
-            ident = (item["kind"], item["run_id"], int(item["ts_ms"] or 0), item["summary"])
-            if ident in seen:
-                continue
-            seen.add(ident)
-            events.append(item)
-    events.sort(key=lambda item: int(item.get("ts_ms") or 0))
-    return events[-limit:]

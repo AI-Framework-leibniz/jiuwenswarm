@@ -15,7 +15,7 @@ export function DesignerAssetsSidebar() {
           {t('designer.sidebar.canvas')}
         </h2>
       </div>
-      <DesignerAssetsPanel scope="session" />
+      <DesignerAssetsPanel />
     </aside>
   );
 }

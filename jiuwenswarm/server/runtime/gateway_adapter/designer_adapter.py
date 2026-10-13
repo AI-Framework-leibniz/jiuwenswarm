@@ -1006,282 +1006,6 @@ async def _compose_design_session(
     return _get_design_workspace({"project_id": project_id, "session_id": session_id})
 
 
-_MEDIA_SUFFIXES = {
-    ".png": "image",
-    ".jpg": "image",
-    ".jpeg": "image",
-    ".webp": "image",
-    ".gif": "image",
-    ".bmp": "image",
-    ".mp4": "video",
-    ".webm": "video",
-    ".mov": "video",
-    ".m4v": "video",
-    ".mp3": "audio",
-    ".wav": "audio",
-    ".ogg": "audio",
-    ".m4a": "audio",
-}
-
-
-def _uri_suffix(uri: str) -> str:
-    path = uri.split("?", 1)[0].split("#", 1)[0]
-    dot = path.rfind(".")
-    if dot < 0:
-        return ""
-    return path[dot:].lower()
-
-
-def _media_kind(ref: dict[str, Any]) -> str | None:
-    uri = str(ref.get("uri") or "").strip()
-    if not uri or "placeholder" in uri.lower():
-        return None
-    suffix = _uri_suffix(uri)
-    mime = str(ref.get("mime_type") or "").lower()
-    if suffix in {".md", ".txt", ".json"} or mime.startswith("text/"):
-        return None
-    if suffix in _MEDIA_SUFFIXES:
-        return _MEDIA_SUFFIXES[suffix]
-    if mime.startswith("image/"):
-        return "image"
-    if mime.startswith("video/"):
-        return "video"
-    if mime.startswith("audio/"):
-        return "audio"
-    kind = str(ref.get("kind") or "").lower()
-    if kind in {"image", "video", "audio"}:
-        return kind
-    return None
-
-
-def _append_media_asset(
-    assets: list[dict[str, Any]],
-    seen: set[str],
-    *,
-    graph_id: str,
-    session_id: str,
-    node_id: str,
-    ref: dict[str, Any],
-    source: str,
-) -> None:
-    kind = _media_kind(ref)
-    uri = str(ref.get("uri") or "").strip()
-    if kind is None or not uri or uri in seen:
-        return
-    seen.add(uri)
-    label = str(ref.get("label") or ref.get("filename") or "").strip() or kind
-    assets.append(
-        {
-            "id": f"{graph_id}:{node_id}:{len(assets)}",
-            "graph_id": graph_id,
-            "session_id": session_id,
-            "node_id": node_id,
-            "filename": label,
-            "kind": kind,
-            "uri": uri,
-            "mime_type": str(ref.get("mime_type") or ""),
-            "source": source,
-        }
-    )
-
-
-def _graph_media_assets(
-    graph: dict[str, Any],
-    run: dict[str, Any] | None,
-    session_id: str,
-) -> list[dict[str, Any]]:
-    graph_id = str(graph.get("graph_id") or "")
-    assets: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    metadata = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
-    references = (metadata or {}).get("user_references")
-    if isinstance(references, list):
-        for item in references:
-            if isinstance(item, dict):
-                _append_media_asset(
-                    assets,
-                    seen,
-                    graph_id=graph_id,
-                    session_id=session_id,
-                    node_id="user_reference",
-                    ref=item,
-                    source="uploaded",
-                )
-    states = (run or {}).get("node_states") if isinstance((run or {}).get("node_states"), dict) else {}
-    for node in graph.get("nodes") or []:
-        if not isinstance(node, dict):
-            continue
-        node_id = str(node.get("id") or "")
-        config = node.get("config") if isinstance(node.get("config"), dict) else {}
-        upload = config.get("upload") if isinstance(config.get("upload"), dict) else None
-        if isinstance(upload, dict) and upload.get("uri"):
-            _append_media_asset(
-                assets,
-                seen,
-                graph_id=graph_id,
-                session_id=session_id,
-                node_id=node_id,
-                ref=upload,
-                source="uploaded",
-            )
-        output = node.get("output_ref") if isinstance(node.get("output_ref"), dict) else None
-        if isinstance(output, dict):
-            _append_media_asset(
-                assets,
-                seen,
-                graph_id=graph_id,
-                session_id=session_id,
-                node_id=node_id,
-                ref=output,
-                source="uploaded" if config.get("user_replaced_output") else "generated",
-            )
-        state = states.get(node_id) if isinstance(states, dict) else None
-        if not isinstance(state, dict):
-            continue
-        refs = state.get("output_refs")
-        if not isinstance(refs, list) or not refs:
-            primary = state.get("output_ref")
-            refs = [primary] if isinstance(primary, dict) else []
-        for ref in refs:
-            if isinstance(ref, dict):
-                _append_media_asset(
-                    assets,
-                    seen,
-                    graph_id=graph_id,
-                    session_id=session_id,
-                    node_id=node_id,
-                    ref=ref,
-                    source="generated",
-                )
-    return assets
-
-
-def _list_design_assets(
-    params: dict[str, Any],
-) -> tuple[dict[str, Any] | None, str | None, str | None]:
-    project_id = str(params.get("project_id") or "").strip()
-    if not project_id:
-        return None, "project_id is required", "BAD_REQUEST"
-    _project, pairs, error, code = _design_pairs(project_id)
-    if error is not None:
-        return None, error, code
-    assets: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for pair in pairs:
-        graph = pair["graph"]
-        session_id = str(pair["session"].get("session_id") or "")
-        run = _store.get_latest_run_for_graph(str(graph.get("graph_id") or ""))
-        for asset in _graph_media_assets(graph, run, session_id):
-            uri = str(asset.get("uri") or "")
-            if uri in seen:
-                continue
-            seen.add(uri)
-            _remember_asset_path(seen, uri)
-            assets.append(asset)
-        _append_session_upload_assets(session_id, assets, seen)
-    return {"assets": assets}, None, None
-
-
-def _design_reference_dir(session_id: str, project_dir: str) -> Path:
-    """Store design references in the work session uploads directory.
-
-    A canvas with a session id uses ``agent/sessions/<id>/uploads``, the same
-    folder ``media.persist`` writes. Projects created without a session still
-    fall back to the project ``.designer/refs`` directory.
-    """
-    if str(session_id or "").strip():
-        from jiuwenswarm.server.runtime.attachments.media_attachments import (
-            session_uploads_dir,
-        )
-
-        return session_uploads_dir(session_id)
-    if project_dir:
-        return Path(project_dir) / ".designer" / "refs"
-    return Path(".") / ".designer" / "refs"
-
-
-_SESSION_UPLOAD_KINDS = {
-    ".png": "image",
-    ".jpg": "image",
-    ".jpeg": "image",
-    ".webp": "image",
-    ".gif": "image",
-    ".jfif": "image",
-    ".mp4": "video",
-    ".webm": "video",
-    ".mov": "video",
-    ".m4v": "video",
-    ".mp3": "audio",
-    ".wav": "audio",
-    ".m4a": "audio",
-    ".aac": "audio",
-    ".ogg": "audio",
-    ".flac": "audio",
-}
-
-
-def _remember_asset_path(seen: set[str], uri: str) -> None:
-    from jiuwenswarm.server.runtime.designer.handlers.common import path_from_uri
-
-    path = path_from_uri(uri)
-    if path is None:
-        return
-    try:
-        seen.add(os.path.normcase(str(path.resolve())))
-    except OSError:
-        return
-
-
-def _append_session_upload_assets(
-    session_id: str,
-    assets: list[dict[str, Any]],
-    seen: set[str],
-) -> None:
-    """Add files from the work session uploads directory to the project library."""
-    if not session_id:
-        return
-    from jiuwenswarm.server.runtime.attachments.media_attachments import (
-        session_uploads_dir,
-    )
-
-    directory = session_uploads_dir(session_id, create=False)
-    if not directory.is_dir():
-        return
-    try:
-        entries = sorted(directory.iterdir(), key=lambda item: item.name.lower())
-    except OSError:
-        return
-    for path in entries:
-        kind = _SESSION_UPLOAD_KINDS.get(path.suffix.lower())
-        if kind is None or path.name.startswith("."):
-            continue
-        try:
-            if path.is_symlink() or not path.is_file():
-                continue
-            resolved = path.resolve()
-        except OSError:
-            continue
-        uri = resolved.as_uri()
-        key = os.path.normcase(str(resolved))
-        if uri in seen or key in seen:
-            continue
-        seen.add(uri)
-        seen.add(key)
-        assets.append(
-            {
-                "id": f"upload:{session_id}:{path.name}",
-                "graph_id": "",
-                "session_id": session_id,
-                "node_id": "",
-                "filename": path.name,
-                "kind": kind,
-                "uri": uri,
-                "mime_type": "",
-                "source": "uploaded",
-            }
-        )
-
-
 def _list_graphs(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None, str | None]:
     project_id = str(params.get("project_id") or "").strip()
     if is_default_project_id(project_id):
@@ -1555,7 +1279,11 @@ def _bootstrap_graph(
 
     try:
         session_id = str(params.get("session_id") or "").strip()
-        refs_dir = _design_reference_dir(session_id, resolved_project_dir)
+        refs_dir = (
+            Path(resolved_project_dir) / ".designer" / "refs"
+            if resolved_project_dir
+            else Path(".") / ".designer" / "refs"
+        )
         user_refs = normalize_user_references(raw_references, dest_dir=refs_dir)
     except UserReferenceError as exc:
         return None, str(exc), exc.code
@@ -2163,36 +1891,6 @@ async def _bootstrap_graph_with_director_impl(
         )
 
 
-def _read_design_trajectory(
-    params: dict[str, Any],
-) -> tuple[dict[str, Any] | None, str | None, str | None]:
-    """Return the trajectory that belongs to one design canvas."""
-    from jiuwenswarm.server.runtime.designer.trajectory import read_canvas_trajectory
-
-    project_id = str(params.get("project_id") or "").strip()
-    session_id = str(params.get("session_id") or "").strip()
-    if not project_id or not session_id:
-        return None, "project_id and session_id are required", "BAD_REQUEST"
-    workspace, error, code = _get_design_workspace(
-        {"project_id": project_id, "session_id": session_id}
-    )
-    if error is not None or workspace is None:
-        return None, error, code
-    graph = workspace.get("graph") if isinstance(workspace.get("graph"), dict) else {}
-    graph_id = str(graph.get("graph_id") or "")
-    events = read_canvas_trajectory(
-        project_id=project_id,
-        graph_id=graph_id,
-        session_id=session_id,
-    )
-    return {
-        "project_id": project_id,
-        "session_id": session_id,
-        "graph_id": graph_id,
-        "events": events,
-    }, None, None
-
-
 class DesignerAdapter(GatewayAdapter):
     """Designer execution graph adapter."""
 
@@ -2202,8 +1900,6 @@ class DesignerAdapter(GatewayAdapter):
             ReqMethod.DESIGNER_WORKSPACE_GET.value,
             ReqMethod.DESIGNER_WORKSPACE_SESSION_CREATE.value,
             ReqMethod.DESIGNER_WORKSPACE_SESSION_COMPOSE.value,
-            ReqMethod.DESIGNER_WORKSPACE_ASSETS.value,
-            ReqMethod.DESIGNER_TRAJECTORY_GET.value,
             ReqMethod.DESIGNER_GRAPH_GET.value,
             ReqMethod.DESIGNER_GRAPH_LIST.value,
             ReqMethod.DESIGNER_GRAPH_SAVE.value,
@@ -2234,14 +1930,6 @@ class DesignerAdapter(GatewayAdapter):
                 )
             elif method == ReqMethod.DESIGNER_WORKSPACE_SESSION_COMPOSE:
                 payload, error, code = await _compose_design_session(request, params)
-            elif method == ReqMethod.DESIGNER_WORKSPACE_ASSETS:
-                payload, error, code = await asyncio.to_thread(
-                    _list_design_assets, params
-                )
-            elif method == ReqMethod.DESIGNER_TRAJECTORY_GET:
-                payload, error, code = await asyncio.to_thread(
-                    _read_design_trajectory, params
-                )
             elif method == ReqMethod.DESIGNER_GRAPH_GET:
                 payload, error, code = await asyncio.to_thread(_get_graph, params)
             elif method == ReqMethod.DESIGNER_GRAPH_LIST:

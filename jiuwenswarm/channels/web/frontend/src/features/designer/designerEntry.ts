@@ -8,7 +8,6 @@ import { DESIGNER_MATERIAL_SAVED_EVENT } from './designerMaterials';
 import { useDesignerRunStore } from './designerRunStore';
 import {
   mediaItemsToBootstrapReferences,
-  persistDesignSessionMedia,
   type DesignerBootstrapReference,
   type DesignerStoredReference,
 } from './designerReferences';
@@ -239,8 +238,7 @@ export async function submitDesignComposer(params: {
   const created = await designerWorkspaceClient.createSession({ projectId });
   const sessionId = String(created.session?.session_id || '');
   if (!sessionId) throw new Error('missing session');
-  const persistedItems = await persistDesignSessionMedia(sessionId, params.mediaItems);
-  const converted = mediaItemsToBootstrapReferences(persistedItems);
+  const converted = checked;
   const activeSessionId = useChatStore.getState().activeSessionId;
   const sessionState = useSessionStore.getState();
   const selectedModel = resolveChatModelSelection(

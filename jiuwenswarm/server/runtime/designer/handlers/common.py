@@ -147,11 +147,7 @@ def path_from_uri(uri: str) -> Path | None:
     candidate = Path(value)
     if candidate.exists():
         return candidate
-    from jiuwenswarm.server.runtime.attachments.media_attachments import (
-        resolve_listed_session_file,
-    )
-
-    return resolve_listed_session_file(value)
+    return None
 
 
 def graph_workspace_dir(graph: DesignerExecutionGraph | None = None) -> Path:

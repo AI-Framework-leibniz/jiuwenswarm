@@ -825,7 +825,6 @@ class GraphExecutor:
             graph["graph_id"],
             run_id,
             project_id=graph["project_id"],
-            session_id=str((graph.get("metadata") or {}).get("session_id") or ""),
             meta={"target_node_id": node_id},
         )
         try:
@@ -875,7 +874,6 @@ class GraphExecutor:
             graph["graph_id"],
             run_id,
             project_id=graph["project_id"],
-            session_id=str((graph.get("metadata") or {}).get("session_id") or ""),
             meta={"scope_node_ids": list(scope)},
         )
         try:
@@ -969,10 +967,8 @@ class GraphExecutor:
             graph_id,
             run_id,
             project_id=graph["project_id"],
-            session_id=str((graph.get("metadata") or {}).get("session_id") or ""),
             meta={
                 "scenario": (graph.get("metadata") or {}).get("scenario"),
-                "session_id": str((graph.get("metadata") or {}).get("session_id") or ""),
                 "skill_guided": bool((graph.get("metadata") or {}).get("skill_guided")),
                 "audio_intent": (graph.get("metadata") or {}).get("audio_intent"),
                 "use_prior_feedback": use_prior,

@@ -20,7 +20,6 @@ from jiuwenswarm.server.runtime.designer.trajectory import (
     current_trajectory_span,
     end_trajectory,
     get_trajectory,
-    read_canvas_trajectory,
 )
 
 
@@ -67,12 +66,11 @@ def _attrs(span: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def test_files_are_keyed_by_session_under_data_dir(data_dir: Path) -> None:
+def test_files_are_keyed_by_project_under_data_dir(data_dir: Path) -> None:
     rec = begin_trajectory(
         "graph-1",
         "run-1",
         project_id="proj_abc",
-        session_id="design_abc",
         meta={"scenario": "video"},
         settings=_settings(data_dir, enabled=True),
     )
@@ -81,106 +79,43 @@ def test_files_are_keyed_by_session_under_data_dir(data_dir: Path) -> None:
     design_path = end_trajectory("run-1")
 
     directory = data_dir / ".trace" / "designer"
-    assert design_path == str(directory / "design_abc.design.jsonl")
+    assert design_path == str(directory / "proj_abc.design.jsonl")
     assert sorted(p.name for p in directory.iterdir()) == [
-        "design_abc.design.jsonl",
-        "design_abc.otlp.jsonl",
+        "proj_abc.design.jsonl",
+        "proj_abc.otlp.jsonl",
     ]
-    records = _read_jsonl(directory / "design_abc.design.jsonl")
+    records = _read_jsonl(directory / "proj_abc.design.jsonl")
     assert [r["kind"] for r in records] == ["run_started", "run_ended"]
     assert records[0]["schema_version"] == TRAJECTORY_SCHEMA
     assert records[0]["meta"] == {"scenario": "video"}
     assert records[1]["agents"]["director"]["role"] == "director"
 
 
-def test_second_run_appends_to_the_same_session_files(data_dir: Path) -> None:
+def test_second_run_appends_to_same_project_files(data_dir: Path) -> None:
     for run_id in ("run-a", "run-b"):
         rec = begin_trajectory(
-            "graph-1",
-            run_id,
-            project_id="proj_abc",
-            session_id="design_abc",
-            settings=_settings(data_dir, enabled=True),
+            "graph-1", run_id, project_id="proj_abc", settings=_settings(data_dir, enabled=True)
         )
         with rec.span(agent_id="director", action="plan"):
             pass
         end_trajectory(run_id)
 
     directory = data_dir / ".trace" / "designer"
-    spans = _spans(directory / "design_abc.otlp.jsonl")
+    spans = _spans(directory / "proj_abc.otlp.jsonl")
     assert [_attrs(s)["openjiuwen.run.id"] for s in spans] == ["run-a", "run-b"]
     assert spans[0]["traceId"] != spans[1]["traceId"]
 
 
-def test_trajectory_key_requires_a_session_id() -> None:
-    with pytest.raises(ValueError, match="session_id is required"):
-        paths.design_trajectory_key("proj_1")
-    with pytest.raises(ValueError, match="session_id is required"):
-        paths.design_trajectory_key("proj_1", "graph-9", None)  # type: ignore[arg-type]
-    assert paths.design_trajectory_key("proj_1", "graph-9", "design_abc") == "design_abc"
-    assert paths.design_project_trajectory_key("default") == "default"
-    unsafe = paths.design_trajectory_key("proj_1", "graph-9", "../escape")
+def test_trajectory_key_uses_project_id_only() -> None:
+    assert paths.design_trajectory_key("proj_1") == "proj_1"
+    assert paths.design_trajectory_key("default") == "default"
+    unsafe = paths.design_trajectory_key("../escape")
     assert "/" not in unsafe and len(unsafe) == 64
-
-
-def test_sessions_keep_separate_trajectory_files(data_dir: Path) -> None:
-    for session_id, graph_id, run_id in (
-        ("design_one", "graph-1", "run-1"),
-        ("design_two", "graph-2", "run-2"),
-    ):
-        rec = begin_trajectory(
-            graph_id,
-            run_id,
-            project_id="proj_abc",
-            session_id=session_id,
-            settings=_settings(data_dir, enabled=True),
-        )
-        with rec.span(agent_id="director", action="plan"):
-            pass
-        end_trajectory(run_id)
-
-    directory = data_dir / ".trace" / "designer"
-    assert (directory / "design_one.design.jsonl").is_file()
-    assert (directory / "design_two.design.jsonl").is_file()
-    assert not (directory / "proj_abc.design.jsonl").exists()
-    one = read_canvas_trajectory(project_id="proj_abc", graph_id="graph-1", session_id="design_one")
-    two = read_canvas_trajectory(project_id="proj_abc", graph_id="graph-2", session_id="design_two")
-    assert {item["run_id"] for item in one} == {"run-1"}
-    assert {item["run_id"] for item in two} == {"run-2"}
-    span = _spans(directory / "design_one.otlp.jsonl")[0]
-    assert _attrs(span)["session.id"] == "design_one"
-
-
-def test_legacy_project_file_is_filtered_to_the_canvas(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(paths, "get_user_workspace_dir", lambda: data_dir)
-    directory = data_dir / ".trace" / "designer"
-    directory.mkdir(parents=True)
-    legacy = directory / "proj_abc.design.jsonl"
-    legacy.write_text(
-        "\n".join(
-            [
-                '{"kind":"run_started","ts_ms":1,"graph_id":"graph-1","run_id":"old-1","meta":{}}',
-                '{"kind":"run_started","ts_ms":2,"graph_id":"graph-2","run_id":"old-2","meta":{}}',
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    events = read_canvas_trajectory(
-        project_id="proj_abc",
-        graph_id="graph-1",
-        session_id="design_new",
-    )
-    assert [item["run_id"] for item in events] == ["old-1"]
 
 
 def test_disabled_toggle_writes_nothing(data_dir: Path) -> None:
     rec = begin_trajectory(
-        "graph-1",
-        "run-off",
-        project_id="proj_abc",
-        session_id="design_off",
-        settings=_settings(data_dir, enabled=False),
+        "graph-1", "run-off", project_id="proj_abc", settings=_settings(data_dir, enabled=False)
     )
     assert not rec.enabled
     assert get_trajectory("run-off") is None
@@ -196,11 +131,7 @@ def test_disabled_toggle_writes_nothing(data_dir: Path) -> None:
 
 def test_nested_calls_keep_complete_prompts_and_inputs(data_dir: Path) -> None:
     rec = begin_trajectory(
-        "graph-exact",
-        "run-exact",
-        project_id="proj_exact",
-        session_id="design_exact",
-        settings=_settings(data_dir, enabled=True),
+        "graph-exact", "run-exact", project_id="proj_exact", settings=_settings(data_dir, enabled=True)
     )
     prompt = "keep this prompt verbatim\nincluding the second line"
     tool_input = {
@@ -254,7 +185,7 @@ def test_nested_calls_keep_complete_prompts_and_inputs(data_dir: Path) -> None:
     end_trajectory("run-exact")
 
     directory = data_dir / ".trace" / "designer"
-    spans = {s["name"]: s for s in _spans(directory / "design_exact.otlp.jsonl")}
+    spans = {s["name"]: s for s in _spans(directory / "proj_exact.otlp.jsonl")}
     parent = spans["director.plan"]
     chat = spans["chat qwen-plus"]
     tool = spans["execute_tool example_tool"]
@@ -272,7 +203,7 @@ def test_nested_calls_keep_complete_prompts_and_inputs(data_dir: Path) -> None:
     assert json.loads(chat_attrs["gen_ai.output.messages"])[0]["parts"][0]["content"] == "model answer"
     assert chat_attrs["gen_ai.usage.input_tokens"] == 11
     assert chat_attrs["gen_ai.request.max_tokens"] == 128
-    assert chat_attrs["session.id"] == "design_exact"
+    assert chat_attrs["session.id"] == "proj_exact"
 
     tool_attrs = _attrs(tool)
     assert json.loads(tool_attrs["gen_ai.tool.call.arguments"]) == {
@@ -281,7 +212,7 @@ def test_nested_calls_keep_complete_prompts_and_inputs(data_dir: Path) -> None:
     }
     assert json.loads(tool_attrs["gen_ai.tool.call.result"]) == {"ok": True}
 
-    records = _read_jsonl(directory / "design_exact.design.jsonl")
+    records = _read_jsonl(directory / "proj_exact.design.jsonl")
     event = next(r for r in records if r["kind"] == "event")
     assert event["action"] == "plan_result"
     assert event["span_id"] == parent["spanId"]
@@ -296,16 +227,12 @@ def test_nested_calls_keep_complete_prompts_and_inputs(data_dir: Path) -> None:
 
 def test_span_error_sets_otlp_status(data_dir: Path) -> None:
     rec = begin_trajectory(
-        "graph-err",
-        "run-err",
-        project_id="proj_err",
-        session_id="design_err",
-        settings=_settings(data_dir, enabled=True),
+        "graph-err", "run-err", project_id="proj_err", settings=_settings(data_dir, enabled=True)
     )
     with pytest.raises(ValueError), rec.span(agent_id="n_1", action="execute", phase="node"):
         raise ValueError("boom")
     end_trajectory("run-err")
-    span = _spans(data_dir / ".trace" / "designer" / "design_err.otlp.jsonl")[0]
+    span = _spans(data_dir / ".trace" / "designer" / "proj_err.otlp.jsonl")[0]
     assert span["status"] == {"code": 2, "message": "ValueError: boom"}
     assert _attrs(span)["error.type"] == "ValueError"
 
@@ -329,11 +256,7 @@ async def test_video_backend_records_effective_tool_input(
     )
 
     rec = begin_trajectory(
-        "graph-video",
-        "run-video",
-        project_id="proj_video",
-        session_id="design_video",
-        settings=_settings(data_dir, enabled=True),
+        "graph-video", "run-video", project_id="proj_video", settings=_settings(data_dir, enabled=True)
     )
     with rec.span(
         agent_id="n_clip_1",
@@ -353,7 +276,7 @@ async def test_video_backend_records_effective_tool_input(
     assert result["video_path"] == str(output)
     span = next(
         s
-        for s in _spans(data_dir / ".trace" / "designer" / "design_video.otlp.jsonl")
+        for s in _spans(data_dir / ".trace" / "designer" / "proj_video.otlp.jsonl")
         if _attrs(s).get("gen_ai.tool.name") == "video_generation"
     )
     [request] = received

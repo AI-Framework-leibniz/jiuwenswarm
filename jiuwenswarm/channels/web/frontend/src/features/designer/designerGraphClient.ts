@@ -16,18 +16,6 @@ export type DesignerSessionSummary = {
   updated_at?: number;
 };
 
-export type DesignerProjectAsset = {
-  id: string;
-  graph_id: string;
-  session_id: string;
-  node_id?: string;
-  filename: string;
-  kind: 'image' | 'video' | 'audio';
-  uri: string;
-  mime_type?: string;
-  source: 'uploaded' | 'generated';
-};
-
 export type DesignerWorkspace = {
   project: {
     project_id: string;
@@ -92,10 +80,6 @@ export const designerWorkspaceClient = {
       },
       { timeoutMs: 20 * 60 * 1000 },
     ),
-  assets: (projectId: string) =>
-    webRequest<{ assets: DesignerProjectAsset[] }>('designer.workspace.assets', {
-      project_id: projectId,
-    }),
 };
 
 export const designerGraphClient = {
