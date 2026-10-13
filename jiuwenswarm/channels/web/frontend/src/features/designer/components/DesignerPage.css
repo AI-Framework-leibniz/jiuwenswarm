@@ -1775,8 +1775,8 @@
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
-  width: 416px;
-  max-width: min(416px, 70vw);
+  width: 500px;
+  max-width: min(500px, 70vw);
   pointer-events: all;
 }
 
@@ -2073,7 +2073,6 @@
   padding: 0 10px;
   border: none;
   border-radius: var(--radius-md);
-  background: var(--color-action-secondary);
   color: var(--color-action-secondary-text);
   font-size: 12px;
   cursor: pointer;
@@ -2081,7 +2080,7 @@
 
 .designer-media-settings__trigger:hover:not(:disabled),
 .designer-media-settings__trigger.is-open {
-  filter: brightness(0.97);
+  background: var(--color-action-secondary);
 }
 
 .designer-media-settings__trigger:disabled {
