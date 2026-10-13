@@ -223,6 +223,10 @@
       "download": "Download",
       "delete": "Delete",
       "deleteHint": "Delete this node and its connections. You can also press Delete / Backspace.",
+      "deleteConfirmTitle": "Delete node",
+      "deleteConfirmMessage": "This node contains generated content. Deleting it cannot be undone. Are you sure you want to delete it?",
+      "deleteConfirmCancel": "Cancel",
+      "deleteConfirmOk": "Confirm",
       "resize": "Resize",
       "resizeHint": "Drag the bottom-right corner to resize this node"
     },
