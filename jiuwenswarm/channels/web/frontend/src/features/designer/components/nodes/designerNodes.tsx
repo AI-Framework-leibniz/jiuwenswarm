@@ -21,7 +21,6 @@ import {
 import type { DesignerReactFlowNode } from '../../designerGraphAdapter';
 import { DesignerModalityTypeIcon } from '../../designerIcons';
 import { useDesignerRunStore } from '../../designerRunStore';
-import { useDesignerGraphEditingLocked } from '../../useDesignerGraphEditingLocked';
 import { useDesignerStore } from '../../designerStore';
 import { useDesignerUiStore } from '../../designerUiStore';
 import {
@@ -100,14 +99,12 @@ function DesignerNodeResizeHandle({ nodeId }: { nodeId: string }) {
   const locked = useDesignerStore(
     (state) => state.bootstrapInProgress || isDesignerPreviewGraph(state.domainGraph),
   );
-  const editingLocked = useDesignerGraphEditingLocked();
   const handMode = useDesignerUiStore((state) => state.canvasTool === 'hand');
   const onResizeEnd = useCallback(
     (_event: unknown, params: { width: number; height: number }) => {
-      if (editingLocked) return;
       updateNodeLayoutSize(nodeId, { width: params.width, height: params.height }, { userResized: true });
     },
-    [editingLocked, nodeId, updateNodeLayoutSize],
+    [nodeId, updateNodeLayoutSize],
   );
   if (locked || handMode) return null;
   return (
@@ -116,8 +113,7 @@ function DesignerNodeResizeHandle({ nodeId }: { nodeId: string }) {
       minWidth={DESIGNER_DOC_FIT_MIN_WIDTH}
       minHeight={DESIGNER_NODE_HEADER_HEIGHT + DESIGNER_DOC_FIT_MIN_BODY}
       autoScale={false}
-      shouldResize={() => !editingLocked}
-      className={`designer-node__resize nodrag nopan${editingLocked ? ' designer-edit-control' : ''}`}
+      className="designer-node__resize nodrag nopan"
       onResizeEnd={onResizeEnd}
     >
       <span

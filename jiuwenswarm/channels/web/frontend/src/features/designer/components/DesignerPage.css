@@ -2433,10 +2433,6 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  min-inline-size: 0;
 }
 
 .designer-node-toolbar__param--wide {
@@ -3465,27 +3461,4 @@ textarea.designer-node-toolbar__param-input {
 .designer-revision-chooser__actions {
   justify-content: flex-end;
   border-top: 1px solid var(--color-border-default, #e5e7eb);
-}
-
-/* Read-only workflow: edit affordances stay visible and show a forbidden cursor. */
-.designer-canvas-dock__btn.designer-edit-control:disabled,
-.designer-page__toolbar-icon-btn.designer-edit-control:disabled,
-.designer-node-action-bar__btn.designer-edit-control:disabled,
-.designer-edge-delete.designer-edit-control,
-.designer-edge-delete.designer-edit-control:disabled,
-.designer-node-toolbar__send.designer-edit-control:disabled,
-.designer-node-toolbar__material-remove.designer-edit-control,
-.designer-node-toolbar__material-remove.designer-edit-control:disabled,
-.btn.designer-edit-control:disabled,
-textarea.designer-node-toolbar__prompt.designer-edit-control,
-.designer-node__card .react-flow__handle.designer-node__port.designer-edit-control,
-.designer-node__card .react-flow__handle.designer-node__port.designer-edit-control .designer-node__port-icon,
-.designer-canvas-shell.is-hand .designer-node__card .react-flow__handle.designer-node__port.designer-edit-control .designer-node__port-icon,
-.designer-node__resize.designer-edit-control,
-.designer-node__resize.designer-edit-control *,
-.designer-media-settings.designer-edit-control,
-.designer-media-settings.designer-edit-control *,
-.designer-node-toolbar__comfyui.designer-edit-control,
-.designer-node-toolbar__comfyui.designer-edit-control * {
-  cursor: not-allowed;
 }

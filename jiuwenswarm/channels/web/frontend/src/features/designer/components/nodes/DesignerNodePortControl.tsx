@@ -1,5 +1,5 @@
 import { CirclePlus } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, type MouseEvent } from 'react';
+import { useCallback, useMemo, useRef, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Handle, Position } from '@xyflow/react';
 import {
@@ -10,7 +10,6 @@ import {
   type DesignerAddTemplate,
   type DesignerNodePortSide,
 } from '../../designerCanvasNodes';
-import { useDesignerGraphEditingLocked } from '../../useDesignerGraphEditingLocked';
 import { useDesignerStore } from '../../designerStore';
 import { useDesignerUiStore } from '../../designerUiStore';
 import { DesignerAddNodeMenu } from '../DesignerAddNodeMenu';
@@ -35,14 +34,7 @@ export function DesignerNodePortControl({ nodeId, side }: DesignerNodePortContro
   const nodePortMenu = useDesignerUiStore((state) => state.nodePortMenu);
   const toggleNodePortMenu = useDesignerUiStore((state) => state.toggleNodePortMenu);
   const closeDock = useDesignerUiStore((state) => state.closeDock);
-  const editingLocked = useDesignerGraphEditingLocked();
-  const menuOpen =
-    hasOptions && !editingLocked && nodePortMenu?.nodeId === nodeId && nodePortMenu.side === side;
-  useEffect(() => {
-    if (editingLocked && nodePortMenu?.nodeId === nodeId && nodePortMenu.side === side) {
-      closeDock();
-    }
-  }, [closeDock, editingLocked, nodeId, nodePortMenu, side]);
+  const menuOpen = hasOptions && nodePortMenu?.nodeId === nodeId && nodePortMenu.side === side;
   const suppressClickRef = useRef(false);
   const isSuccessor = side === 'successor';
   const testId = isSuccessor ? 'designer-node-add' : 'designer-node-add-predecessor';
@@ -89,16 +81,16 @@ export function DesignerNodePortControl({ nodeId, side }: DesignerNodePortContro
     (event: MouseEvent) => {
       event.stopPropagation();
       event.preventDefault();
-      if (suppressClickRef.current || !hasOptions || editingLocked) return;
+      if (suppressClickRef.current || !hasOptions) return;
       toggleNodePortMenu(nodeId, side);
     },
-    [editingLocked, hasOptions, nodeId, side, toggleNodePortMenu],
+    [hasOptions, nodeId, side, toggleNodePortMenu],
   );
 
   const onPick = useCallback(
     (template: DesignerAddTemplate) => {
       const source = domainGraph?.nodes.find((node) => node.id === nodeId);
-      if (editingLocked || !domainGraph || !source) return;
+      if (!domainGraph || !source) return;
       const node = buildManualDesignerNode({
         template,
         existing: domainGraph.nodes,
@@ -107,7 +99,7 @@ export function DesignerNodePortControl({ nodeId, side }: DesignerNodePortContro
       addNode(node);
       closeDock();
     },
-    [addNode, closeDock, domainGraph, editingLocked, nodeId, placeNear],
+    [addNode, closeDock, domainGraph, nodeId, placeNear],
   );
 
   return (
@@ -115,12 +107,12 @@ export function DesignerNodePortControl({ nodeId, side }: DesignerNodePortContro
       <Handle
         type={isSuccessor ? 'source' : 'target'}
         position={isSuccessor ? Position.Right : Position.Left}
-        className={`designer-node__port designer-node__port--${side}${menuOpen ? ' is-open' : ''}${editingLocked && hasOptions ? ' designer-edit-control' : ''}`}
+        className={`designer-node__port designer-node__port--${side}${menuOpen ? ' is-open' : ''}`}
         aria-label={hasOptions ? ariaLabel : undefined}
         title={hasOptions ? ariaLabel : undefined}
         aria-expanded={hasOptions ? menuOpen : undefined}
         // Kept mounted (just inert) so existing edges still dock to this side.
-        isConnectable={hasOptions && !editingLocked}
+        isConnectable={hasOptions}
         data-testid={testId}
         data-variant={hasOptions ? 'menu' : 'empty'}
         onClick={onClick}

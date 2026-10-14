@@ -25,7 +25,6 @@ import { useTranslation } from 'react-i18next';
 import type { DesignerExecutionGraph, DesignerGraphNode } from '../executionGraphTypes';
 import { resolvedNodeCanvasSize, toReactFlowGraph, type DesignerReactFlowEdge, type DesignerReactFlowNode } from '../designerGraphAdapter';
 import { isDesignerPreviewGraph } from '../designerBootstrapGraph';
-import { useDesignerGraphEditingLocked } from '../useDesignerGraphEditingLocked';
 import { useDesignerStore } from '../designerStore';
 import { designerEdgeTypes } from './edges/DesignerEdge';
 import { designerNodeTypes } from './nodes/designerNodes';
@@ -172,13 +171,9 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
   const selectedNodeId = useDesignerStore((state) => state.selectedNodeId);
   const bootstrapInProgress = useDesignerStore((state) => state.bootstrapInProgress);
   const canvasLocked = bootstrapInProgress || isDesignerPreviewGraph(graph);
-  const editingLocked = useDesignerGraphEditingLocked();
   const canvasTool = useDesignerUiStore((state) => state.canvasTool);
   const setCanvasTool = useDesignerUiStore((state) => state.setCanvasTool);
   const closeDock = useDesignerUiStore((state) => state.closeDock);
-  useEffect(() => {
-    if (editingLocked) closeDock();
-  }, [closeDock, editingLocked]);
   const requestDeleteNodes = useDesignerUiStore((state) => state.requestDeleteNodes);
   const minimapVisible = useDesignerUiStore((state) => state.minimapVisible);
   const layoutRequestId = useDesignerUiStore((state) => state.layoutRequestId);
@@ -284,14 +279,13 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
   useEffect(() => {
     if (!layoutRequestId || layoutRequestId === lastLayoutRequestRef.current) return;
     lastLayoutRequestRef.current = layoutRequestId;
-    if (editingLocked) return;
     autoLayout();
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         void fitView({ padding: DESIGNER_FIT_VIEW_PADDING, duration: 220 });
       });
     });
-  }, [autoLayout, editingLocked, fitView, layoutRequestId]);
+  }, [autoLayout, fitView, layoutRequestId]);
 
   const syncZoomPercent = useCallback(
     (zoom: number) => {
@@ -344,7 +338,7 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
 
   const onConnect: OnConnect = useCallback(
     (connection: Connection) => {
-      if (canvasLocked || editingLocked) return;
+      if (canvasLocked) return;
       if (!connection.source || !connection.target) return;
       const source = connection.source;
       const target = connection.target;
@@ -364,7 +358,7 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
       );
       addDomainEdge({ id, source, target });
     },
-    [addDomainEdge, canvasLocked, editingLocked, edges, setEdges],
+    [addDomainEdge, canvasLocked, edges, setEdges],
   );
 
   const onEdgesChange: OnEdgesChange = useCallback(
@@ -390,12 +384,11 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
 
   const onBeforeDelete = useCallback(
     async ({ nodes: deleting }: { nodes: Node[] }) => {
-      if (deleting.length === 0) return true;
-      if (canvasLocked || editingLocked) return false;
+      if (canvasLocked || deleting.length === 0) return true;
       requestDeleteNodes(deleting.map((node) => node.id));
       return false;
     },
-    [canvasLocked, editingLocked, requestDeleteNodes],
+    [canvasLocked, requestDeleteNodes],
   );
 
   const onDragOver = useCallback((event: DragEvent) => {
@@ -406,7 +399,7 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
 
   const onDrop = useCallback(
     (event: DragEvent) => {
-      if (canvasLocked || editingLocked) return;
+      if (canvasLocked) return;
       const assetId = event.dataTransfer.getData(DESIGNER_ASSET_DRAG_MIME).trim();
       if (!assetId) return;
       event.preventDefault();
@@ -441,11 +434,11 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
         }
       })();
     },
-    [addDomainNode, canvasLocked, editingLocked, getAsset, screenToFlowPosition],
+    [addDomainNode, canvasLocked, getAsset, screenToFlowPosition],
   );
 
   return (
-    <div className={`designer-canvas-shell${handMode ? ' is-hand' : ''}${edgesVisible ? '' : ' is-edges-hidden'}${editingLocked ? ' is-editing-locked' : ''}`}>
+    <div className={`designer-canvas-shell${handMode ? ' is-hand' : ''}${edgesVisible ? '' : ' is-edges-hidden'}`}>
       <DesignerLeaderStrip />
       <ReactFlow
         className="designer-page__canvas"
@@ -470,12 +463,12 @@ function DesignerCanvasInner({ graph }: DesignerCanvasProps) {
         zoomOnScroll={false}
         zoomActivationKeyCode={['Control', 'Meta']}
         selectionOnDrag={!handMode && !canvasLocked}
-        nodesDraggable={!handMode && !canvasLocked && !editingLocked}
+        nodesDraggable={!handMode && !canvasLocked}
         // Port handles stay connectable in select and hand tools; only lock blocks them.
-        nodesConnectable={!canvasLocked && !editingLocked}
+        nodesConnectable={!canvasLocked}
         connectionDragThreshold={8}
         connectOnClick={false}
-        deleteKeyCode={canvasLocked || editingLocked ? null : ['Backspace', 'Delete']}
+        deleteKeyCode={canvasLocked ? null : ['Backspace', 'Delete']}
         elementsSelectable={!canvasLocked}
         fitView
         fitViewOptions={{ padding: DESIGNER_FIT_VIEW_PADDING }}
