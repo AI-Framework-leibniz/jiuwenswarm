@@ -7,6 +7,7 @@ import {
   collectPendingRevisions,
 } from '../designerMaterials';
 import { useDesignerChatStore } from '../designerChatStore';
+import { seedDesignerChatHistory } from '../designerEntry';
 import { bindDesignerRuntime, useDesignerRunStore } from '../designerRunStore';
 import { isDesignerPreviewGraph } from '../designerBootstrapGraph';
 import { useDesignerStore } from '../designerStore';
@@ -141,6 +142,7 @@ export function DesignerPage({
           workspace.graph.graph_id,
           workspace.messages,
         );
+        if (opened) seedDesignerChatHistory(opened, workspace.messages);
         if (opened && opened !== sessionId) {
           onOpenSessionRef.current?.(effectiveProjectId, opened, { replace: true });
         }

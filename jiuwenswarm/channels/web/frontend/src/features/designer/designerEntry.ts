@@ -1,205 +1,92 @@
 import { useWorkspaceStore } from '../../stores';
 import { useChatStore } from '../../stores/chatStore';
 import { resolveChatModelSelection, useSessionStore } from '../../stores/sessionStore';
+import { webClient } from '../../services/webClient';
 import { useDesignerStore } from './designerStore';
-import { useDesignerChatStore } from './designerChatStore';
-import { designerGraphClient, designerWorkspaceClient } from './designerGraphClient';
-import { DESIGNER_MATERIAL_SAVED_EVENT } from './designerMaterials';
-import { useDesignerRunStore } from './designerRunStore';
+import { useDesignerChatStore, type DesignerChatMessage } from './designerChatStore';
+import { designerWorkspaceClient } from './designerGraphClient';
 import {
   mediaItemsToBootstrapReferences,
   type DesignerBootstrapReference,
-  type DesignerStoredReference,
 } from './designerReferences';
-import type { MediaItem } from '../../types';
+import type { MediaItem, Message } from '../../types';
 
-export const DESIGNER_BOOTSTRAP_THINKING_MS = 0;
+export const DESIGNER_TEAM_MODE = 'team.design' as const;
 
-/** True when the message is a new film/design brief (not a small canvas edit). */
-export function isNewDesignerBrief(text: string): boolean {
-  const t = String(text || '').trim();
-  if (t.length < 48) return false;
-  return (
-    /\b(video|film|story|clip|shot|scene|valentine|create|make|second|vertical|keyframe|cartoon|sequence|storyboard)\b/i.test(
-      t,
-    ) || /视频|分镜|短片|情人节|片段|镜头|创作|帮我/.test(t)
-  );
-}
-
-export type LaunchDesignerFromTaskParams = {
-  prompt: string;
-  projectId?: string;
-  projectDir?: string;
-  workMode?: 'work' | 'code';
-  scenario?: string;
-  references?: DesignerBootstrapReference[];
-  /** Navigate to Design nav before/while bootstrap runs. */
-  onNavigateToDesign: () => void;
-  thinkingMs?: number;
-  thinkingText?: string;
-  doneText?: string;
-  errorText?: string;
-};
-
-/**
- * Design canvas Assistant send: already on Design page, no nav jump; bootstrap onto canvas.
- * Shares the same ``designer.graph.bootstrap`` path as the Tasks entry.
- */
-export async function bootstrapDesignerFromChat(params: {
-  prompt: string;
-  projectId?: string;
-  projectDir?: string;
-  workMode?: 'work' | 'code';
-  scenario?: string;
-  references?: DesignerBootstrapReference[];
-  thinkingText?: string;
-  doneText?: string;
-  errorText?: string;
-}): Promise<void> {
-  await launchDesignerFromTask({
-    ...params,
-    onNavigateToDesign: () => undefined,
-    thinkingMs: 400,
-  });
+function selectedModelName(): string | undefined {
+  const activeSessionId = useChatStore.getState().activeSessionId;
+  const sessionState = useSessionStore.getState();
+  return resolveChatModelSelection(
+    sessionState.chatAvailableModels,
+    sessionState.runtimes[activeSessionId ?? '']?.selectedModelName ?? null,
+    sessionState.defaultModelName,
+  )?.model_name;
 }
 
 /**
- * Tasks page Design arm → Design tab: compose agentic graph via bootstrap RPC.
+ * Bind the design session's chat runtime. The leader streams over the team
+ * chain, so the shared MessageList and the websocket delta handler must treat
+ * the session as a team session.
  */
-export async function launchDesignerFromTask(params: LaunchDesignerFromTaskParams): Promise<void> {
-  const prompt = params.prompt.trim();
-  const references = params.references || [];
-  if (!prompt && references.length === 0) return;
+export function bindDesignerChatSession(sessionId: string): void {
+  useChatStore.getState().ensureRuntime(sessionId);
+  if (useSessionStore.getState().getRuntime(sessionId)?.mode !== 'team') {
+    useSessionStore.getState().setMode(sessionId, 'team');
+  }
+  useChatStore.getState().setActiveSessionId(sessionId);
+}
 
-  const thinkingText = params.thinkingText ?? 'Decomposing your request into an agentic design graph…';
-  const doneText = params.doneText ?? 'Director composed the workflow. Tweak nodes or hit Play when ready.';
-  const errorText = params.errorText ?? 'Failed to compose the design workflow. Please retry.';
-
-  const designerStore = useDesignerStore.getState();
-  const chatStore = useDesignerChatStore.getState();
-
-  chatStore.reset();
-  designerStore.beginBootstrapEntry(prompt);
-  useDesignerRunStore.getState().resetForGraph(useDesignerStore.getState().domainGraph);
-  const chatReferences: DesignerStoredReference[] = references.map((item, index) => ({
-    kind: item.kind,
-    filename: item.filename,
-    mime_type: item.mime_type,
-    path: item.path,
-    uri: item.uri || item.path,
-    role: item.role || 'reference',
-    order: index + 1,
-  }));
-  chatStore.appendMessage({
-    role: 'user',
-    content: prompt,
-    kind: 'user',
-    ...(chatReferences.length > 0 ? { references: chatReferences } : {}),
-  });
-  params.onNavigateToDesign();
-
-  chatStore.setBootstrapPhase('thinking');
-  const thinkingId = chatStore.appendMessage({
-    role: 'assistant',
-    content: thinkingText,
-    kind: 'thinking',
-  });
-  useDesignerRunStore.getState().applyLeaderActivity({
-    kind: 'thinking',
-    text: thinkingText,
-    at: Date.now(),
-  });
-  chatStore.setBootstrapPhase('bootstrapping');
-
-  try {
-    const result = await designerGraphClient.bootstrap({
-      prompt,
-      projectId: params.projectId,
-      projectDir: params.projectDir,
-      workMode: params.workMode,
-      scenario: params.scenario,
-      references,
-    });
-    const graph = result?.graph;
-    if (!graph?.graph_id || !Array.isArray(graph.nodes)) {
-      throw new Error('bootstrap response missing graph');
-    }
-    useDesignerStore.getState().applyGraph(graph);
-    useDesignerRunStore.getState().applyLeaderActivity(null);
-    useDesignerChatStore.getState().removeMessage(thinkingId);
-    useDesignerChatStore.getState().bindGraph(graph.graph_id);
-    const scenario = String(graph.metadata?.scenario || 'auto');
-    const nodeCount = graph.nodes.length;
-    useDesignerChatStore.getState().appendMessage({
-      role: 'assistant',
-      content: `${doneText}\n\nScenario: ${scenario} · Nodes: ${nodeCount}`,
-      kind: 'bootstrap_done',
-    });
-    useDesignerChatStore.getState().setBootstrapPhase('done');
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    useDesignerStore.getState().failBootstrapEntry(message);
-    useDesignerChatStore.getState().removeMessage(thinkingId);
-    useDesignerChatStore.getState().appendMessage({
-      role: 'assistant',
-      content: `${errorText}${message ? ` (${message})` : ''}`,
-      kind: 'bootstrap_error',
-    });
-    useDesignerChatStore.getState().setBootstrapPhase('error');
+/** Seed persisted leader turns into an idle, empty chat runtime. */
+export function seedDesignerChatHistory(sessionId: string, messages: DesignerChatMessage[]): void {
+  bindDesignerChatSession(sessionId);
+  const runtime = useChatStore.getState().getRuntime(sessionId);
+  if (!runtime || runtime.isProcessing || runtime.messages.length > 0) return;
+  const history: Message[] = messages
+    .filter((item) => item.kind !== 'thinking' && item.content)
+    .map((item) => ({
+      id: item.id,
+      role: item.role === 'user' ? 'user' : 'assistant',
+      content: item.content,
+      timestamp: new Date(item.createdAt || Date.now()).toISOString(),
+    }));
+  if (history.length > 0) {
+    useChatStore.getState().replaceHistoryMessages(sessionId, history);
   }
 }
 
-export async function chatDesignerGraph(params: {
-  graphId: string;
+/** One leader round: echo the user bubble, then ``chat.send(mode='team.design')``. */
+export async function sendDesignerLeaderMessage(params: {
+  sessionId: string;
   prompt: string;
-  selectedNodeId?: string;
-  thinkingText?: string;
   errorText?: string;
 }): Promise<void> {
-  const prompt = params.prompt.trim();
-  if (!prompt) return;
-  const chatStore = useDesignerChatStore.getState();
-  chatStore.appendMessage({ role: 'user', content: prompt, kind: 'user' });
-  const thinkingId = chatStore.appendMessage({
-    role: 'assistant',
-    content: params.thinkingText || 'Updating the workflow…',
-    kind: 'thinking',
+  const { sessionId, prompt } = params;
+  const chat = useChatStore.getState();
+  bindDesignerChatSession(sessionId);
+  chat.addMessage(sessionId, {
+    id: `designer-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    role: 'user',
+    content: prompt,
+    timestamp: new Date().toISOString(),
   });
-  useDesignerRunStore.getState().applyLeaderActivity({
-    kind: 'thinking',
-    text: params.thinkingText || 'Updating the workflow…',
-    at: Date.now(),
-  });
+  chat.setProcessing(sessionId, true);
+  chat.setThinking(sessionId, true);
   try {
     await useDesignerStore.getState().flushSave();
-    const result = await designerGraphClient.chat({
-      graphId: params.graphId,
-      message: prompt,
-      selectedNodeId: params.selectedNodeId,
-    });
-    chatStore.removeMessage(thinkingId);
-    useDesignerRunStore.getState().applyLeaderActivity(null);
-    if (result.graph?.graph_id) {
-      useDesignerStore.getState().applyGraph(result.graph);
-    }
-    if (result.run) {
-      useDesignerRunStore.getState().applyRun(result.run);
-    }
-    for (const uri of new Set(result.updated_text_uris ?? [])) {
-      window.dispatchEvent(new CustomEvent(DESIGNER_MATERIAL_SAVED_EVENT, { detail: { uri } }));
-    }
-    chatStore.appendMessage({
-      role: 'assistant',
-      content: String(result.summary || 'Updated the workflow.').trim(),
-      kind: 'chat_ack',
+    await webClient.request('chat.send', {
+      session_id: sessionId,
+      query: prompt,
+      mode: DESIGNER_TEAM_MODE,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    chatStore.removeMessage(thinkingId);
-    chatStore.appendMessage({
+    chat.setProcessing(sessionId, false);
+    chat.setThinking(sessionId, false);
+    chat.addMessage(sessionId, {
+      id: `designer-error-${Date.now()}`,
       role: 'assistant',
-      content: `${params.errorText || 'Could not update the workflow.'}${message ? ` (${message})` : ''}`,
-      kind: 'chat_error',
+      content: `${params.errorText || 'Could not reach the design leader.'}${message ? ` (${message})` : ''}`,
+      timestamp: new Date().toISOString(),
     });
   }
 }
@@ -237,26 +124,20 @@ export async function submitDesignComposer(params: {
   const created = await designerWorkspaceClient.createSession({ projectId });
   const sessionId = String(created.session?.session_id || '');
   if (!sessionId) throw new Error('missing session');
-  const converted = checked;
-  const activeSessionId = useChatStore.getState().activeSessionId;
-  const sessionState = useSessionStore.getState();
-  const selectedModel = resolveChatModelSelection(
-    sessionState.chatAvailableModels,
-    sessionState.runtimes[activeSessionId ?? '']?.selectedModelName ?? null,
-    sessionState.defaultModelName,
-  );
+  const leaderPrompt = prompt || '根据参考素材创作';
   const workspace = await designerWorkspaceClient.composeSession({
     projectId,
     sessionId,
-    prompt: prompt || '根据参考素材创作',
-    modelName: selectedModel?.model_name,
-    references: converted.refs,
+    prompt: leaderPrompt,
+    modelName: selectedModelName(),
+    references: checked.refs,
   });
   useDesignerStore.getState().applyGraph(workspace.graph);
   useDesignerChatStore.getState().replaceMessages(
     workspace.graph.graph_id,
     workspace.messages,
   );
+  void sendDesignerLeaderMessage({ sessionId, prompt: leaderPrompt });
   return { projectId, sessionId };
 }
 
@@ -266,68 +147,35 @@ export async function composeDesignerSession(params: {
   sessionId: string;
   prompt: string;
   references?: DesignerBootstrapReference[];
-  thinkingText?: string;
   errorText?: string;
 }): Promise<void> {
   const prompt = params.prompt.trim();
   const references = params.references || [];
   if (!prompt && references.length === 0) return;
-  const chatStore = useDesignerChatStore.getState();
-  const chatReferences: DesignerStoredReference[] = references.map((item, index) => ({
-    kind: item.kind,
-    filename: item.filename,
-    mime_type: item.mime_type,
-    path: item.path,
-    uri: item.uri || item.path,
-    role: item.role || 'reference',
-    order: index + 1,
-  }));
-  chatStore.appendMessage({
-    role: 'user',
-    content: prompt,
-    kind: 'user',
-    ...(chatReferences.length > 0 ? { references: chatReferences } : {}),
-  });
-  const thinkingText = params.thinkingText || 'Decomposing your request into an agentic design graph…';
-  const thinkingId = chatStore.appendMessage({
-    role: 'assistant',
-    content: thinkingText,
-    kind: 'thinking',
-  });
-  useDesignerRunStore.getState().applyLeaderActivity({
-    kind: 'thinking',
-    text: thinkingText,
-    at: Date.now(),
-  });
+  const leaderPrompt = prompt || '根据参考素材创作';
   try {
-    const activeSessionId = useChatStore.getState().activeSessionId;
-    const sessionState = useSessionStore.getState();
-    const selectedModel = resolveChatModelSelection(
-      sessionState.chatAvailableModels,
-      sessionState.runtimes[activeSessionId ?? '']?.selectedModelName ?? null,
-      sessionState.defaultModelName,
-    );
     const workspace = await designerWorkspaceClient.composeSession({
       projectId: params.projectId,
       sessionId: params.sessionId,
-      prompt,
-      modelName: selectedModel?.model_name,
+      prompt: leaderPrompt,
+      modelName: selectedModelName(),
       references,
     });
     useDesignerStore.getState().applyGraph(workspace.graph);
-    useDesignerRunStore.getState().applyLeaderActivity(null);
-    useDesignerChatStore.getState().replaceMessages(
-      workspace.graph.graph_id,
-      workspace.messages,
-    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    useDesignerRunStore.getState().applyLeaderActivity(null);
-    chatStore.removeMessage(thinkingId);
-    chatStore.appendMessage({
+    bindDesignerChatSession(params.sessionId);
+    useChatStore.getState().addMessage(params.sessionId, {
+      id: `designer-error-${Date.now()}`,
       role: 'assistant',
       content: `${params.errorText || 'Failed to compose the design workflow.'}${message ? ` (${message})` : ''}`,
-      kind: 'bootstrap_error',
+      timestamp: new Date().toISOString(),
     });
+    return;
   }
+  await sendDesignerLeaderMessage({
+    sessionId: params.sessionId,
+    prompt: leaderPrompt,
+    errorText: params.errorText,
+  });
 }
