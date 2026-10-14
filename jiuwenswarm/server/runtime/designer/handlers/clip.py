@@ -760,6 +760,19 @@ def build_clip_prompt(
         clause = continuity_prompt_clause(lock)
         if clause:
             parts.append(clause.strip())
+    # Continuity contract: weave this row's opening/hold lines into the scaffold so
+    # the leaf starts from them; post-rewrite enforcement is only redundancy.
+    try:
+        from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
+            hold_lines_for_cfg,
+        )
+
+        for hold_line in hold_lines_for_cfg(cfg)[:4]:
+            text_line = hold_line if hold_line.endswith(".") else hold_line + "."
+            if text_line and text_line not in parts:
+                parts.append(text_line)
+    except Exception:  # noqa: BLE001
+        pass
     # THIS shot only — never dump the full storyboard (homogenizes / mixes scenes).
     if shot is not None:
         parts.append(_format_shot_block(shot, clip_index))

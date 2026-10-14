@@ -1404,14 +1404,18 @@ def director_approve_video_prompt(
         reasons = [tag, *reasons]
     else:
         reasons = ["director_checked", *reasons]
-    # Continuity contract: opening/hold must survive rewrite (all modes).
-    try:
-        from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
-            enforce_prompt_continuity,
-        )
+    # Continuity contract: opening/hold must survive agent/director rewrite.
+    # User-origin prompts are authoritative — never append holds over a user edit.
+    if honor_user:
+        reasons.append("holds_skipped_user_origin")
+    else:
+        try:
+            from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
+                enforce_prompt_continuity,
+            )
 
-        approved, hold_notes = enforce_prompt_continuity(approved, cfg)
-        reasons.extend(hold_notes)
-    except Exception:  # noqa: BLE001
-        pass
+            approved, hold_notes = enforce_prompt_continuity(approved, cfg)
+            reasons.extend(hold_notes)
+        except Exception:  # noqa: BLE001
+            pass
     return approved.strip(), reasons

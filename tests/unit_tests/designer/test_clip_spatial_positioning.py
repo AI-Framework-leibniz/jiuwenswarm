@@ -358,3 +358,34 @@ def test_brief_instruction_spatial_not_seat_authority() -> None:
     assert "spatial" in text
     assert "copy locks, do not drop them" not in text
     assert "seating plans" not in text
+
+
+def test_restamp_row_overwrites_and_silent_row_keeps_cfg_edits() -> None:
+    """Re-stamp policy: row-provided fields overwrite; silent row preserves cfg edits."""
+    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+        stamp_shot_states_on_clip_cfg,
+    )
+
+    row = {
+        "clip_index": 1,
+        "setting_id": "set_1",
+        "action": "Host stands near the window.",
+        "on_screen": ["char_1"],
+        "start_state": {
+            "seats": {"char_1": {"place": "near window", "posture": "standing"}}
+        },
+    }
+    cfg = stamp_shot_states_on_clip_cfg({}, shot=row)
+    cfg["camera"] = "user camera sweep"
+    row2 = {
+        **row,
+        "start_state": {
+            "seats": {"char_1": {"place": "at the table", "posture": "seated"}}
+        },
+    }
+    out = stamp_shot_states_on_clip_cfg(cfg, shot=row2)
+    anchor = (out.get("spatial_anchors") or {}).get("char_1") or {}
+    assert "table" in str(anchor.get("place") or "").lower()
+    assert str(anchor.get("posture") or "") == "seated"
+    # The row is silent on camera — the cfg-only edit survives the re-stamp.
+    assert out["camera"] == "user camera sweep"

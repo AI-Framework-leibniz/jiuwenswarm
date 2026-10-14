@@ -305,3 +305,92 @@ def test_ensure_chains_contracts() -> None:
 
     fixed, _ = enforce_prompt_continuity(prompt, cfg2)
     assert "gift" in fixed.lower() or "box" in fixed.lower() or "mantel" in fixed.lower()
+
+
+def test_enforce_prompt_continuity_never_truncates() -> None:
+    """Backend limits are advisory — enforcement must not cut text (was [:4000])."""
+    from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
+        enforce_prompt_continuity,
+    )
+
+    long_prompt = "The camera creeps slowly across the room. " * 120  # > 4000 chars
+    assert len(long_prompt) > 4000
+    out, _ = enforce_prompt_continuity(long_prompt, {})
+    assert len(out) > 4000
+    assert out == long_prompt.strip()
+
+
+def test_user_origin_prompt_is_not_appended_with_holds() -> None:
+    """Toolbar/user edits win over hold re-injection (no 'Continuity holds' block)."""
+    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+        ensure_clip_start_end_states,
+        stamp_shot_states_on_clip_cfg,
+    )
+    from jiuwenswarm.server.runtime.designer.pipeline.video_prompt_practice import (
+        director_approve_video_prompt,
+    )
+
+    shot = {
+        "clip_index": 1,
+        "setting_id": "set_1",
+        "action": "Host places the gift box on the mantel.",
+        "on_screen": ["char_1"],
+        "end_state": {"props": {"gift box": "the mantel"}},
+    }
+    ensured = ensure_clip_start_end_states([shot])[0]
+    cfg = stamp_shot_states_on_clip_cfg({}, shot=ensured)
+    assert cfg.get("clip_contract")
+
+    user_text = "Host walks out of frame; the mantel is left empty behind him."
+    cfg["generate"] = {"prompt": user_text, "prompt_origin": "user"}
+    cfg["user_edit_prompt"] = user_text
+    approved, reasons = director_approve_video_prompt(
+        user_text,
+        cfg=cfg,
+        graph={},
+        clip_index=1,
+        action="",
+        camera="",
+    )
+    assert "Continuity holds" not in approved
+    assert "holds_skipped_user_origin" in reasons
+
+
+def test_later_authored_end_position_updates_scene_hold() -> None:
+    """Latest authored end position wins in the setting store (not first-seen)."""
+    from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
+        apply_continuity_contracts,
+    )
+
+    shots = apply_continuity_contracts(
+        [
+            {
+                "clip_index": 1,
+                "setting_id": "set_1",
+                "action": "Host stands near the window.",
+                "on_screen": ["char_1"],
+                "end_state": {
+                    "seats": {"char_1": {"place": "near window", "posture": "standing"}}
+                },
+            },
+            {
+                "clip_index": 2,
+                "setting_id": "set_1",
+                "action": "Host sits at the table.",
+                "on_screen": ["char_1"],
+                "end_state": {
+                    "seats": {"char_1": {"place": "at the table", "posture": "seated"}}
+                },
+            },
+            {
+                "clip_index": 3,
+                "setting_id": "set_1",
+                "action": "Quiet beat in the same room.",
+                "on_screen": ["char_1"],
+            },
+        ]
+    )
+    opening3 = (shots[2].get("clip_contract") or {}).get("opening") or {}
+    anchor = opening3.get("char_1") or {}
+    assert "table" in str(anchor.get("place") or "").lower()
+    assert str(anchor.get("posture") or "").lower() == "seated"

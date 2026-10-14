@@ -186,7 +186,12 @@ def _stamp_spatial_anchors(target: dict[str, Any], positions: dict[str, dict[str
         return
     payload = dict(positions)
     target["spatial_anchors"] = payload
-    target["seat_anchors"] = payload  # legacy consumers / prompt practice
+    # Legacy wire alias — read-compat only for upstream consumers that still read
+    # seat_anchors (video_prompt_practice, wan_prompt_hygiene, shot_consistency_contract,
+    # clip_story_state, production_specs, node_agent, clip_staging_lock).
+    # Canonical name is spatial_anchors; do not add new readers; drop this write
+    # once those readers migrate.
+    target["seat_anchors"] = payload
 
 
 def normalize_shot_state(raw: Any) -> dict[str, Any]:
@@ -622,6 +627,10 @@ def stamp_shot_states_on_clip_cfg(
     Used by text-led (smart_graph) and reference-led builders so every mode
     gets hard spatial_anchors (place/posture for any stance), positioning,
     occupancy, speech, and cast_actions.
+
+    Re-stamp policy: fields the row provides overwrite the cfg on stamp (row is
+    source of truth); when the row is silent, cfg-only values — including later
+    user/chat edits — are preserved.
     """
     out = dict(cfg or {})
     shot = shot if isinstance(shot, dict) else {}

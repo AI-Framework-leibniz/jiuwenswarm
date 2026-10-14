@@ -2801,18 +2801,26 @@ class Director:
                 prompt = covered
                 notes.extend(cov_notes or ["ensure_story_lock_coverage"])
                 changed = True
-            try:
-                from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
-                    enforce_prompt_continuity,
-                )
+            from jiuwenswarm.server.runtime.designer.pipeline.video_prompt_practice import (
+                resolve_user_origin_prompt,
+            )
 
-                held, hold_notes = enforce_prompt_continuity(prompt, cfg)
-                if held != str(prompt or "").strip():
-                    prompt = held
-                    notes.extend(hold_notes or ["enforce_prompt_continuity"])
-                    changed = True
-            except Exception:  # noqa: BLE001
-                pass
+            if resolve_user_origin_prompt(cfg, prompt):
+                # Toolbar/user edits are authoritative — never append holds over them.
+                notes.append("holds_skipped_user_origin")
+            else:
+                try:
+                    from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
+                        enforce_prompt_continuity,
+                    )
+
+                    held, hold_notes = enforce_prompt_continuity(prompt, cfg)
+                    if held != str(prompt or "").strip():
+                        prompt = held
+                        notes.extend(hold_notes or ["enforce_prompt_continuity"])
+                        changed = True
+                except Exception:  # noqa: BLE001
+                    pass
 
         # Always stamp Director lock gate; patched=True when prompt text changed.
         # Images + clips: positive practice prompts only (no LOCK essays on tool body).

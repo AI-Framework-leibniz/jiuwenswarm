@@ -11,6 +11,11 @@ All layers come from Director-authored structured shot fields: ``start_state`` /
 ``end_state`` / ``continuity_lock`` (scene locks and clip locks live in
 metadata). This module merges those fields, chains setting-scoped carries from
 metadata, and verifies the final prompt — it never parses scenario prose.
+
+Authority rules: authored row state ALWAYS wins; the carried setting store only
+fills what a row omits (opening merges are fill-missing), while later authored
+end states UPDATE the store (latest position/prop state wins). Enforcement
+appends missing holds only — it never truncates or rewrites agent/user text.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from typing import Any
 
 from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
     _short,
+    detailed_spatial_anchor,
     merge_spatial_maps,
     normalize_shot_state,
     spatial_positions_from_shot,
@@ -144,7 +150,24 @@ def update_scene_hold_from_shot(
     if not seats:
         seats = spatial_positions_from_shot(shot)
     if seats:
-        hold["cast"] = merge_spatial_maps(hold.get("cast"), seats)
+        # Latest authored end state wins in the setting store (unlike opening
+        # merges, which only fill what the authored row omits).
+        merged_cast: dict[str, dict[str, str]] = {
+            str(cid): dict(anchor)
+            for cid, anchor in (hold.get("cast") or {}).items()
+            if isinstance(anchor, dict)
+        }
+        for cid, anchor in list(seats.items())[:12]:
+            detail = detailed_spatial_anchor(anchor)
+            if not detail:
+                continue
+            cur = dict(merged_cast.get(str(cid)) or {})
+            for key, val in detail.items():
+                if val:
+                    cur[key] = val
+            merged_cast[str(cid)] = cur
+        if merged_cast:
+            hold["cast"] = merged_cast
     # Positive hold phrases from end pose when not just restating this action.
     pose = _short(str(end.get("pose") or ""), limit=160)
     if pose and pose.lower() not in action.lower():
@@ -384,7 +407,8 @@ def enforce_prompt_continuity(
         block = "Continuity holds: " + " ".join(missing)
         text = (text.rstrip() + " " + block).strip()
         notes.append(f"reinjected_holds:{len(missing)}")
-    return text[:4000], notes
+    # Backend limits are advisory (media_prompt_limits) — never truncate here.
+    return text, notes
 
 
 def stamp_contract_on_clip_cfg(
