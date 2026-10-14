@@ -134,9 +134,11 @@ def test_same_scene_gate_in_handoff_and_graph_prompt_keeps_locks() -> None:
         this_clip_index=2,
         this_action="family sits together",
     )
-    assert "SAME-SCENE CONSISTENCY GATE" in clause
-    assert "AGREES" in clause.upper() or "agree" in clause.lower()
-    assert "repeat" in clause.lower()
+    assert (
+        "STORYBOARD ROW GATE" in clause
+        or "SAME-SCENE CONSISTENCY GATE" in clause
+    )
+    assert "spatial" in clause.lower() or "posture" in clause.lower() or "sit" in clause.lower()
     assert agent_replays_finished_events(
         "the child walked away from the table again",
         already_done=["shot 1: Child already left — do not show walking away"],

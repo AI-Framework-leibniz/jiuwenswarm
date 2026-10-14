@@ -175,10 +175,9 @@ def test_continue_line_does_not_paste_prior_wan() -> None:
         "style_lock": {"look": "photoreal cinematic"},
     }
     cue = _continue_line(cfg)
-    assert cue
-    assert "listening carefully" not in cue.lower()
-    assert "continue after:" not in cue.lower()
+    assert cue == ""
     text = compose_practice_prompt(cfg=cfg, graph={}, action=cfg["clip_action"])
     assert "listening carefully" not in text.lower()
-    assert "same setting" in text.lower() or "same placement" in text.lower()
+    assert "continues from the previous" not in text.lower()
+    assert "must not repeat" not in text.lower()
     assert "STYLE LOCK" not in text

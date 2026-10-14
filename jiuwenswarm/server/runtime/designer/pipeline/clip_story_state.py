@@ -319,28 +319,47 @@ def compact_wan_story_clause(
     return positive_continuity_clause(cfg, characters=characters)
 
 
+_PREVIOUS_CLIP_KEYS = (
+    "previous_clip_action",
+    "previous_clip_prompt",
+    "previous_clip_wan_prompt",
+    "previous_clip_speech",
+    "previous_clip_node_id",
+    "previous_clip_clip_index",
+    "previous_clip_last_frame",
+    "previous_clip_finished_events",
+    "previous_clip_handoff_ready",
+    "continuity_clip_node_id",
+    "prior_clip_node_id",
+    "scene_last_frame_chain",
+    "use_prior_last_frame",
+    "prior_last_frame_history_only",
+    "prior_storyboard_shots",
+    # Reference-led / practice carry — prior beat content, not this-row locks.
+    "previous_action",
+    "previous_end_state",
+    "already_done",
+    "beat_done",
+)
+
+
+def strip_previous_clip_fields(cfg: dict[str, Any] | None) -> dict[str, Any]:
+    """Drop anything copied from an earlier clip. This row keeps its storyboard locks."""
+    out = dict(cfg or {})
+    for key in _PREVIOUS_CLIP_KEYS:
+        out.pop(key, None)
+    identity = out.get("identity_refs")
+    if isinstance(identity, dict) and identity.get("prior_clip_node_id"):
+        identity = dict(identity)
+        identity.pop("prior_clip_node_id", None)
+        out["identity_refs"] = identity
+    return out
+
+
 def agent_prior_story_block(cfg: dict[str, Any] | None) -> str:
-    """Structured continuity for the leaf agent — never dump prior Wan prose.
-
-    Raw previous_clip_wan_prompt stays on cfg for debug/regenerate and event
-    mining only; leaf context uses storyboard-derived end_state fields.
-    """
-    try:
-        from jiuwenswarm.server.runtime.designer.pipeline.shot_consistency_contract import (
-            agent_structured_continuity_block,
-        )
-
-        return agent_structured_continuity_block(cfg)
-    except Exception:  # noqa: BLE001
-        cfg = cfg if isinstance(cfg, dict) else {}
-        action = str(cfg.get("previous_clip_action") or "").strip()
-        if not action:
-            return ""
-        idx = cfg.get("previous_clip_clip_index") or ""
-        return (
-            f"CONTINUITY STATE (prior shot {idx} finished — structured only):\n"
-            f"- Prior action finished: {action}"
-        )
+    """Leaf context is this storyboard row only. Earlier clips are not quoted."""
+    del cfg
+    return ""
 
 
 def ensure_prior_clip_story_on_cfg(

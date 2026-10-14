@@ -569,15 +569,8 @@ def _scene_specs_lines(cfg: dict[str, Any]) -> list[str]:
 
 
 def _continue_line(cfg: dict[str, Any]) -> str:
-    """Positive continue from THIS row's start_state — not prior Wan text."""
-    start = cfg.get("start_state") if isinstance(cfg.get("start_state"), dict) else {}
-    if start.get("pose") or start.get("facing") or start.get("seats"):
-        return ""  # start_state lines cover opening; no generic prior-clip sentence
-    if cfg.get("pose_holds") or cfg.get("beat_done") or cfg.get("already_done"):
-        return (
-            "This shot opens already past earlier finished beats in the storyboard — "
-            "same setting and faces continue from that authored start_state."
-        )
+    """No previous-clip continue line. Opening comes from this row's start_state only."""
+    del cfg
     return ""
 
 
@@ -592,8 +585,8 @@ def _ensure_crowd_state(cfg: dict[str, Any]) -> dict[str, Any]:
 
         state = infer_crowd_state(
             cfg,
-            prior_text=str(cfg.get("previous_clip_wan_prompt") or ""),
-            events=list(cfg.get("previous_clip_finished_events") or []),
+            prior_text="",
+            events=[],
         )
         cfg["crowd_state"] = state
     except Exception:  # noqa: BLE001
@@ -622,7 +615,7 @@ def _continuity_story_lines(cfg: dict[str, Any]) -> list[str]:
                 pose_holds_from_events,
             )
 
-            events = list(cfg.get("previous_clip_finished_events") or [])
+            events = []
             if not events and cfg.get("beat_done"):
                 events = [
                     {"type": "beat", "already_done": str(x)}
@@ -631,13 +624,13 @@ def _continuity_story_lines(cfg: dict[str, Any]) -> list[str]:
                 ]
             holds = pose_holds_from_events(
                 events,
-                prior_action=str(cfg.get("previous_clip_action") or ""),
+                prior_action="",
             )
             if holds:
                 cfg["pose_holds"] = holds
         except Exception:  # noqa: BLE001
             holds = []
-    prior_action = str(cfg.get("previous_clip_action") or "")
+    prior_action = ""
     this_action = str(cfg.get("clip_action") or cfg.get("action") or "")
     try:
         from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
@@ -1161,9 +1154,6 @@ def prompt_respects_practice(
         text,
     ):
         reasons.append("missing_position_handoff")
-    if str(cfg.get("previous_clip_wan_prompt") or cfg.get("previous_clip_action") or "").strip():
-        if not re.search(r"(?i)\b(?:continue|continues|same setting|same placement|same room)\b", text):
-            reasons.append("missing_prior_continue")
     # Toolbar user edits are authoritative for beat fidelity; do not force stale clip_action.
     if not honor_user_origin:
         action = str(cfg.get("clip_action") or "").strip()
@@ -1414,4 +1404,14 @@ def director_approve_video_prompt(
         reasons = [tag, *reasons]
     else:
         reasons = ["director_checked", *reasons]
+    # Continuity contract: opening/hold must survive rewrite (all modes).
+    try:
+        from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
+            enforce_prompt_continuity,
+        )
+
+        approved, hold_notes = enforce_prompt_continuity(approved, cfg)
+        reasons.extend(hold_notes)
+    except Exception:  # noqa: BLE001
+        pass
     return approved.strip(), reasons

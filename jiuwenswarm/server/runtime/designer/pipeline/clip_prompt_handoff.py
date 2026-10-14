@@ -167,40 +167,25 @@ def same_scene_prompt_gate_clause(
     already_done: list[str] | None = None,
     has_prior: bool = False,
 ) -> str:
-    """LLM instruction: agree with this storyboard row; continue; do not unasked-repeat."""
+    """LLM instruction: write from this storyboard row and its locks only."""
+    del already_done, has_prior
     lines = [
-        "SAME-SCENE CONSISTENCY GATE (write the Wan prompt to this contract):",
-        f"1) THIS storyboard shot {int(clip_index or 0) or 'N'} is the plot authority "
+        "STORYBOARD ROW GATE (write the video prompt to this contract):",
+        f"1) THIS storyboard shot {int(clip_index or 0) or 'N'} is the sole plot authority "
         f"— action: {_short_action(this_action) or '(this row)'}"
         + (f"; camera: {str(this_camera).strip()}" if str(this_camera or "").strip() else "")
         + (f"; speech: {str(this_speech).strip()}" if str(this_speech or "").strip() else "")
         + ".",
-        "2) The Wan prompt MUST agree with that row (blocking, who is on screen, what "
-        "happens in THIS window). Do not film another shot's beat.",
+        "2) The prompt MUST match that row exactly: action, posture "
+        "(stand/sit/walk/…), spatial places, who is on screen, camera, and spoken words. "
+        "Do not invent a different posture or dialogue. Do not film another shot's beat.",
+        "3) Obey the locks on THIS storyboard row only. Do not use text, speech, "
+        "frames, or locks from any previous clip.",
+        "4) Write in the configured video model's best-practice story form "
+        "(positive narrative; Image/@Image labels in attach order).",
+        "Keep clothing, language, occupancy, and spatial positioning locks. "
+        "Identity/place from attached media.",
     ]
-    if has_prior:
-        lines.append(
-            "3) Continue from the previous clip in this SAME setting: read "
-            "already_done / pose_holds / seat_anchors / forbidden_speech / end_state "
-            "as finished story STATE, then write a NEW motion prompt for THIS row only. "
-            "Do not paste or restage prior Wan text."
-        )
-        lines.append(
-            "4) Do NOT repeat actions / onsets / exits / walk-aways / dialogue / reseating "
-            "that already finished unless THIS storyboard row or the user prompt "
-            "explicitly asks to repeat them."
-        )
-    else:
-        lines.append(
-            "3) This is the first clip of the setting: animate the composed scene master; "
-            "do not restart later plot."
-        )
-    done = [str(x) for x in (already_done or []) if str(x).strip()]
-    if done:
-        lines.append("ALREADY FINISHED (do not redo unless this row asks): " + "; ".join(done[:8]))
-    lines.append(
-        "Keep clothing, language, occupancy, and seat locks. Identity/place from attached media."
-    )
     return "\n".join(lines)
 
 
@@ -310,6 +295,7 @@ def this_shot_assignment_clause(
     speech_line: str = "",
     already_done: list[str] | None = None,
 ) -> str:
+    del already_done
     lines = [
         f"YOUR ASSIGNMENT (storyboard shot {int(clip_index or 0)} — film ONLY this part):",
         f"- Action: {_short_action(action) or '(follow this shot clip spec + storyboard shot)'}",
@@ -318,9 +304,6 @@ def this_shot_assignment_clause(
         lines.append(f"- Camera: {str(camera).strip()}")
     if str(speech_line or "").strip():
         lines.append(f"- Speech this shot: {str(speech_line).strip()}")
-    done = [str(x) for x in (already_done or []) if str(x).strip()]
-    if done:
-        lines.append("- Already finished earlier (do not redo): " + "; ".join(done[:8]))
     lines.append(
         "Use the storyboard shot assigned to you above. Do not invent another shot's action."
     )
@@ -328,42 +311,9 @@ def this_shot_assignment_clause(
 
 
 def previous_clip_had_clause(prior: list[dict[str, Any]] | None) -> str:
-    items = [p for p in (prior or []) if isinstance(p, dict)]
-    if not items:
-        return ""
-    latest = items[-1]
-    beat = _short_action(str(latest.get("clip_action") or latest.get("wan_prompt") or ""))
-    lines = [
-        "PREVIOUS CLIP HAD THE FOLLOWING (context only — do NOT film / redo this):",
-        f"- Shot {latest.get('clip_index')} ({latest.get('node_id')}): {beat or '(prior beat)'}",
-    ]
-    if latest.get("speech_line"):
-        lines.append(
-            f"- Prior speech already delivered (do NOT restate): "
-            f"\"{str(latest.get('speech_line'))}\""
-        )
-        lines.append(
-            "Dialogue continuity: do not restart that line; only speak NEW words for This shot "
-            "(or stay silent if this shot has no new speech_line)."
-        )
-    if len(items) > 1:
-        earlier = "; ".join(
-            f"shot {p.get('clip_index')}: {_short_action(str(p.get('clip_action') or ''))}"
-            for p in items[:-1]
-            if p.get("clip_action") or p.get("clip_index")
-        )
-        if earlier:
-            lines.append(f"- Earlier clips already covered: {earlier}")
-    lines.append(
-        "Do not restart finished onsets/exits/dialogue from the previous clip "
-        "unless THIS storyboard row or the user prompt explicitly asks for a repeat."
-    )
-    lines.append(
-        "Write a NEW motion prompt that AGREES with YOUR ASSIGNMENT (this storyboard "
-        "shot) and CONTINUES from structured continuity state (already_done / holds / "
-        "forbidden_speech). Never paste prior Wan prose into this clip's Wan call."
-    )
-    return "\n".join(lines)
+    """Earlier clips are not described to the next clip."""
+    del prior
+    return ""
 
 
 def handoff_clause_for_prompt(
@@ -375,11 +325,9 @@ def handoff_clause_for_prompt(
     this_speech: str = "",
     already_done: list[str] | None = None,
 ) -> str:
-    """Previous-clip summary + this-shot assignment — never paste full prior Wan text."""
+    """This storyboard row only. Earlier clips are not summarized."""
+    del prior
     parts: list[str] = []
-    prev = previous_clip_had_clause(prior)
-    if prev:
-        parts.append(prev)
     if int(this_clip_index or 0) > 0 or str(this_action or "").strip():
         parts.append(
             this_shot_assignment_clause(
@@ -390,7 +338,7 @@ def handoff_clause_for_prompt(
                 already_done=already_done,
             )
         )
-    if prior:
+    if str(this_action or "").strip():
         parts.append(
             same_scene_prompt_gate_clause(
                 clip_index=int(this_clip_index or 0),
@@ -398,7 +346,7 @@ def handoff_clause_for_prompt(
                 this_camera=this_camera,
                 this_speech=this_speech,
                 already_done=already_done,
-                has_prior=True,
+                has_prior=False,
             )
         )
     return "\n\n".join(parts)
@@ -412,15 +360,9 @@ def clip_continuity_note(
     prior_action: str = "",
     prior_clip_index: int | None = None,
 ) -> str:
-    """Continuity note for clips — no full prior generate.prompt paste."""
+    """This storyboard row only. The previous clip's action is not included."""
+    del prior_action, prior_clip_index
     parts: list[str] = []
-    if prior_action.strip():
-        src = f"shot {prior_clip_index}" if prior_clip_index else "prior clip"
-        parts.append(
-            "PREVIOUS CLIP HAD THE FOLLOWING (context only — do NOT redraw that beat):\n"
-            f"- {src}: {_short_action(prior_action)}\n"
-            "Advance time; do not restart finished onsets unless storyboard asks."
-        )
     parts.append(
         this_shot_assignment_clause(
             clip_index=clip_index,

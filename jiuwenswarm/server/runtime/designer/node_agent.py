@@ -518,8 +518,7 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         "occupancy": cfg.get("occupancy") or identity.get("occupancy"),
         "character_node_ids": cfg.get("character_node_ids") or identity.get("character_node_ids"),
         "all_solo_node_ids": identity.get("all_solo_node_ids"),
-        "prior_clip_node_id": cfg.get("prior_clip_node_id")
-        or identity.get("prior_clip_node_id"),
+        "prior_clip_node_id": None,
         "director_prompt_reviewed": bool(cfg.get("director_prompt_reviewed")),
         "director_lock_gate": cfg.get("director_lock_gate"),
         "language_lock": cfg.get("language_lock"),
@@ -541,8 +540,7 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
             same_scene_prompt_gate_clause,
         )
         from jiuwenswarm.server.runtime.designer.pipeline.clip_story_state import (
-            agent_prior_story_block,
-            ensure_prior_clip_story_on_cfg,
+            strip_previous_clip_fields,
         )
         from jiuwenswarm.server.runtime.designer.pipeline.shot_consistency_contract import (
             merge_storyboard_consistency,
@@ -554,7 +552,7 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
 
         role = str(node_pipeline(node) or node_role(node) or "")
         if role in {"clip", "video"}:
-            cfg = ensure_prior_clip_story_on_cfg(cfg, graph)
+            cfg = strip_previous_clip_fields(cfg)
             cfg, _ = merge_storyboard_consistency(cfg, graph=graph)
             node["config"] = cfg
         limits = media_prompt_limit_packet()
@@ -582,17 +580,8 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
             this_camera=str(cfg.get("camera") or ""),
             this_speech=str(cfg.get("speech_line") or ""),
             already_done=[str(x) for x in (cfg.get("already_done") or []) if str(x)],
-            has_prior=bool(
-                str(cfg.get("previous_clip_action") or "").strip()
-                or cfg.get("end_state")
-                or (cfg.get("already_done") or [])
-                or (
-                    str(cfg.get("continuity_clip_node_id") or "").strip()
-                    and not bool(cfg.get("first_of_setting"))
-                )
-            ),
+            has_prior=False,
         )
-        extra["previous_clip_story_state"] = agent_prior_story_block(cfg)
     except Exception:  # noqa: BLE001
         extra = {}
     snapshot = {
@@ -603,8 +592,10 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         "prompt": graph_prompt(graph, node),
         "clip_index": cfg.get("clip_index"),
         "clip_action": str(cfg.get("clip_action") or ""),
+        "cast_actions": cfg.get("cast_actions"),
         "camera": str(cfg.get("camera") or ""),
         "speech_line": str(cfg.get("speech_line") or ""),
+        "speech_by_character": cfg.get("speech_by_character"),
         "agent_template": node_agent_template(node),
         "upstream_node_ids": preds,
         "suggested_next_node_ids": [item for item in suggested if isinstance(item, str)],
@@ -617,31 +608,18 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         "setting_id": locks["setting_id"],
         "clip_strategy": locks["clip_strategy"],
         "occupancy": locks["occupancy"],
-        "already_done": cfg.get("already_done"),
-        "beat_done": cfg.get("beat_done"),
+        # This-row locks only — do not expose prior-shot already_done / beat_done.
         "pose_holds": cfg.get("pose_holds"),
         "seat_anchors": cfg.get("seat_anchors"),
         "forbidden_speech": cfg.get("forbidden_speech"),
         "end_state": cfg.get("end_state"),
+        "start_state": cfg.get("start_state"),
         "scene_specs": cfg.get("scene_specs"),
-        "previous_clip_prompt": str(cfg.get("previous_clip_prompt") or ""),
-        # Do NOT pass raw previous_clip_wan_prompt to the leaf — contamination source.
-        "previous_clip_action": str(cfg.get("previous_clip_action") or ""),
-        "previous_clip_finished_events": cfg.get("previous_clip_finished_events"),
         "scene_architecture_clause": str(cfg.get("scene_architecture_clause") or ""),
         "locks": locks,
         "director_prompt_reviewed": locks["director_prompt_reviewed"],
     }
     snapshot.update(extra)
-    prior_lead = str(extra.get("previous_clip_story_state") or "").strip()
-    prior_section = ""
-    if prior_lead:
-        prior_section = (
-            prior_lead
-            + "\n\nFilm ONLY this storyboard row. Continue seats / exits / opening holds "
-            "from CONTINUITY STATE above. Never restate forbidden_speech or restage "
-            "already_done shots unless THIS row asks.\n\n"
-        )
     return (
         "执行当前设计节点。先看 JSON 上下文，用工具完成本节点产物，最后 "
         "designer_node_complete。\n"
@@ -658,15 +636,17 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         "speech_line, occupancy, spatial_lock, and character specs — never invent "
         "new faces/wardrobe/architecture. Every clip uses character sheets plus the "
         "scene specs, and keeps the film STYLE LOCK.\n"
-        "SAME-SCENE PROMPT GATE: the video prompt MUST agree with THIS storyboard shot "
-        "(action/camera/speech). Continue from structured continuity "
-        "(already_done / pose_holds / seat_anchors / forbidden_speech / end_state) — "
-        "do not restage finished onsets/exits/dialogue unless THIS row asks. "
-        "Keep character consistency (same faces/costumes) on every clip call.\n"
+        "CLIP WRITING: translate THIS storyboard row and its locks into ONE positive "
+        "story-form video prompt for the configured video model (Wan / Seedance / "
+        "MiniMax best practices). Authority fields: clip_action, cast_actions, "
+        "start_state, end_state, seat_anchors, occupancy, speech_line / "
+        "speech_by_character, camera, costume, scene_specs, style_lock. "
+        "Keep sit/stand posture, seat places, action, and spoken words exactly as "
+        "this row states — do not invent a different posture or dialogue. "
+        "Do not use text, speech, frames, or locks from any previous clip.\n"
         "CANVAS: user_canvas_edits is what the user just did on the canvas, oldest first. "
         "Treat it as fact. New edges are inputs. Disconnected nodes are not inputs. "
         "A replace means use that node's new output file. Do not restore removed nodes or edges.\n\n"
-        f"{prior_section}"
         f"```json\n{json.dumps(snapshot, ensure_ascii=False, indent=2)}\n```"
     )
 
@@ -1033,38 +1013,27 @@ class DesignerGraphToolkit:
         from jiuwenswarm.common.schema.designer_graph import node_clip_index
         from jiuwenswarm.server.runtime.designer.pipeline.clip_last_frame_handoff import (
             extract_last_frame,
-            resolve_gated_last_frame_chain,
             scrub_restated_speech,
             stamp_last_frame_onto_next_clips,
-            stamp_scene_last_frame_chain,
         )
 
         self.refresh_canvas()
         node = _node_from_ctx(self.ctx)
         graph = self.ctx.graph if isinstance(self.ctx.graph, dict) else {}
         cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
-        cfg = scrub_restated_speech(dict(cfg))
-        try:
-            from jiuwenswarm.server.runtime.designer.pipeline.clip_story_state import (
-                ensure_prior_clip_story_on_cfg,
-            )
+        from jiuwenswarm.server.runtime.designer.pipeline.clip_story_state import (
+            strip_previous_clip_fields,
+        )
 
-            cfg = ensure_prior_clip_story_on_cfg(cfg, graph)
-        except Exception:  # noqa: BLE001
-            pass
+        cfg = strip_previous_clip_fields(scrub_restated_speech(dict(cfg)))
         node["config"] = cfg
 
-        # Gated same-scene last-frame chain before prompt so Wan binding matches attach order.
         clip_index = node_clip_index(node)
         refs = collect_clip_reference_images(
             self.ctx, clip_index, node=node
         )
         _IMG = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
         ref_paths = [p for p in refs if p.is_file() and p.suffix.lower() in _IMG]
-        scene_chain = resolve_gated_last_frame_chain(cfg, graph=graph, ctx=self.ctx)
-        if scene_chain:
-            cfg = stamp_scene_last_frame_chain(cfg, scene_chain)
-            node["config"] = cfg
         ref_files = [str(p) for p in ref_paths]
 
         # Agent writes P2 (continuation). Structured prompt is fallback / lock scaffold.
@@ -1074,7 +1043,6 @@ class DesignerGraphToolkit:
         except Exception:  # noqa: BLE001
             logger.debug("build_clip_prompt failed in call_video_model", exc_info=True)
         agent_text = str(prompt or "").strip()
-        prior_p1 = str(cfg.get("previous_clip_action") or cfg.get("previous_clip_wan_prompt") or "").strip()
         meta = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
         user_prompt = str(graph.get("description") or meta.get("user_prompt") or "")
         try:
@@ -1091,38 +1059,18 @@ class DesignerGraphToolkit:
             try:
                 from jiuwenswarm.server.runtime.designer.pipeline.clip_scope import (
                     looks_like_full_story_restatement,
-                    looks_like_prior_copy,
                 )
                 from jiuwenswarm.server.runtime.designer.pipeline.clip_story_state import (
                     narrative_from_wan_prompt,
-                )
-                from jiuwenswarm.server.runtime.designer.pipeline.clip_prompt_handoff import (
-                    agent_replays_finished_events,
                 )
 
                 body = narrative_from_wan_prompt(agent_text, limit=2500) or agent_text
                 if looks_like_full_story_restatement(body, user_prompt):
                     agent_text = ""
-                elif prior_p1 and looks_like_prior_copy(
-                    body, str(cfg.get("previous_clip_wan_prompt") or prior_p1)
-                ):
-                    agent_text = ""
-                elif agent_replays_finished_events(
-                    body,
-                    already_done=[str(x) for x in (cfg.get("already_done") or []) if str(x)],
-                    this_action=str(cfg.get("clip_action") or ""),
-                ):
-                    agent_text = ""
                 elif prompt_violates_consistency(body, cfg=cfg):
                     agent_text = ""
             except Exception:  # noqa: BLE001
                 pass
-        if (
-            prior_p1
-            and agent_text
-            and agent_text[:180].casefold() == prior_p1[:180].casefold()
-        ):
-            agent_text = ""
         if (
             agent_text
             and not _looks_like_contaminated_prompt(agent_text)

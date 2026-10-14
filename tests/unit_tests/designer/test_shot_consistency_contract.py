@@ -57,8 +57,8 @@ def test_agent_prior_story_block_has_no_raw_wan_dump() -> None:
     block = agent_prior_story_block(cfg)
     assert "PREVIOUS WAN PROMPT" not in block
     assert "Alex from Image 1" not in block
-    assert "CONTINUITY STATE" in block
-    assert "already" in block.lower() or "Prior action" in block
+    assert "Oh no" not in block
+    assert "calendar" not in block.lower()
 
 
 def test_enforce_speech_uniqueness_clears_duplicate() -> None:
@@ -70,11 +70,10 @@ def test_enforce_speech_uniqueness_clears_duplicate() -> None:
     graph = _two_clip_graph()
     cfg = dict(graph["nodes"][1]["config"])
     out, notes = merge_storyboard_consistency(cfg, graph=graph)
-    assert "cleared_duplicate_speech" in notes or not str(out.get("speech_line") or "").strip()
-    assert not str(out.get("speech_line") or "").strip()
-    assert out.get("forbidden_speech")
-    assert out.get("end_state")
-    assert out.get("already_done")
+    assert "cleared_duplicate_speech" not in notes
+    assert str(out.get("speech_line") or "") == "Oh no, it's Valentine's Day!"
+    assert "previous_clip_action" not in out
+    assert "previous_clip_speech" not in out
 
     # Direct enforce path
     cfg2 = dict(graph["nodes"][1]["config"])

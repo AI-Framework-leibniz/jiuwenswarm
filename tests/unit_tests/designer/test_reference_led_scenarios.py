@@ -686,15 +686,13 @@ def _assert_shared_contract(case: dict, graph: dict) -> None:
         assert float(end) == pytest.approx(cursor + duration)
         cursor += duration
         total += duration
-        index = int(cfg["clip_index"])
-        if index == 1:
-            assert "continues from" not in prompt.lower()
-        else:
-            assert "continues from" in prompt.lower()
-            assert cfg["previous_end_state"] in prompt
-            assert f"Action: {cfg['previous_action']}" not in prompt
-            assert cfg["previous_action"] in cfg["already_done"]
-            assert action != cfg["previous_action"]
+        # This-row prompts only — no previous-clip continuation preamble.
+        assert "continues from" not in prompt.lower()
+        assert "must not repeat" not in prompt.lower()
+        assert not cfg.get("previous_action")
+        assert not cfg.get("previous_end_state")
+        assert not cfg.get("already_done")
+        assert f"Action: {action}" in prompt or action in prompt
     assert len(set(actions)) == len(actions)
     assert int(graph["metadata"]["film_duration_sec"]) == total
 
@@ -1197,10 +1195,11 @@ def test_chat_action_edit_refreshes_reference_led_handoff() -> None:
     edited = _chat_edit(graph, candidate)
 
     second = _clips(edited)[1]["config"]
-    assert second["previous_action"] == "new opening action"
-    assert second["previous_end_state"] == "new opening end"
-    assert second["already_done"] == ["new opening action"]
-    assert "new opening end" in second["generate"]["prompt"]
+    assert not second.get("previous_action")
+    assert not second.get("previous_end_state")
+    assert not second.get("already_done")
+    assert "new opening end" not in second["generate"]["prompt"]
+    assert "continues from" not in second["generate"]["prompt"].lower()
     assert "new opening action" in _clips(edited)[0]["config"]["generate"]["prompt"]
 
 
@@ -1215,8 +1214,13 @@ def test_chat_action_edit_keeps_default_end_state_in_step() -> None:
 
     edited = _chat_edit(graph, candidate)
 
-    assert _clips(edited)[0]["config"]["end_state"] == "completed: new opening action"
-    assert _clips(edited)[1]["config"]["previous_end_state"] == "completed: new opening action"
+    end_state = _clips(edited)[0]["config"]["end_state"]
+    # Structured spatial end_state is canonical; bare string kept only as legacy input.
+    if isinstance(end_state, dict):
+        assert end_state.get("pose") == "completed: new opening action"
+    else:
+        assert end_state == "completed: new opening action"
+    assert not _clips(edited)[1]["config"].get("previous_end_state")
 
 
 def test_chat_shot_removal_rechains_reference_led_clips() -> None:
@@ -1232,9 +1236,11 @@ def test_chat_shot_removal_rechains_reference_led_clips() -> None:
     edited = _chat_edit(graph, candidate)
 
     cfg = _clips(edited)[1]["config"]
-    assert cfg["previous_action"] == first["config"]["clip_action"]
-    assert cfg["previous_end_state"] == first["config"]["end_state"]
-    assert cfg["already_done"] == [first["config"]["clip_action"]]
+    assert not cfg.get("previous_action")
+    assert not cfg.get("previous_end_state")
+    assert not cfg.get("already_done")
+    assert first["config"]["clip_action"] not in cfg["generate"]["prompt"]
+    assert "continues from" not in cfg["generate"]["prompt"].lower()
     assert cfg["generate"]["prompt"].startswith("Shot 2,")
 
 

@@ -102,31 +102,40 @@ Use for character specs and scene specs / images.
 WAN3_VIDEO_PLAYBOOK = """
 ## Configured video model (call_video_model) — PRIMARY film path
 Every clip: R2V from the scene specs + on-screen character specs.
-Same-setting later clips keep prior continuity in agent context (not last-frame pixels).
+Each clip is authored from THIS storyboard row + locks only (no previous-clip text).
 Do not attach the peopled master as last environment (clones / people who left).
-Prompt formula: Character + Action + Lines + Scene.
-  Name character1… in attach order; speech_line exact or silent.
+Prompt craft: follow the configured VIDEO_GEN family's best practices
+(Wan / Seedance / MiniMax) — Character + Action + Lines + Scene in positive story form.
+  Name character1… / Image N (or @Image N on Seedance) in attach order.
+  speech_line / speech_by_character exact or silent; sit/stand and seat places exact
+  from start_state / cast_actions / seat_anchors; camera from this row.
 Always lead with positive story-form binding (no LOCK banners on the tool body):
-  SAME-SCENE GATE: agree with THIS storyboard row; continue from previous clip;
-  do not repeat finished actions unless this row / user prompt asks to repeat
+  STORYBOARD ROW GATE: agree with THIS storyboard row exactly; do not invent posture
+  or dialogue; do not film another shot's beat.
 Keep clips short (~5s); one primary camera move; obey VIDEO PROMPT LIMIT from the
 configured VIDEO_GEN backend.
 """.strip()
 
 STORYBOARD_DETAIL_RULES = """
 ## Storyboard detail (Director authors — hierarchical by SCENE then clips)
-Group shots by setting_id / place. For EACH scene block author a SCENE SPECS:
-objects + locations, lighting, crowd size/positions, and hierarchical views
-(front/left/right/side/top/bottom) so coverage is coherent and things do not appear
-from nowhere. For EACH scene:
+Group shots by setting_id / place. Author scene specs (objects + locations, lighting,
+crowd size/positions, hierarchical views front/left/right/side/top/bottom) as STRUCTURED
+plan data so coverage is coherent and things do not appear from nowhere. Scene specs and
+all locks (scene locks, character locks, scene bible, clip locks with each clip's initial
+and final positioning, continuity/weather locks) live in structured metadata ONLY — never
+write lock sections or lock text into the brief or the storyboard table. For EACH scene:
 1. First clip = compose_from_character_specs: Qwen generates the setting AND places cast
-   from character spec sheets. Include scene specs in the brief.
-2. Later clips in the SAME scene = compose_from_character_specs again with SCENE PROMPT
-   HANDOFF from the master (reuse architecture; change view/cast only).
-3. New setting_id → new scene specs + compose master, then handoffs again.
-Per shot also list: timeline, camera/view_key, placements, motion, speech_line,
-character_ids, continuity_lock, style_lock, shot_relation, clip_strategy,
-clip_prompt. Diversify angles within a locked geography/style.
+   from character spec sheets.
+2. Later clips in the SAME scene = compose_from_character_specs again with scene specs
+   as architecture locks (change view/cast/action only for THIS row).
+3. New setting_id → new scene specs + compose master.
+Per shot also author (structured fields): timeline, camera/view_key, cast_actions,
+motion, speech_line / speech_by_character unique to that window, character_ids,
+start_state / end_state (initial + final positioning per clip), continuity_lock,
+style_lock, shot_relation, clip_strategy, clip_prompt. Do not copy the same spoken
+line as the main dialogue of two adjacent shots unless the brief clearly wants a
+separate spoken response later.
+Diversify angles within a locked geography/style.
 Node labels should read like: character: [Name]; scene [n]: clip [n]; scene [n]: clip [n].
 """.strip()
 
@@ -135,21 +144,23 @@ When correcting leaf agents / drafting node prompts:
 - Character specs = identity only. Every clip composes cast INTO the locked scene specs
   (style_lock + setting text + hierarchical views). Same-setting later clips: reuse master
   scene prompt handoff — do not edit prior clip images as the primary ref.
-- Clip: DETAILED Wan R2V prompt with the brief/storyboard STYLE LOCK + CONTACT lock
-  + set/orientation + cast/prop locks (not STYLE HOLD alone).
+- Clip: DETAILED video prompt in the configured model's best-practice story form with
+  STYLE LOCK + CONTACT + this row's posture/seats/speech/camera (not STYLE HOLD alone).
 - NON-NEGOTIABLE film-wide locks on EVERY clip: style_lock, spatial_lock,
   costume/identity, occupancy, screen axis. Aspect ratio and resolution come from
   the canvas video settings and are passed to the model directly.
-- If agents ignore storyboard facing/objects/speech OR drop any lock, rewrite
-  director_task / generate.prompt once (no loops).
+- If agents invent posture/dialogue or ignore storyboard facing/objects/speech OR drop
+  any lock, rewrite director_task / generate.prompt once (no loops).
 """.strip()
 
 MANAGER_CORRECTION_HINTS = """
 Director one-pass corrections (locks bind ALL agents — leaf rewrites cannot drop them):
 - Reject / rewrite shots that all share the same facing or that omit placement/motion/speech/objects.
 - Require camera_rig + screen_positions + speech_line; stamp setting_id + clip_strategy.
-- BEFORE media calls: gate every clip prompt for style_lock, spatial_lock,
-  costume/identity, occupancy, and prior continuity; re-inject missing locks.
+- BEFORE media calls: gate every clip prompt for aspect_lock, style_lock,
+  spatial_lock, costume/identity, occupancy, and this-row posture/speech fidelity;
+  re-inject missing locks from THIS storyboard row (not previous clips).
+- Stamp image_size from aspect_lock on stills and the user or director video_size/video_resolution on clips.
 - Graph = brief→storyboard→character specs→scene specs→R2V clips→compose.
 - Prune only true orphans; every kept node must reach compose.
 """.strip()

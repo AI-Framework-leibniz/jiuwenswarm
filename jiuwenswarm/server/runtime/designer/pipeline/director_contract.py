@@ -19,6 +19,10 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from jiuwenswarm.server.runtime.designer.continuity import (
+    normalize_continuity_lock as _normalize_continuity_lock,
+)
+
 logger = logging.getLogger(__name__)
 
 _EXIT_RE = re.compile(
@@ -464,7 +468,10 @@ def _apply_exit_propagation(shots: list[dict[str, Any]]) -> None:
         cont = dict(shot.get("continuity_lock") or {})
         if exited:
             cont["exited_ids"] = ",".join(exited)
-            cont["forbid"] = "do not reseat or re-show characters who already left"
+            forbid = str(cont.get("forbid") or "").strip()
+            exit_rule = "do not reseat or re-show characters who already left"
+            if exit_rule not in forbid:
+                cont["forbid"] = f"{forbid}; {exit_rule}" if forbid else exit_rule
         shot["continuity_lock"] = cont
         for cid in leaving:
             if cid not in exited:
@@ -701,45 +708,11 @@ def enrich_analysis_heuristically(prompt: str, analysis: dict[str, Any]) -> dict
             if isinstance(shot.get("blocking"), dict)
             else _blocking_for_shot(shot, characters, on_screen)
         )
-        # Fold blocking into action so leaf prompts see it even without schema awareness
-        blk = shot["blocking"]
-        pos_bits = []
-        for p in blk.get("positions") or []:
-            if not isinstance(p, dict):
-                continue
-            pos_bits.append(
-                f"{p.get('name') or p.get('character_id')}@{p.get('zone')} "
-                f"({p.get('pose')}, {p.get('facing')})"
-            )
-        if pos_bits:
-            extra = (
-                f" BLOCKING: landmark={blk.get('landmark')}; "
-                + "; ".join(pos_bits)
-                + f". {blk.get('rule')}"
-            )
-            base_action = str(shot.get("action") or "")
-            if "BLOCKING:" not in base_action:
-                shot["action"] = (base_action + extra)[:500]
-                kp = str(shot.get("clip_prompt") or base_action)
-                if "BLOCKING:" not in kp:
-                    shot["clip_prompt"] = (kp + extra)[:500]
     _ensure_stay_on_leave_beats(prompt, characters, shots)
-    # Refresh blocking after stay/leave fix
+    # Refresh blocking after stay/leave fix (structured metadata only — never text).
     for shot in shots:
         on_screen = [str(x) for x in (shot.get("character_ids") or []) if str(x)]
         shot["blocking"] = _blocking_for_shot(shot, characters, on_screen)
-        blk = shot["blocking"]
-        pos_bits = [
-            f"{p.get('name') or p.get('character_id')}@{p.get('zone')}"
-            for p in (blk.get("positions") or [])
-            if isinstance(p, dict)
-        ]
-        if pos_bits:
-            extra = f" BLOCKING: landmark={blk.get('landmark')}; " + "; ".join(pos_bits)
-            base_action = str(shot.get("action") or "")
-            # Replace prior BLOCKING suffix if present
-            base_action = re.split(r"\sBLOCKING:", base_action, maxsplit=1)[0]
-            shot["action"] = (base_action + extra)[:500]
     _apply_exit_propagation(shots)
     out["clips"] = shots
     out["target_clip_count"] = len(shots)
@@ -800,7 +773,12 @@ async def enrich_analysis_with_llm(
             "speech_line (exact dialogue spoken in this shot, or empty string if silent — "
             "never invent lines for mute beats), "
             "wardrobe_lock (dress/outfit color, hair, facial features for EACH on_screen id), "
-            "camera_framing_rule (how to frame so off_camera people are not visible). "
+            "camera_framing_rule (how to frame so off_camera people are not visible), "
+            "continuity_lock (authored from the user prompt: motion direction for THIS "
+            "window, facing/screen direction, and forbid = what must NOT happen, e.g. do "
+            "not reverse motion, do not reseat someone who left), "
+            "lighting (weather / time-of-day / light direction for THIS window as short "
+            "story prose — the scene bible's light lock). "
             "Rules: (1) shot count matches brief budget; shots are consecutive TIME "
             "windows that concatenate to the film — do not restage the full user prompt "
             "in every shot and do not paste the entire user_prompt into every action; "
@@ -916,6 +894,7 @@ async def enrich_analysis_with_llm(
                 "speech_line",
                 "wardrobe_lock",
                 "camera_framing_rule",
+                "lighting",
             ):
                 if str(sh.get(craft_key) or "").strip():
                     merged[craft_key] = str(sh.get(craft_key))[:500]
@@ -924,27 +903,9 @@ async def enrich_analysis_with_llm(
             )
             if off_cam:
                 merged["off_camera_cast_ids"] = off_cam
-            blk = merged.get("blocking") if isinstance(merged.get("blocking"), dict) else {}
-            pos_bits = []
-            for p in blk.get("positions") or []:
-                if not isinstance(p, dict):
-                    continue
-                pos_bits.append(
-                    f"{p.get('name') or p.get('character_id')}@{p.get('zone')} "
-                    f"({p.get('pose')}, {p.get('facing')})"
-                )
-            if pos_bits:
-                extra = (
-                    f" BLOCKING: landmark={blk.get('landmark')}; "
-                    + "; ".join(pos_bits)
-                    + f". {blk.get('rule')}"
-                )
-                base_action = str(merged.get("action") or "")
-                if "BLOCKING:" not in base_action:
-                    merged["action"] = (base_action + extra)[:500]
-                kp = str(merged.get("clip_prompt") or base_action)
-                if "BLOCKING:" not in kp:
-                    merged["clip_prompt"] = (kp + extra)[:500]
+            lock = _normalize_continuity_lock(sh.get("continuity_lock"))
+            if lock:
+                merged["continuity_lock"] = lock
             norm.append(merged)
         if not norm:
             raise DesignerLlmError(

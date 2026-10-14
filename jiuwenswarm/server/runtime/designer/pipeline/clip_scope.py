@@ -211,7 +211,8 @@ def clip_assignment_text(
         lines.append(f"- On-screen: {', '.join(names[:8])}")
     lines.append(
         "Wan MOTION = this window only. Keep clothing / position / language / occupancy "
-        "locks from the brief, storyboard, and PRODUCTION LOCK BIBLE. "
+        "locks from this storyboard row (start_state / end_state / spatial_anchors) and "
+        "the PRODUCTION LOCK BIBLE (structured metadata). "
         "Do not paste later shots or the full remaining plot into call_video_model."
     )
     return "\n".join(lines)

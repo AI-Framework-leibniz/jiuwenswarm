@@ -76,9 +76,8 @@ def build_wan_reference_binding(
     n_hist = int(prior_last_frame_count or 0) or len(
         [c for c in chain if isinstance(c, dict) and str(c.get("path") or "").strip()]
     )
-    if prior_last_frame or bool(cfg.get("use_prior_last_frame")) or n_hist > 0:
-        prior_last_frame = True
-        n_hist = max(1, n_hist) if prior_last_frame else n_hist
+    prior_last_frame = False
+    n_hist = 0
     scene_nid = str(
         cfg.get("scene_node_id")
         or ((cfg.get("identity_refs") or {}) if isinstance(cfg.get("identity_refs"), dict) else {}).get(
