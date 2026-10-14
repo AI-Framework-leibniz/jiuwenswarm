@@ -55,16 +55,15 @@ export type DesignerConfigDelegate = (typeof DESIGNER_CONFIG_DELEGATES)[number];
 
 export const DESIGNER_AGENT_GROUP_NAME = 'designer' as const;
 
-// Mirrors ROLE_DEFAULT_TEMPLATES in designer_graph.py; the leader never runs
-// canvas nodes, so text nodes use the designer/text worker.
+// Mirrors ROLE_DEFAULT_TEMPLATES in designer_graph.py; every pipeline runs as
+// its same-named member, and a text node without a pipeline has none.
 export const DESIGNER_ROLE_DEFAULT_TEMPLATES = {
-  [DESIGNER_NODE_ROLE_BRIEF]: 'designer/text',
+  [DESIGNER_NODE_ROLE_BRIEF]: 'designer/brief',
   [DESIGNER_NODE_ROLE_CHARACTER]: 'designer/character',
   [DESIGNER_NODE_ROLE_SCENE]: 'designer/scene',
   [DESIGNER_NODE_ROLE_STORYBOARD]: 'designer/storyboard',
   [DESIGNER_NODE_ROLE_CLIP]: 'designer/clip',
-  [DESIGNER_NODE_ROLE_COMPOSE]: 'designer/clip',
-  [DESIGNER_NODE_TYPE_TEXT]: 'designer/text',
+  [DESIGNER_NODE_ROLE_COMPOSE]: 'designer/compose',
   [DESIGNER_NODE_TYPE_TABLE]: 'designer/storyboard',
   [DESIGNER_NODE_TYPE_IMAGE]: 'designer/character',
   [DESIGNER_NODE_TYPE_VIDEO]: 'designer/clip',

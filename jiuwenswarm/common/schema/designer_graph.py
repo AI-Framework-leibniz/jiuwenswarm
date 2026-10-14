@@ -256,16 +256,16 @@ DESIGNER_AGENT_GROUP_NAME = "designer"
 
 # Values are bare member names of the bound designer AgentGroup: the
 # swarmflow engine's agent_template gate rejects "group/member" refs (the
-# group is the session binding). Text-producing nodes resolve to the text
-# member, whose manifest carries the worker submit tool.
+# group is the session binding). Each pipeline runs as its same-named member.
+# Music / speech have no member (no standalone audio nodes yet), and a text
+# node without a pipeline has none either: the compiler rejects it.
 ROLE_DEFAULT_TEMPLATES: dict[str, str] = {
-    PIPELINE_BRIEF: "text",
+    PIPELINE_BRIEF: "brief",
     PIPELINE_CHARACTER: "character",
     PIPELINE_SCENE: "scene",
     PIPELINE_STORYBOARD: "storyboard",
     PIPELINE_CLIP: "clip",
-    PIPELINE_COMPOSE: "clip",
-    NODE_TYPE_TEXT: "text",
+    PIPELINE_COMPOSE: "compose",
     NODE_TYPE_TABLE: "storyboard",
     NODE_TYPE_IMAGE: "character",
     NODE_TYPE_VIDEO: "clip",
