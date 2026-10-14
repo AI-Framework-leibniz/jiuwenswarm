@@ -898,11 +898,14 @@ def init_session_metadata(
     cron_id: str = "",
     work_mode: str = "",
     channel_metadata: dict[str, Any] | None = None,
+    agent_group_name: str = "",
 ) -> None:
     """初始化会话元数据(同步写,确保创建后立即可读)
 
     ``channel_metadata`` 可选：TUI ``session.create`` 需在首条聊天前写入
     ``cwd``/``project_dir``，供 ``/resume`` current-dir 过滤（见 Issue #2503）。
+    ``agent_group_name``：AgentGroup 会话在创建时绑定组名（team.design 的
+    designer 会话即用此通道），首条 chat.send 的组解析直接读它。
     """
     # work_mode：未传时按 channel_id 推断默认值（tui→code，其他→work）
     resolved_work_mode = (
@@ -933,6 +936,8 @@ def init_session_metadata(
         "status": "idle",
         "work_mode": resolved_work_mode,
     }
+    if agent_group_name:
+        metadata["agent_group_name"] = agent_group_name
     if isinstance(channel_metadata, dict) and channel_metadata:
         metadata["channel_metadata"] = channel_metadata
     _write_metadata_sync(session_id, metadata)
@@ -1202,21 +1207,6 @@ def sync_session_request_metadata(
     metadata = _read_metadata(session_id, cache_bust=True)
     effective_project_dir: str | None = None
 
-    from jiuwenswarm.common.agentos_runtime import is_agentos_workspace_fallback
-
-    workspace_fallback = is_agentos_workspace_fallback(
-        channel_id=channel_id,
-        project_dir=project_dir,
-        project_id=project_id,
-    )
-    stored_project_id = str((metadata or {}).get("project_id") or "").strip()
-    stored_project_dir = str((metadata or {}).get("project_dir") or "").strip().rstrip("/")
-    if stored_project_id not in {"", "default", "default_code"} or stored_project_dir not in {
-        "", "/home/agentos/workspace",
-    }:
-        workspace_fallback = False
-    binding_project_dir = None if workspace_fallback else project_dir
-
     if not metadata:
         # 会话元数据不存在：兜底新建（外部渠道隐式创建 session 的场景）
         now = _current_timestamp()
@@ -1238,7 +1228,7 @@ def sync_session_request_metadata(
             "team_name": "",
             "team_template_id": "",
             "round_id": 0,
-            "project_dir": binding_project_dir or "",
+            "project_dir": project_dir or "",
             "project_id": project_id or "",
             "persist_session": persist_session if isinstance(persist_session, bool) else False,
             "model": model if (model is not None and explicit_model_provided) else "",
@@ -1285,11 +1275,7 @@ def sync_session_request_metadata(
 
         # 校验 project_dir：首次锁定 / 不一致告警不覆盖
         locked_project = metadata.get("project_dir")
-        if workspace_fallback:
-            # Execution cwd only: do not persist a project association or treat
-            # an old fallback directory as a newly requested binding.
-            effective_project_dir = project_dir
-        elif isinstance(locked_project, str) and locked_project.strip():
+        if isinstance(locked_project, str) and locked_project.strip():
             # 已锁定：以磁盘值为准
             effective_project_dir = locked_project.strip()
             # 请求带了不同值 → 告警（会话被换项目目录，有问题），但不覆盖
@@ -1429,12 +1415,6 @@ def save_session_equipment(
         "plugin_names": _normalize_session_equipment_names(plugin_names),
         "mcp": _normalize_session_equipment_names(mcp),
     }
-    if get_session_equipment(session_id, cache_bust=True) == snapshot:
-        return
-    # The first user record may still be queued. A synchronous equipment
-    # update from the older disk snapshot would erase its title and count.
-    if not flush_pending_writes():
-        raise RuntimeError("session metadata writes did not finish before equipment update")
     if get_session_equipment(session_id, cache_bust=True) == snapshot:
         return
     update_session_metadata(

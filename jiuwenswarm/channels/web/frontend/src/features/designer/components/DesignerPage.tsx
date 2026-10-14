@@ -1,7 +1,8 @@
-import { LayoutPanelTop, Loader2, MapPinned, PanelLeft, Route, RouteOff } from 'lucide-react';
+import { LayoutPanelTop, Loader2, MapPinned, Route, RouteOff } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import chatOrbIcon from '../../../assets/designer/xiaoyi-app-icon.png';
+import PanelCollapseIcon from '../../../assets/panel-collapse.svg?react';
+import chatOrbIcon from '../../../assets/designer-chat-orb.png';
 import {
   collectDesignerMaterials,
   collectPendingRevisions,
@@ -21,7 +22,6 @@ import { DesignerChatPanel, DesignerEmptyState } from './DesignerChatPanel';
 import { DesignerRunControl } from './DesignerRunControl';
 import { designerWorkspaceClient } from '../designerGraphClient';
 import { useWorkspaceStore } from '../../../stores/workspaceStore';
-import './DesignerErrorToast.css';
 import './DesignerPage.css';
 
 type DesignerPageProps = {
@@ -126,7 +126,7 @@ export function DesignerPage({
   useEffect(() => bindDesignerRuntime(), []);
 
   useEffect(() => {
-    if (!effectiveProjectId || bootstrapInProgress) return;
+    if (!sessionId || bootstrapInProgress) return;
     const requestedKey = `${effectiveProjectId}:${sessionId || ''}`;
     if (sessionId && loadedKeyRef.current === requestedKey) return;
     const loadSeq = ++workspaceLoadSeqRef.current;
@@ -142,7 +142,7 @@ export function DesignerPage({
           workspace.messages,
         );
         if (opened && opened !== sessionId) {
-          onOpenSessionRef.current?.(effectiveProjectId, opened, { replace: true });
+          onOpenSessionRef.current?.(effectiveProjectId || '', opened, { replace: true });
         }
       })
       .catch((reason) => {
@@ -241,7 +241,7 @@ export function DesignerPage({
               data-testid="designer-page-sidebar-collapse"
               data-variant={sidebarCollapsed ? 'expand' : 'collapse'}
             >
-              <PanelLeft size={18} aria-hidden />
+              <PanelCollapseIcon aria-hidden />
             </button>
           ) : null}
           <div className="designer-page__heading">
@@ -315,7 +315,7 @@ export function DesignerPage({
             className="app-toast-wrapper app-toast-wrapper--top-center"
             data-testid="designer-run-error-toast"
           >
-            <div className="designer-error-toast" role="alert" data-testid="designer-error">
+            <div className="app-connection-toast" role="alert" data-testid="designer-error">
               {runError}
             </div>
           </div>
