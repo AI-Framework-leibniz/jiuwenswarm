@@ -40,7 +40,9 @@ from jiuwenswarm.common.schema.designer_graph import (
     node_agent_template,
     node_uses_agent_runtime,
 )
+from jiuwenswarm.server.runtime.designer.handlers.common import path_from_uri
 
+_FROZEN_TEXT_MAX_CHARS = 20000
 _UPSTREAM_HEADER = "\n\n## Upstream node inputs\n"
 _NO_OUTPUT_PLACEHOLDER = "(Upstream node {node_id} has no output yet.)"
 _UPSTREAM_REFS_HEADER = "\nUpstream artifacts (reference these files by uri in media tools):"
@@ -104,10 +106,33 @@ def _node_prompt(node: dict[str, Any]) -> str:
     return str(node.get("description") or node.get("title") or _node_label(node))
 
 
+def _text_file_body(ref: Any) -> str:
+    if not isinstance(ref, dict):
+        return ""
+    mime = str(ref.get("mime_type") or "")
+    if ref.get("kind") != "text" and not mime.startswith("text/"):
+        return ""
+    path = path_from_uri(str(ref.get("uri") or ""))
+    if path is None:
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")[:_FROZEN_TEXT_MAX_CHARS]
+    except (OSError, UnicodeDecodeError, ValueError):
+        return ""
+
+
 def _frozen_text(state: dict[str, Any] | None) -> str | None:
+    """A produced node's current output text.
+
+    The output file wins over ``state["text"]``: the canvas text editor saves
+    user edits straight to that file (``/file-api/file-content``) and never
+    touches the run record, so the stored text can be stale.
+    """
     if not isinstance(state, dict):
         return None
-    text = str(state.get("text") or "").strip()
+    text = _text_file_body(state.get("output_ref")).strip()
+    if not text:
+        text = str(state.get("text") or "").strip()
     return text or None
 
 

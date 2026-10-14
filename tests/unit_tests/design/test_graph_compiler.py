@@ -126,6 +126,29 @@ def test_version_in_phase_and_frozen_literal():
     assert '"frozen"' in src  # n1 contributes its text as a literal
 
 
+def test_frozen_literal_reads_edited_output_file(tmp_path: Path):
+    output = tmp_path / "n1.md"
+    output.write_text("edited by user", encoding="utf-8")
+    ref = {"kind": "text", "uri": output.as_uri(), "mime_type": "text/markdown"}
+    src = GraphScriptCompiler().compile(
+        _chain_graph(), {"n1": {"text": "stale", "output_ref": ref}}
+    )
+    assert '"edited by user"' in src
+    assert '"stale"' not in src
+
+
+def test_frozen_literal_falls_back_to_stored_text(tmp_path: Path):
+    missing = {"kind": "text", "uri": (tmp_path / "gone.md").as_uri()}
+    image = tmp_path / "n1.png"
+    image.write_bytes(b"\x89PNG")
+    media = {"kind": "image", "uri": image.as_uri(), "mime_type": "image/png"}
+    for ref in (missing, media):
+        src = GraphScriptCompiler().compile(
+            _chain_graph(), {"n1": {"text": "stored", "output_ref": ref}}
+        )
+        assert '"stored"' in src
+
+
 # ── engine option whitelist ───────────────────────────────────────
 
 
