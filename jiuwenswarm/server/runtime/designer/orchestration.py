@@ -932,7 +932,13 @@ def note_user_canvas_edits(graph: DesignerExecutionGraph) -> list[str]:
 
 
 class Director:
-    """Single overseeing agent: brief, storyboard, graph, locks, prompt gate, and ratings."""
+    """Single overseeing agent: brief, storyboard, graph, locks, prompt gate, and ratings.
+
+    team.design replaced the Director conversation with the design leader.
+    Live entry points: ``design.director_chain`` (authoring for
+    ``designer_graph_autorun``) and :meth:`onboard_user_added_nodes`, called by
+    ``designer_adapter._save_graph`` to promote user-drawn canvas nodes.
+    """
 
     def onboard_user_added_nodes(self, graph: DesignerExecutionGraph) -> dict[str, Any]:
         """When the user adds canvas nodes: promote to LLM agents,

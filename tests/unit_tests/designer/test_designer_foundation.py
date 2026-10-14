@@ -787,60 +787,28 @@ async def test_rerun_promotes_generated_image_over_fallback_notes(
     assert not (character.get("candidate_output_ref") or {}).get("uri")
 
 
-def test_bootstrap_keeps_an_unselected_project_on_default(designer_store: DesignerGraphStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from jiuwenswarm.server.runtime.gateway_adapter import designer_adapter as adapter
-
-    monkeypatch.setattr(adapter, "_store", designer_store)
-    monkeypatch.setattr(adapter, "get_agent_root_dir", lambda: tmp_path)
-
-    def fail_create(*_args, **_kwargs):
-        raise AssertionError("an unselected design canvas must not create a project")
-
-    monkeypatch.setattr(adapter.project_store, "create_project_checked", fail_create)
-
-    analysis = {
-        "source": "llm",
-        "characters": [{"id": "char_1", "name": "Traveler", "description": "coat"}],
-        "scenes": [{"id": "set_1", "name": "Station", "description": "platform"}],
-        "clips": [
-            {
-                "clip_index": 1,
-                "action": "walks onto the platform",
-                "camera": "medium",
-                "on_screen": ["char_1"],
-                "setting_id": "set_1",
-                "timeline": "0-5s",
-            }
-        ],
-        "target_clip_count": 1,
-    }
+def test_director_chain_media_settings_follow_the_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    from jiuwenswarm.server.runtime.design.director_chain import _media_settings_for
     from jiuwenswarm.server.runtime.designer.media_intent import MediaIntent
 
     monkeypatch.setattr(
         "jiuwenswarm.server.runtime.designer.pipeline.model_capacity.configured_video_model_id",
         lambda: "wan3.0-video",
     )
-    payload, error, code = adapter._bootstrap_graph(
-        {"prompt": "火车站短片，竖屏", "project_id": "default"},
-        "web",
-        analysis,
-        None,
-        MediaIntent(aspect_ratio="9:16", film_duration_sec=20),
-    )
-    assert error is None
-    assert code is None
-    assert payload is not None
-    assert payload["project_id"] == "default"
-    assert payload["graph"]["title"] == "设计项目"
-    meta = payload["graph"]["metadata"]
-    assert meta["video_settings"] == {"aspect_ratio": "9:16", "resolution": "1080P"}
-    assert meta["image_settings"] == {"aspect_ratio": "9:16", "resolution": "1K"}
+    graph = {"graph_id": "g_media", "project_id": "default", "metadata": {}}
+
+    video, image = _media_settings_for(graph, MediaIntent(aspect_ratio="9:16", film_duration_sec=20))
+    assert video.as_dict() == {"aspect_ratio": "9:16", "resolution": "1080P"}
+    assert image.as_dict() == {"aspect_ratio": "9:16", "resolution": "1K"}
+
+    graph["metadata"] = {"video_settings": {"aspect_ratio": "1:1", "resolution": "720P"}}
+    video, _image = _media_settings_for(graph, MediaIntent())
+    assert video.as_dict() == {"aspect_ratio": "1:1", "resolution": "720P"}
 
 
 def test_start_run_rejects_run_from_another_graph(
     designer_store: DesignerGraphStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from jiuwenswarm.server.runtime.designer.executor import GraphExecutor
     from jiuwenswarm.server.runtime.gateway_adapter import designer_adapter as adapter
 
     first = designer_store.save_graph(
@@ -849,10 +817,18 @@ def test_start_run_rejects_run_from_another_graph(
     second = designer_store.save_graph(
         _handler_graph(make_pipeline_graph(project_id="proj_iso_b", prompt="scheme b")),
     )
-    executor = GraphExecutor(designer_store)
-    run = executor.create_run(first)
+    run = designer_store.save_run(
+        {
+            "schema_version": "designer-execution-run.v1",
+            "run_id": "run_iso_a",
+            "graph_id": first["graph_id"],
+            "project_id": "proj_iso_a",
+            "status": RUN_STATUS_COMPLETED,
+            "node_states": {},
+            "current_node_ids": [],
+        }
+    )
     monkeypatch.setattr(adapter, "_store", designer_store)
-    monkeypatch.setattr(adapter, "_executor", executor)
     payload, error, code = adapter._start_run(
         {"graph_id": second["graph_id"], "run_id": run["run_id"], "node_id": "n_brief"}
     )
@@ -918,7 +894,15 @@ def test_list_graphs_omits_graph_bodies(
     assert code is None
     assert payload is not None
     listed = next(item for item in payload["graphs"] if item["graph_id"] == graph["graph_id"])
-    assert set(listed) <= {"graph_id", "project_id", "title", "updated_at", "schema_version"}
+    assert set(listed) <= {
+        "graph_id",
+        "project_id",
+        "project_dir",
+        "project_name",
+        "title",
+        "updated_at",
+        "schema_version",
+    }
     assert "nodes" not in listed
     assert "edges" not in listed
     assert graph["graph_id"] in {item["graph_id"] for item in payload["summaries"]}
@@ -930,7 +914,6 @@ def test_get_graph_hydrates_node_outputs_from_latest_run(
     from jiuwenswarm.server.runtime.gateway_adapter import designer_adapter as adapter
 
     monkeypatch.setattr(adapter, "_store", designer_store)
-    monkeypatch.setattr(adapter._executor, "_store", designer_store)
     graph = designer_store.save_graph(
         make_pipeline_graph(project_id="proj_hydrate01", prompt="train arrives"),
     )

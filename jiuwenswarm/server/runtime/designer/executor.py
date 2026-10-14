@@ -1,6 +1,14 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""Designer graph executor — wave scheduler or agent-owned graph."""
+"""Designer graph executor — wave scheduler or agent-owned graph.
+
+**Retired from the canvas**: team.design runs execute on the swarmflow engine
+(``RunCoordinator`` + ``GraphScriptCompiler`` under ``server/runtime/design/``).
+The designer gateway adapter no longer schedules runs here. The module stays
+because the ``DesignerExecutionRun`` record shape and helpers such as
+``_node_execute_timeout_sec`` are still shared. Do not add new run entry
+points; new execution work belongs to ``server/runtime/design/``.
+"""
 
 from __future__ import annotations
 
