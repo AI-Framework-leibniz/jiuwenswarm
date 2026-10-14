@@ -827,13 +827,35 @@
   flex: 0 0 360px;
   align-self: stretch;
   width: 360px;
-  min-width: 280px;
-  max-width: 420px;
+  min-width: 0;
+  max-width: 360px;
   min-height: 0;
   flex-direction: column;
   border-left: 1px solid var(--color-border-default);
   background: var(--color-surface-card);
   overflow: hidden;
+  transition:
+    flex-basis 0.25s ease,
+    width 0.25s ease,
+    max-width 0.25s ease,
+    border-left-width 0.25s ease;
+}
+
+.designer-chat-panel.is-collapsed {
+  flex-basis: 0;
+  width: 0;
+  max-width: 0;
+  border-left-width: 0;
+}
+
+.designer-chat-panel__inner {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 360px;
+  min-width: 360px;
+  height: 100%;
+  min-height: 0;
 }
 
 .designer-chat-panel--docked {
