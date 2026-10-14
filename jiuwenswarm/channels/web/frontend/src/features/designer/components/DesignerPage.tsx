@@ -131,13 +131,22 @@ export function DesignerPage({
     const requestedKey = `${effectiveProjectId}:${sessionId || ''}`;
     if (sessionId && loadedKeyRef.current === requestedKey) return;
     const loadSeq = ++workspaceLoadSeqRef.current;
-    useDesignerStore.getState().reset();
+    // The composer hands over this session's graph before navigating while
+    // the first leader round is already pushing designer.graph.updated;
+    // resetting would drop those pushes until workspace.get returns.
+    const held = useDesignerStore.getState().domainGraph;
+    if (!sessionId || held?.metadata?.session_id !== sessionId) {
+      useDesignerStore.getState().reset();
+    }
     void designerWorkspaceClient.get(effectiveProjectId, sessionId)
       .then((workspace) => {
         if (workspaceLoadSeqRef.current !== loadSeq) return;
         const opened = String(workspace.session?.session_id || '');
         loadedKeyRef.current = `${effectiveProjectId}:${opened}`;
-        useDesignerStore.getState().applyGraph(workspace.graph);
+        const current = useDesignerStore.getState().domainGraph;
+        const newer = current?.graph_id === workspace.graph.graph_id
+          && (current.updated_at ?? 0) > (workspace.graph.updated_at ?? 0);
+        if (!newer) useDesignerStore.getState().applyGraph(workspace.graph);
         useDesignerChatStore.getState().replaceMessages(
           workspace.graph.graph_id,
           workspace.messages,
