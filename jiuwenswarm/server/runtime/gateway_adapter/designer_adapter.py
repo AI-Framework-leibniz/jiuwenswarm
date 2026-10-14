@@ -1252,9 +1252,6 @@ def _start_run(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | Non
     }, None, None
 
 
-_RUN_TASKS: set[asyncio.Task[None]] = set()
-
-
 def _launch_run_trigger(
     coordinator: RunCoordinator,
     payload: dict[str, Any],
@@ -1281,9 +1278,7 @@ def _launch_run_trigger(
                 payload.get("graph_id"),
             )
 
-    task = asyncio.create_task(_run())
-    _RUN_TASKS.add(task)
-    task.add_done_callback(_RUN_TASKS.discard)
+    asyncio.create_task(_run())
 
 
 def _initial_running_run(payload: dict[str, Any]) -> dict[str, Any]:

@@ -12,16 +12,17 @@ no args = run every unproduced node, ``node_id`` = single-node rerun
 (candidate semantics), ``node_id`` + ``cascade`` = rerun from that node
 through its downstream closure.
 
-A full graph run is many worker LLM turns plus media generation, so the
-tool starts the trigger on a background task and returns at once, exactly
-like the canvas run button. Progress streams to the canvas; the run outcome
-is NOT fed back to the leader (no follow-up round). The leader reads results
-with ``designer_graph_get`` when the user asks.
+Async shape (2026-10-13, mirroring the ``swarmflow()`` tool): a full graph
+run is many worker LLM turns plus media generation — the tool call must not
+hold the leader's round hostage. ``invoke`` launches the trigger on the
+harness's ``async_tool_runtime`` and returns a "launched" message at once;
+progress streams to the canvas meanwhile, and the run summary is injected
+back as a follow-up message when the trigger finishes.
 """
 
 from __future__ import annotations
 
-import asyncio
+import json
 import logging
 from typing import Any
 
@@ -33,6 +34,9 @@ logger = logging.getLogger(__name__)
 
 TOOL_NAME = "designer_run_graph"
 SECTION_NAME = "designer_execution"
+# Per-node text preview cap in the tool result: enough for the leader to
+# report outcomes, never a full document dump.
+_NODE_TEXT_PREVIEW_CHARS = 240
 
 _PROMPT_CN = """# 画布执行（designer_run_graph）
 
@@ -43,10 +47,10 @@ _PROMPT_CN = """# 画布执行（designer_run_graph）
 - `node_id` + `cascade=true`：从该节点起连同它的所有下游一起重跑（结果直接覆盖）；上游节点保持现有产出不变，即使它的产出基于更早的输入也原样使用。
 
 调用约定：
-- 工具调用**立即返回**（执行在后台进行），进度实时推送到画布；执行结果不会自动回传给你。
+- 工具调用**立即返回**（执行在后台进行），进度实时推送到画布；执行结束后你会收到一条运行摘要消息，届时用一两句话向用户汇报各节点的结果与状态，不要粘贴全文。
 - 同一时刻只允许一个执行；执行中再次调用会被拒绝，此时告诉用户稍候。
-- 调用后告诉用户"已开始执行，画布可看进度"，然后结束本轮回复，不要等待结果。
-- 用户之后询问结果或反馈失败时，用 designer_graph_get 读取各节点状态与产出，说明失败节点与原因，建议下一步（改提示词重跑该节点 / 从该节点续跑）。
+- 节点失败时摘要里会带 error，向用户说明失败节点与原因，建议下一步（改提示词重跑该节点 / 从该节点续跑）。
+- 调用后先告诉用户"已开始执行，画布可看进度"，不要在原地等待结果。
 """
 
 _PROMPT_EN = """# Canvas execution (designer_run_graph)
@@ -65,15 +69,43 @@ semantics as the canvas run button):
 
 Conventions:
 - The tool call returns IMMEDIATELY (the run executes in the background);
-  progress streams to the canvas. The outcome is NOT delivered back to you.
+  progress streams to the canvas meanwhile. A run-summary message is
+  delivered to you when it finishes — report each node's outcome in a
+  sentence or two then, never paste full texts.
 - Only one execution at a time; a second call while one runs is rejected —
   tell the user to wait.
-- After launching, tell the user "execution started, watch the canvas" and
-  end your reply; do not wait for the result.
-- When the user later asks about results or reports failures, read node
-  states and outputs with designer_graph_get, name failed nodes and reasons,
+- Node failures carry an error in the summary: name the node, the reason,
   and suggest the next step (edit the prompt and rerun / rerun from there).
+- After launching, tell the user "execution started, watch the canvas" —
+  do not wait in place for the result.
 """
+
+
+def _run_summary(run: dict[str, Any]) -> str:
+    """Compact run digest for the leader's reply (never a full dump)."""
+    states = run.get("node_states") or {}
+    nodes: dict[str, Any] = {}
+    for node_id, state in states.items():
+        if not isinstance(state, dict):
+            continue
+        entry: dict[str, Any] = {"status": state.get("status")}
+        text = str(state.get("text") or state.get("candidate_text") or "")
+        if text:
+            entry["text"] = text[:_NODE_TEXT_PREVIEW_CHARS]
+        if state.get("candidate_text"):
+            entry["note"] = "candidate pending user choice"
+        error = str(state.get("error") or "")
+        if error:
+            entry["error"] = error[:200]
+        nodes[node_id] = entry
+    return json.dumps(
+        {
+            "run_id": run.get("run_id"),
+            "status": run.get("status"),
+            "nodes": nodes,
+        },
+        ensure_ascii=False,
+    )
 
 
 class DesignerExecutionRail(DeepAgentRail):
@@ -85,7 +117,7 @@ class DesignerExecutionRail(DeepAgentRail):
         super().__init__()
         self._session_id = session_id
         self._spawner: Any = None
-        self._runs: set[asyncio.Task[Any]] = set()
+        self._agent: Any = None
         self.system_prompt_builder = None
         self._tool: LocalFunction | None = None
 
@@ -96,31 +128,42 @@ class DesignerExecutionRail(DeepAgentRail):
     def _build_tool(self) -> LocalFunction:
         spawner = self._spawner
 
-        def _on_run_done(task: asyncio.Task[Any]) -> None:
-            self._runs.discard(task)
-            if not task.cancelled() and task.exception() is not None:
-                logger.error(
-                    "[DesignerExecutionRail] canvas run crashed: session_id=%s",
-                    self._session_id,
-                    exc_info=task.exception(),
-                )
+        async def _run_background(task_id: str, inputs: dict[str, Any]) -> str:
+            node_id = str(inputs.get("node_id") or "").strip()
+            cascade = bool(inputs.get("cascade"))
+            node_ids = [node_id] if node_id else None
+            try:
+                run = await spawner.run_graph(node_ids=node_ids, cascade=cascade)
+            except RuntimeError as exc:
+                return f"执行被拒绝：{exc}"
+            return _run_summary(run)
 
         async def _run_graph(**kwargs: Any) -> str:
             node_id = str(kwargs.get("node_id") or "").strip()
             cascade = bool(kwargs.get("cascade"))
             if cascade and not node_id:
                 return "cascade requires node_id"
-            if spawner.is_running():
-                return "执行被拒绝：画布上已有执行在进行，等它结束后再触发。"
             mode = "单点重跑" if node_id and not cascade else (
                 "从该节点续跑" if node_id else "全量运行"
             )
-            task = asyncio.create_task(
-                spawner.run_graph(node_ids=[node_id] if node_id else None, cascade=cascade)
+            task_id = f"designer_run_graph_{node_id or 'full'}_{id(_run_graph):x}"
+            try:
+                # Async-tool contract (mirrors swarmflow()): launch on the
+                # harness's runtime, return immediately; the summary is
+                # injected back as a follow-up message on completion.
+                self._agent.async_tool_runtime.launch(
+                    task_id,
+                    lambda: _run_background(task_id, dict(kwargs)),
+                    tool_name=TOOL_NAME,
+                    description=f"画布执行（{mode}）",
+                )
+            except RuntimeError as exc:
+                return f"执行被拒绝：{exc}"
+            return (
+                f"已开始{mode}：执行在后台进行，进度实时推送到画布。"
+                "不要重复调用；执行结束后会收到包含各节点结果的运行摘要，"
+                "届时再向用户汇报。"
             )
-            self._runs.add(task)
-            task.add_done_callback(_on_run_done)
-            return f"已开始{mode}：执行在后台进行，进度实时推送到画布。不要重复调用。"
 
         card = ToolCard(
             name=TOOL_NAME,
@@ -129,7 +172,7 @@ class DesignerExecutionRail(DeepAgentRail):
                 "运行所有没有产出的节点；node_id=只重跑该节点（产出进候选，等用户"
                 "选择，下游不重跑）；node_id+cascade=true=从该节点起连同其下游一起"
                 "重跑（直接覆盖），上游保持现有产出。调用立即返回，执行在后台进行，"
-                "结果不会回传。"
+                "结束后自动收到运行摘要。须先征得用户同意。"
             ),
             input_params={
                 "type": "object",
@@ -159,6 +202,7 @@ class DesignerExecutionRail(DeepAgentRail):
             )
             return
         self._spawner = context.spawner
+        self._agent = agent
         self.system_prompt_builder = getattr(agent, "system_prompt_builder", None)
         self._tool = self._build_tool()
         agent.ability_manager.add_ability(self._tool.card, self._tool)
@@ -177,6 +221,7 @@ class DesignerExecutionRail(DeepAgentRail):
             self.system_prompt_builder.remove_section(SECTION_NAME)
         self._tool = None
         self._spawner = None
+        self._agent = None
         self.system_prompt_builder = None
 
     async def before_model_call(self, ctx: Any) -> None:

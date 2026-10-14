@@ -96,10 +96,6 @@ class StoreNodeSpawner:
         state = (result.get("node_states") or {}).get(node_id) or {}
         return str(state.get("candidate_text") or state.get("text") or state.get("error") or "")
 
-    def is_running(self) -> bool:
-        """Whether a trigger is already executing on this graph."""
-        return self._coordinator_provider().is_active()
-
     async def run_graph(
         self,
         *,
