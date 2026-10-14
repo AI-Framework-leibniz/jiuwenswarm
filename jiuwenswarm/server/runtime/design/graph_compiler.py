@@ -36,10 +36,14 @@ from pathlib import Path
 from typing import Any
 
 from jiuwenswarm.common.schema.designer_graph import (
+    NODE_TYPE_TEXT,
     DesignerExecutionGraph,
     node_agent_template,
+    node_pipeline,
+    node_role,
     node_uses_agent_runtime,
 )
+from jiuwenswarm.server.runtime.design.node_tools import NODE_OUTPUT_SCHEMA, ticket_line
 from jiuwenswarm.server.runtime.designer.handlers.common import path_from_uri
 
 _FROZEN_TEXT_MAX_CHARS = 20000
@@ -201,8 +205,7 @@ class GraphScriptCompiler:
 
     def __init__(self) -> None:
         # Ticket-line state (per compile call): set in compile() so every
-        # _prompt_expr call can open with the node ticket the manifest
-        # package's worker tools self-parse.
+        # _prompt_expr call can open with the node's shot ticket.
         self._run_id = ""
         self._graph_id = ""
 
@@ -228,10 +231,9 @@ class GraphScriptCompiler:
                 ancestors stay frozen at their current values. The user picks
                 where the refresh starts; upstream is never re-executed.
             run_id: The graph's lifelong run id; when set each agent() prompt
-                opens with the node ticket line the manifest-package worker
-                tools self-parse (``node_ticket: design:{graph}:{run}:{node}``
-                — the colleague's ticket model; the claw repo's only job is
-                writing this mapping).
+                opens with the shot ticket the member tools resolve
+                (``shot_ticket: design:{graph}:{run}:{node}``, see
+                ``design.node_tools``).
         """
         self._run_id = str(run_id or "")
         self._graph_id = str(graph.get("graph_id") or "")
@@ -273,6 +275,10 @@ class GraphScriptCompiler:
             ),
             "",
             "from swarmflow import agent, parallel",
+            "",
+            # Member receipt (output_ref) every AgentGroup member submits via
+            # structured_output; Python literal, not JSON (true/false/null).
+            f"NODE_OUTPUT_SCHEMA = {NODE_OUTPUT_SCHEMA!r}",
             "",
             "",
             "async def run(args):",
@@ -501,12 +507,21 @@ class GraphScriptCompiler:
 
         ``options.agent_template`` carries the node's AgentGroup member name
         (bare, SDD-0030 — the engine gate rejects "group/member" refs); the
-        engine resolves it against the design session's expert table.
+        engine resolves it against the design session's expert table. A
+        member call also requests the ``NODE_OUTPUT_SCHEMA`` receipt.
+
+        Raises:
+            ValueError: A text node with no pipeline — no member runs it.
         """
         version = self._node_version(node_id, run_outputs)
         model = json.dumps(str(node.get("type") or "text"), ensure_ascii=False)
         options = {"model": model}
         template_ref = str(node_agent_template(node) or "").strip()
+        if not template_ref and not node_pipeline(node) and node_role(node) == NODE_TYPE_TEXT:
+            raise ValueError(
+                f"text node {node_id!r} has no pipeline; no designer member runs "
+                "generic text nodes"
+            )
         if template_ref:
             options["agent_template"] = json.dumps(template_ref, ensure_ascii=False)
         # Keys AND values through json.dumps — uniform double quoting, the
@@ -519,7 +534,8 @@ class GraphScriptCompiler:
         return (
             f"{prompt_expr}, label={json.dumps(node_id, ensure_ascii=False)}, "
             f"phase={json.dumps(f'v{version}', ensure_ascii=False)}, "
-            f"options={{{options_expr}}}"
+            + ("schema=NODE_OUTPUT_SCHEMA, " if template_ref else "")
+            + f"options={{{options_expr}}}"
         )
 
     @staticmethod
@@ -604,9 +620,7 @@ class GraphScriptCompiler:
         nid = str(node.get("id") or "")
         ticket = ""
         if self._run_id:
-            ticket = (
-                f"node_ticket: design:{self._graph_id}:{self._run_id}:{nid}\n"
-            )
+            ticket = ticket_line(self._graph_id, self._run_id, nid) + "\n"
         base = json.dumps(ticket + _node_prompt(node), ensure_ascii=False)
         upstream_ids = [
             str(edge.get("source") or "")
