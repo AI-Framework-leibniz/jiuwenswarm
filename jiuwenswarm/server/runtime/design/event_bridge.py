@@ -127,12 +127,14 @@ class DesignEventBridge:
             # thinking "starting <label>" then the pipeline stage line — so
             # the node card shows what it is about to do.
             self._emit_start_activity(node_id)
+            self._persist_run()
             self._push(node_id)
         elif event.kind == ProgressKind.AGENT_COMPLETED and node_id:
             state = states.setdefault(node_id, _pending_state())
             state["status"] = "completed"
             state["completed_at"] = _now_ms()
             self._detach_current(node_id)
+            self._persist_run()
             self._push(node_id)
         elif event.kind == ProgressKind.AGENT_FAILED and node_id:
             state = states.setdefault(node_id, _pending_state())
@@ -145,6 +147,7 @@ class DesignEventBridge:
             if message and not state.get("error"):
                 state["error"] = message[:2000]
             self._detach_current(node_id)
+            self._persist_run()
             self._push(node_id)
         elif event.kind == ProgressKind.AGENT_ACTIVITY and node_id:
             # Live worker activity (agent-core SwarmflowActivityRail, one
@@ -225,7 +228,7 @@ class DesignEventBridge:
         tool: str = "",
         force: bool = False,
     ) -> None:
-        """apply + throttled publish via the preserved activity helpers."""
+        """apply + persist + throttled publish via the preserved activity helpers."""
         emit_run_activity(
             self._run,
             node_id,
@@ -235,6 +238,7 @@ class DesignEventBridge:
             on_update=self._on_update,
             force=force,
         )
+        self._persist_run()
 
     def _detach_current(self, node_id: str) -> None:
         current = self._run.setdefault("current_node_ids", [])
@@ -255,7 +259,12 @@ class DesignEventBridge:
         return node_id
 
     def _persist_run(self) -> None:
-        """Persist the run record after a mutation (per-node writeback path)."""
+        """Persist the run record after every mutation.
+
+        The canvas polls ``designer.run.get`` (a Store read) every 400ms while
+        a run is active; a pushed-but-unsaved state is overwritten by the
+        next poll (e.g. a node flashing running then back to pending).
+        """
         if self._store is None:
             return
         try:
