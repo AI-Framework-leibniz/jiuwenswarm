@@ -385,6 +385,8 @@ class DesignTeamBridge:
         # message instead of embedding a real node execution inside the
         # leader's turn (which would hold the chat stream hostage).
         context.spawner.conversation_round_active = True
+        # A user message ends any report-only round left by a finished run.
+        context.spawner.report_pending = False
         return _DesignRoundBindings(context, channel_id, session_id)
 
 

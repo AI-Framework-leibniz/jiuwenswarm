@@ -66,6 +66,18 @@ class StoreNodeSpawner:
         # Set while a leader conversation round is in flight (DesignTeamBridge
         # turn). Purely advisory state; see ``conversation_round_active``.
         self._conversation_round_active = False
+        # Set when a leader-triggered run finishes and its summary is fed
+        # back to the leader; cleared by the next user chat round. While set,
+        # the leader may only report: run/rebuild tools refuse.
+        self._report_pending = False
+
+    @property
+    def report_pending(self) -> bool:
+        return self._report_pending
+
+    @report_pending.setter
+    def report_pending(self, value: bool) -> None:
+        self._report_pending = bool(value)
 
     @property
     def conversation_round_active(self) -> bool:

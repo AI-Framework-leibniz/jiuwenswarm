@@ -153,6 +153,12 @@ class DesignerAuthoringRail(DeepAgentRail):
             if graph is None:
                 return "error: designer graph not found"
             context = get_design_context_registry().get(self._session_id)
+            if context is not None and context.spawner is not None and context.spawner.report_pending:
+                from jiuwenswarm.agents.harness.design.rails.designer_execution_rail import (
+                    REPORT_ONLY_REFUSAL,
+                )
+
+                return REPORT_ONLY_REFUSAL
             channel_id = (
                 context.channel_id if context is not None and context.channel_id else "web"
             )
