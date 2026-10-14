@@ -253,23 +253,13 @@ class RunCoordinator:
             run, on_update, store=self._store, single=single, graph=graph
         )
 
-        try:
-            script = self._compiler.compile(
-                graph,
-                run.get("node_states") or {},
-                node_ids=node_ids,
-                cascade=cascade,
-                run_id=run_id,
-            )
-        except ValueError as exc:
-            logger.warning("[design-run] compile rejected graph: run_id=%s err=%s", run_id, exc)
-            run["status"] = "failed"
-            run["current_node_ids"] = []
-            run["error"] = str(exc)[:2000]
-            self._store.save_run(run)
-            if on_update is not None:
-                on_update(dict(run))
-            return run
+        script = self._compiler.compile(
+            graph,
+            run.get("node_states") or {},
+            node_ids=node_ids,
+            cascade=cascade,
+            run_id=run_id,
+        )
         script_path = _write_script(run_id, script)
         # Compile observability (user request 2026-10-11): one line per
         # scheduled agent() call so the run log answers "did the edited
@@ -368,13 +358,15 @@ class RunCoordinator:
             # Worker-tool live activity (handler-level stage lines): resolved
             # by manifest tools through the design context like the result sink.
             context.node_activity_sink = bridge.node_activity_sink
-            # Member tools resolve their shot tickets against this trigger's
-            # graph / run / bridge (design.node_tools).
-            from jiuwenswarm.server.runtime.design.node_tools import NodeRunEnv
-
-            context.node_run_env = NodeRunEnv(
-                graph=graph, run=run, bridge=bridge, media_root=self.media_root
-            )
+            # Member tools (the designer bundle's tools/node_tools.py) resolve
+            # their shot tickets against this trigger's graph / run / bridge.
+            context.node_run_env = {
+                "graph": graph,
+                "run": run,
+                "bridge": bridge,
+                "media_root": self.media_root,
+                "generations": {},
+            }
         # Concurrency observability: keep the last trigger's backend alive on
         # the coordinator so STs / diagnostics can read max_in_flight (a
         # parallel wave compiles to engine parallel(); the backend sees the

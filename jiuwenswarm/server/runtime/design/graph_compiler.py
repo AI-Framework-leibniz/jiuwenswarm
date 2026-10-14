@@ -43,10 +43,32 @@ from jiuwenswarm.common.schema.designer_graph import (
     node_role,
     node_uses_agent_runtime,
 )
-from jiuwenswarm.server.runtime.design.node_tools import NODE_OUTPUT_SCHEMA, ticket_line
 from jiuwenswarm.server.runtime.designer.handlers.common import path_from_uri
 
 _FROZEN_TEXT_MAX_CHARS = 20000
+
+_ASSET_REF_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string"},
+        "uri": {"type": "string"},
+        "mime_type": {"type": "string"},
+        "label": {"type": "string"},
+    },
+    "required": ["kind", "uri"],
+}
+
+#: The receipt a member returns through ``structured_output``: the
+#: ``output_ref`` its ``submit_node_output`` call wrote.
+NODE_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "output_ref": _ASSET_REF_SCHEMA,
+        "output_refs": {"type": "array", "items": _ASSET_REF_SCHEMA},
+        "message": {"type": "string"},
+    },
+    "required": ["output_ref"],
+}
 _UPSTREAM_HEADER = "\n\n## Upstream node inputs\n"
 _NO_OUTPUT_PLACEHOLDER = "(Upstream node {node_id} has no output yet.)"
 _UPSTREAM_REFS_HEADER = "\nUpstream artifacts (reference these files by uri in media tools):"
@@ -232,8 +254,7 @@ class GraphScriptCompiler:
                 where the refresh starts; upstream is never re-executed.
             run_id: The graph's lifelong run id; when set each agent() prompt
                 opens with the shot ticket the member tools resolve
-                (``shot_ticket: design:{graph}:{run}:{node}``, see
-                ``design.node_tools``).
+                (``shot_ticket: design:{graph}:{run}:{node}``).
         """
         self._run_id = str(run_id or "")
         self._graph_id = str(graph.get("graph_id") or "")
@@ -620,7 +641,7 @@ class GraphScriptCompiler:
         nid = str(node.get("id") or "")
         ticket = ""
         if self._run_id:
-            ticket = ticket_line(self._graph_id, self._run_id, nid) + "\n"
+            ticket = f"shot_ticket: design:{self._graph_id}:{self._run_id}:{nid}\n"
         base = json.dumps(ticket + _node_prompt(node), ensure_ascii=False)
         upstream_ids = [
             str(edge.get("source") or "")

@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
+import importlib.util
+import sys
+from pathlib import Path
 from urllib.parse import unquote, urlparse
+
+_SHARED_MODULE = "designer_node_tools"
 
 
 def args_of(inputs):
@@ -31,3 +36,19 @@ def file_uri_ok(uri):
     if len(path) >= 3 and path[0] == "/" and path[2] == ":":
         return True
     return path.startswith("/") and len(path) > 1
+
+
+def node_tools():
+    """The group's shared implementation, ``<group>/tools/node_tools.py``.
+
+    Manifest tool files may not reach outside their member directory, so the
+    shared module is loaded by path, once per process.
+    """
+    module = sys.modules.get(_SHARED_MODULE)
+    if module is None:
+        path = Path(__file__).resolve().parents[3] / "tools" / "node_tools.py"
+        spec = importlib.util.spec_from_file_location(_SHARED_MODULE, path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules[_SHARED_MODULE] = module
+    return module

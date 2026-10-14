@@ -78,46 +78,37 @@ class MediaGuaranteeBackend:
         call_key: str | None = None,
     ) -> AgentResult:
         node_id = str(opts.get("label") or "")
+        member_call = schema_json is not None and bool(node_id)
         try:
             result = await self._inner.run(prompt, opts, schema_json, call_key=call_key)
-        except Exception:
-            if schema_json is None or not node_id:
+        except Exception as exc:
+            if not member_call:
                 raise
-            recovered = self._recover_member_call(node_id)
-            if recovered is None:
-                raise
-            return recovered
+            # The engine retries a raising call, and every retry re-runs the
+            # member's paid generation: a member call ends here instead.
+            receipt = self._receipt(node_id)
+            if receipt is not None:
+                return receipt
+            self._bridge.mark_node_failed(node_id, str(exc) or "member worker failed")
+            return AgentResult(text=None, skipped=True)
         try:
-            await self._enforce(opts, result, member_call=schema_json is not None)
+            await self._enforce(opts, result, member_call=member_call)
         except _MediaGuaranteeDeclined:
             return AgentResult(text=None, skipped=True)
+        if member_call:
+            # The receipt comes from the Store write, never the worker's own
+            # structured_output (a malformed one would trigger a retry).
+            return self._receipt(node_id) or result
         return result
 
-    def _recover_member_call(self, node_id: str) -> AgentResult | None:
-        """A member worker raised (no ``structured_output`` receipt).
-
-        * It already submitted this node's product: the Store write is the
-          source of truth, so the receipt is rebuilt from it instead of
-          re-running the worker (and its generation).
-        * Its one generate call failed: fail the node on the spot with that
-          reason (the old executor never re-ran a failed generation).
-
-        Anything else re-raises into the engine's retry loop.
-        """
+    def _receipt(self, node_id: str) -> AgentResult | None:
         produced = self._bridge.produced_for(node_id)
-        if produced is not None and produced.get("output_ref"):
-            logger.warning(
-                "[design-guarantee] member submitted but sent no receipt: node=%s", node_id
-            )
-            receipt: dict[str, Any] = {"output_ref": produced["output_ref"]}
-            if produced.get("output_refs"):
-                receipt["output_refs"] = produced["output_refs"]
-            return AgentResult(text=str(produced.get("text") or ""), structured=receipt)
-        failure = self._bridge.generation_failure_for(node_id)
-        if failure:
-            self._bridge.mark_node_failed(node_id, failure)
-            return AgentResult(text=None, skipped=True)
-        return None
+        if produced is None or not produced.get("output_ref"):
+            return None
+        receipt: dict[str, Any] = {"output_ref": produced["output_ref"]}
+        if produced.get("output_refs"):
+            receipt["output_refs"] = produced["output_refs"]
+        return AgentResult(text=str(produced.get("text") or ""), structured=receipt)
 
     # ------------------------------------------------------------------
     # the old host guarantees (node_agent post-turn block, 52469f4c)

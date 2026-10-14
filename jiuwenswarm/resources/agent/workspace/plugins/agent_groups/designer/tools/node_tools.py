@@ -1,31 +1,31 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""Host side of the designer AgentGroup member tools.
+"""Shared implementation of the designer members' node tools.
 
 Every canvas node runs once as its same-named member (``brief`` /
-``character`` / ``scene`` / ``storyboard`` / ``clip`` / ``compose``). The
-member package declares three tools whose bodies delegate here:
+``character`` / ``scene`` / ``storyboard`` / ``clip`` / ``compose``). Each
+member package declares three tools whose bodies delegate here (loaded by
+path through the member's ``support.load_node_tools``):
 
 * ``read_node_context`` — the node's context packet (node, upstream outputs,
   storyboard row, locks, continuity, reference bindings, prompt budget, user
   canvas edits);
 * ``generate_<member>`` — ONE generation through the node's registered
   handler (``designer.handlers``), with the member's prompt as the node's
-  focused prompt — the same backends the host media guarantee uses;
+  focused prompt;
 * ``submit_node_output`` — writes the generated product back to the run
   record through the trigger's design bridge.
 
-The compiled task prompt opens with ``shot_ticket: design:{graph}:{run}:{node}``
-(:func:`ticket_line`); the tools resolve it against the active trigger's
-:class:`NodeRunEnv`, which :class:`RunCoordinator` binds on the design context
-for the duration of a trigger. Every entry point returns a result dict and
-never raises (the member tools' contract).
+The task prompt carries ``shot_ticket: design:{graph}:{run}:{node}``; the
+tools resolve it against ``node_run_env`` (``graph`` / ``run`` / ``bridge`` /
+``media_root`` / ``generations``), which the run coordinator binds on the
+graph's design context for the duration of a trigger. Every entry point
+returns a result dict and never raises.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -60,47 +60,6 @@ _STAGE_BY_KIND = {
     "video": "calling video model",
 }
 
-_ASSET_REF_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "kind": {"type": "string"},
-        "uri": {"type": "string"},
-        "mime_type": {"type": "string"},
-        "label": {"type": "string"},
-    },
-    "required": ["kind", "uri"],
-}
-
-#: The member receipt the compiler requests through ``agent(schema=...)``:
-#: the worker ends by calling ``structured_output`` with the ``output_ref``
-#: ``submit_node_output`` returned.
-NODE_OUTPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "output_ref": _ASSET_REF_SCHEMA,
-        "output_refs": {"type": "array", "items": _ASSET_REF_SCHEMA},
-        "message": {"type": "string"},
-    },
-    "required": ["output_ref"],
-}
-
-
-def ticket_line(graph_id: str, run_id: str, node_id: str) -> str:
-    """The first line of a member's task prompt."""
-    return f"shot_ticket: design:{graph_id}:{run_id}:{node_id}"
-
-
-@dataclass
-class NodeRunEnv:
-    """One trigger's execution surface, shared by every member tool call."""
-
-    graph: dict[str, Any]
-    run: dict[str, Any]
-    bridge: Any
-    media_root: Path | None = None
-    #: node_id → the NodeResult of that node's generation in this trigger.
-    generations: dict[str, Any] = field(default_factory=dict)
-
 
 class _ToolError(Exception):
     def __init__(self, code: str) -> None:
@@ -108,7 +67,7 @@ class _ToolError(Exception):
         self.code = code
 
 
-def _resolve(shot_ticket: Any, member: str | None = None) -> tuple[NodeRunEnv, dict[str, Any]]:
+def _resolve(shot_ticket: Any, member: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     from jiuwenswarm.common.schema.designer_graph import node_agent_template
     from jiuwenswarm.server.runtime.design.context import get_design_context_registry
 
@@ -122,14 +81,14 @@ def _resolve(shot_ticket: Any, member: str | None = None) -> tuple[NodeRunEnv, d
     )
     context = get_design_context_registry().for_graph(graph_id)
     env = getattr(context, "node_run_env", None)
-    if not isinstance(env, NodeRunEnv):
+    if not isinstance(env, dict):
         raise _ToolError("no_active_run")
-    if str(env.run.get("run_id") or "") != run_id:
+    if str(env["run"].get("run_id") or "") != run_id:
         raise _ToolError("ticket_run_mismatch")
     node = next(
         (
             candidate
-            for candidate in env.graph.get("nodes") or []
+            for candidate in env["graph"].get("nodes") or []
             if isinstance(candidate, dict) and str(candidate.get("id") or "") == node_id
         ),
         None,
@@ -141,16 +100,16 @@ def _resolve(shot_ticket: Any, member: str | None = None) -> tuple[NodeRunEnv, d
     return env, node
 
 
-def _execution_context(env: NodeRunEnv, node_id: str) -> Any:
+def _execution_context(env: dict[str, Any], node_id: str) -> Any:
     from jiuwenswarm.server.runtime.designer.handlers.types import NodeExecutionContext
 
     return NodeExecutionContext(
-        graph=env.graph,
-        run_id=str(env.run.get("run_id") or ""),
+        graph=env["graph"],
+        run_id=str(env["run"].get("run_id") or ""),
         node_id=node_id,
-        run=env.run,
-        emit_activity=env.bridge.node_activity_sink(node_id),
-        media_dir=env.media_root,
+        run=env["run"],
+        emit_activity=env["bridge"].node_activity_sink(node_id),
+        media_dir=env["media_root"],
     )
 
 
@@ -188,13 +147,13 @@ async def read_node_context(shot_ticket: Any) -> dict[str, Any]:
         return {"error": f"context_read_failed: {exc}"}
 
 
-def _context_packet(env: NodeRunEnv, node: dict[str, Any]) -> dict[str, Any]:
+def _context_packet(env: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
     from jiuwenswarm.common.schema.designer_graph import node_config, node_pipeline
 
     node_id = str(node.get("id") or "")
     ctx = _execution_context(env, node_id)
     cfg = node_config(node)
-    meta = env.graph.get("metadata") if isinstance(env.graph.get("metadata"), dict) else {}
+    meta = env["graph"].get("metadata") if isinstance(env["graph"].get("metadata"), dict) else {}
     kind = _output_kind(node)
     pipeline = node_pipeline(node)
     approved_key = {"brief": "approved_brief", "storyboard": "approved_storyboard"}.get(pipeline)
@@ -210,8 +169,8 @@ def _context_packet(env: NodeRunEnv, node: dict[str, Any]) -> dict[str, Any]:
             "prompt": str(cfg.get("prompt") or ""),
         },
         "graph": {
-            "title": env.graph.get("title"),
-            "description": env.graph.get("description"),
+            "title": env["graph"].get("title"),
+            "description": env["graph"].get("description"),
         },
         "approved_text": approved or None,
         "upstream_outputs": _upstream_outputs(ctx, node),
@@ -399,10 +358,8 @@ async def generate_node_output(
         logger.warning(
             "[design-tools] generate failed: node=%s member=%s err=%s", node_id, member, exc
         )
-        message = f"{member} generation failed: {exc}"
-        env.bridge.record_generation_failure(node_id, message)
         return failure(f"generation_failed: {exc}")
-    env.generations[node_id] = result
+    env["generations"][node_id] = result
     primary = result.output_ref or {}
     return {
         "success": True,
@@ -414,7 +371,7 @@ async def generate_node_output(
 
 
 async def _run_handler(
-    env: NodeRunEnv,
+    env: dict[str, Any],
     node: dict[str, Any],
     injected: dict[str, Any],
     kind: str,
@@ -434,7 +391,7 @@ async def _run_handler(
     cfg.update(injected)
     node["config"] = cfg
     ctx = _execution_context(env, node_id)
-    emit = env.bridge.node_activity_sink(node_id)
+    emit = env["bridge"].node_activity_sink(node_id)
     if emit is not None:
         emit("stage", _STAGE_BY_KIND.get(kind, "generating"), "generate")
     try:
@@ -495,7 +452,7 @@ async def submit_node_output(
     except _ToolError as exc:
         return rejected(exc.code)
     node_id = str(node.get("id") or "")
-    generated = env.generations.get(node_id)
+    generated = env["generations"].get(node_id)
     if generated is None:
         return rejected("not_generated")
     produced_refs = [
@@ -528,7 +485,7 @@ async def submit_node_output(
     else:
         body = str(text or "").strip() or str(generated.message or "") or str(refs[0].get("label") or "")
     try:
-        env.bridge.on_node_result(
+        env["bridge"].on_node_result(
             node_id,
             {"text": body, "output_ref": refs[0], "output_refs": refs},
         )
@@ -552,10 +509,7 @@ def _read_text(ref: dict[str, Any]) -> str:
 
 __all__ = [
     "MEMBER_OUTPUT_KIND",
-    "NODE_OUTPUT_SCHEMA",
-    "NodeRunEnv",
     "generate_node_output",
     "read_node_context",
     "submit_node_output",
-    "ticket_line",
 ]

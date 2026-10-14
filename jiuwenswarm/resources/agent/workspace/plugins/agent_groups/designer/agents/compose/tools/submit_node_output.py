@@ -5,8 +5,7 @@ from typing import Any, AsyncIterator
 
 from openjiuwen.core.foundation.tool.base import Tool, ToolCard
 
-from jiuwenswarm.server.runtime.design.node_tools import submit_node_output
-from support import args_of, file_uri_ok, ticket_of
+from support import args_of, file_uri_ok, ticket_of, node_tools
 
 
 class SubmitNodeOutput(Tool):
@@ -47,7 +46,7 @@ class SubmitNodeOutput(Tool):
             extras = data.get("extra_uris") or []
             if not isinstance(extras, list) or any(not file_uri_ok(item) for item in extras if item):
                 return {"success": False, "status": "rejected", "output_ref": None, "error": "extra_uris_must_be_file_absolute"}
-            return await submit_node_output(
+            return await node_tools().submit_node_output(
                 ticket,
                 uri=uri,
                 extra_uris=[item for item in extras if item],

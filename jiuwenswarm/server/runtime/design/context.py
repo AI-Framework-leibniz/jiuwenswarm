@@ -180,8 +180,8 @@ class _DesignContext:
         # trigger executes; manifest-package worker tools submit through it).
         self.node_result_sink: Any = None
         # Active trigger's execution environment (graph / run / bridge) the
-        # designer member tools resolve their shot tickets against
-        # (``design.node_tools.NodeRunEnv``; same lifecycle as the sinks).
+        # designer member tools resolve their shot tickets against (same
+        # lifecycle as the sinks).
         self.node_run_env: Any = None
         # Active trigger's live-activity sink (same lifecycle): worker tools
         # push "calling image model" style stage lines through it so the node

@@ -5,8 +5,7 @@ from typing import Any, AsyncIterator
 
 from openjiuwen.core.foundation.tool.base import Tool, ToolCard
 
-from jiuwenswarm.server.runtime.design.node_tools import generate_node_output
-from support import args_of, ticket_of
+from support import args_of, ticket_of, node_tools
 
 
 class GenerateStoryboard(Tool):
@@ -56,7 +55,7 @@ class GenerateStoryboard(Tool):
             if not prompt.strip():
                 return self._failure(prompt, "missing_prompt")
             self._used = True
-            return await generate_node_output(
+            return await node_tools().generate_node_output(
                 ticket,
                 member="storyboard",
                 prompt=prompt,

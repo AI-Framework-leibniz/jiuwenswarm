@@ -5,8 +5,7 @@ from typing import Any, AsyncIterator
 
 from openjiuwen.core.foundation.tool.base import Tool, ToolCard
 
-from jiuwenswarm.server.runtime.design.node_tools import read_node_context
-from support import args_of, ticket_of
+from support import args_of, ticket_of, node_tools
 
 
 class ReadNodeContext(Tool):
@@ -36,7 +35,7 @@ class ReadNodeContext(Tool):
             ticket = ticket_of(args_of(inputs))
             if ticket is None:
                 return {"error": "missing_shot_ticket"}
-            return await read_node_context(ticket)
+            return await node_tools().read_node_context(ticket)
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 

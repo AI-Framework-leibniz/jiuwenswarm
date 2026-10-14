@@ -65,10 +65,9 @@ class DesignEventBridge:
         self._single = single
         # Node metadata (label/pipeline) for the node-opening activity pair.
         self._graph = graph if isinstance(graph, dict) else {}
-        # This trigger's node results / member generation failures, keyed by
-        # node id (the media guarantee reads both after a worker call).
+        # This trigger's node results, keyed by node id (the media guarantee
+        # builds a member's receipt from it).
         self._produced: dict[str, dict[str, Any]] = {}
-        self._generation_failures: dict[str, str] = {}
 
     @property
     def single(self) -> bool:
@@ -85,9 +84,7 @@ class DesignEventBridge:
         ))
         state["status"] = "completed"
         state["completed_at"] = _now_ms()
-        state.pop("error", None)
         self._produced[node_id] = dict(produced)
-        self._generation_failures.pop(node_id, None)
         text = str(produced.get("text") or "")
         if self._single:
             # Revision candidate: the node's current output stays untouched
@@ -116,13 +113,6 @@ class DesignEventBridge:
         """The result a node wrote during THIS trigger, or None."""
         produced = self._produced.get(node_id)
         return dict(produced) if produced is not None else None
-
-    def record_generation_failure(self, node_id: str, error: str) -> None:
-        """A member's generate call failed (the node has no product)."""
-        self._generation_failures[node_id] = str(error or "generation failed")
-
-    def generation_failure_for(self, node_id: str) -> str | None:
-        return self._generation_failures.get(node_id)
 
     # ------------------------------------------------------------------
     # engine progress events
