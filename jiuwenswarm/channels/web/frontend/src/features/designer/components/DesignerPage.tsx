@@ -9,6 +9,7 @@ import {
 import { useDesignerChatStore } from '../designerChatStore';
 import { bindDesignerRuntime, useDesignerRunStore } from '../designerRunStore';
 import { isDesignerPreviewGraph } from '../designerBootstrapGraph';
+import { useDesignerGraphEditingLocked } from '../useDesignerGraphEditingLocked';
 import { useDesignerStore } from '../designerStore';
 import { useDesignerUiStore } from '../designerUiStore';
 import { DesignerMaterialViewer } from '../DesignerMaterialViewer';
@@ -225,6 +226,7 @@ export function DesignerPage({
   );
   const canvasInteractive =
     showCanvas && !bootstrapInProgress && !isDesignerPreviewGraph(domainGraph);
+  const editingLocked = useDesignerGraphEditingLocked();
 
   return (
     <div className="designer-page app-section" data-testid="designer-page">
@@ -271,11 +273,11 @@ export function DesignerPage({
             </button>
             <button
               type="button"
-              className="designer-page__toolbar-icon-btn"
+              className={`designer-page__toolbar-icon-btn${editingLocked ? ' designer-edit-control' : ''}`}
               aria-label={t('designer.toolbar.layoutNodes')}
               title={t('designer.toolbar.layoutNodes')}
               data-testid="designer-page-layout"
-              disabled={!canvasInteractive || !domainGraph?.nodes.length}
+              disabled={!canvasInteractive || editingLocked || !domainGraph?.nodes.length}
               onClick={requestAutoLayout}
             >
               <LayoutPanelTop size={18} aria-hidden />
