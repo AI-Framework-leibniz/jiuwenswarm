@@ -2,7 +2,7 @@ import { Download, Replace, ScanSearch, Trash } from 'lucide-react';
 import { useCallback, useRef, useState, type ChangeEvent, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { downloadPreviewFile } from '../../../../components/ui/FilePreviewPanel/filePreviewShared';
-import { collectDesignerMaterials } from '../../designerMaterials';
+import { collectDesignerMaterials, previewMaterialForNode } from '../../designerMaterials';
 import {
   canReplaceUploadedNode,
   storeDesignerUpload,
@@ -31,27 +31,23 @@ export function DesignerNodeActionBar({ nodeId, nodeType }: DesignerNodeActionBa
   const canReplace = canReplaceUploadedNode(domainGraph?.nodes.find((node) => node.id === nodeId));
   const replaceInputRef = useRef<HTMLInputElement>(null);
   const [replacing, setReplacing] = useState(false);
-  const inspectNode = useDesignerUiStore((state) => state.inspectNode);
+  const openViewer = useDesignerUiStore((state) => state.openViewer);
   const requestDeleteNodes = useDesignerUiStore((state) => state.requestDeleteNodes);
   const previewLabel = isTextLikeNodeType(nodeType)
     ? t('designer.nodeActions.previewOrEdit')
     : t('designer.nodeActions.preview');
 
   const materials = collectDesignerMaterials(domainGraph, run);
-  const material =
-    materials.find((item) => item.id.startsWith(`${nodeId}:`)) ??
-    materials.find((item) => item.nodeId === nodeId);
-  const hasOutput = Boolean(
-    material && !material.placeholder && (material.previewUrl || material.textUrl),
-  );
+  const material = previewMaterialForNode(materials, nodeId, nodeType);
+  const hasOutput = Boolean(material);
 
   const onPreview = useCallback(
     (event: MouseEvent) => {
       event.stopPropagation();
-      if (!hasOutput) return;
-      inspectNode(nodeId);
+      if (!hasOutput || !material) return;
+      openViewer(material.id);
     },
-    [hasOutput, inspectNode, nodeId],
+    [hasOutput, material, openViewer],
   );
 
   const onDownload = useCallback(
