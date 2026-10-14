@@ -8,7 +8,6 @@ import {
 import { Trash2 } from 'lucide-react';
 import { useCallback, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useDesignerGraphEditingLocked } from '../../useDesignerGraphEditingLocked';
 import { useDesignerStore } from '../../designerStore';
 import { useDesignerUiStore } from '../../designerUiStore';
 
@@ -28,7 +27,6 @@ export function DesignerEdge({
 }: EdgeProps<DesignerEdgeType>) {
   const { t } = useTranslation();
   const removeEdges = useDesignerStore((state) => state.removeEdges);
-  const editingLocked = useDesignerGraphEditingLocked();
   const edgesVisible = useDesignerUiStore((state) => state.edgesVisible);
   const [edgePath, centerX, centerY] = getBezierPath({
     sourceX,
@@ -43,10 +41,9 @@ export function DesignerEdge({
     (event: MouseEvent) => {
       event.stopPropagation();
       event.preventDefault();
-      if (editingLocked) return;
       removeEdges([id]);
     },
-    [editingLocked, id, removeEdges],
+    [id, removeEdges],
   );
 
   if (!edgesVisible) {
@@ -80,11 +77,10 @@ export function DesignerEdge({
         <div className="designer-edge-toolbar" role="group">
           <button
             type="button"
-            className={`designer-edge-delete${editingLocked ? ' designer-edit-control' : ''}`}
+            className="designer-edge-delete"
             aria-label={t('designer.edge.delete')}
             title={t('designer.edge.delete')}
             data-testid="designer-edge-delete"
-            disabled={editingLocked}
             onClick={onDelete}
             onMouseDown={(event) => event.stopPropagation()}
           >
