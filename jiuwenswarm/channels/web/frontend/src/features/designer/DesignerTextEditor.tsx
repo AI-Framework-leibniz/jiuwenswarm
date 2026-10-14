@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import { MarkdownRenderer } from '../../components/MarkdownRenderer';
 import { DesignerStoryboardTable, DesignerStoryboardTableDraft } from './DesignerStoryboardTable';
 import { saveDesignerTextFile } from './designerAssetUrl';
 import {
@@ -226,9 +227,11 @@ export function DesignerTextEditor({
           layout={compact ? 'node' : 'full'}
         />
       ) : (
-        <pre className="designer-text-editor__text" data-testid="designer-text-preview">
-          {text}
-        </pre>
+        <MarkdownRenderer
+          content={text}
+          className="designer-text-editor__text chat-markdown"
+          testId="designer-text-preview"
+        />
       )}
       {error ? (
         <p className="designer-text-editor__error" data-testid="designer-text-error">

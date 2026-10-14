@@ -1758,12 +1758,9 @@
   overflow: hidden;
   color: var(--color-text-primary);
   font-size: 11px;
-  line-height: 1.4;
+  line-height: 1.45;
   text-align: left;
-  white-space: pre-wrap;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 6;
+  white-space: normal;
 }
 
 .designer-node:has(.designer-node__fit-content) .designer-node__body {
@@ -1785,17 +1782,36 @@
 }
 
 .designer-node__fit-content--text {
-  width: max-content;
+  flex: 0 0 256px;
+  width: 256px;
+  min-width: 256px;
   max-width: 256px;
 }
 
 .designer-node:has(.designer-node__fit-content) .designer-node__text-preview {
   display: block;
-  width: max-content;
-  max-width: 256px;
   max-height: none;
   overflow: visible;
-  -webkit-line-clamp: unset;
+}
+
+.designer-node__text-preview.chat-markdown :where(h1, h2, h3, h4, h5, h6) {
+  margin: 0.35em 0 0.15em;
+  font-size: 1.05em;
+  line-height: 1.3;
+}
+
+.designer-node__text-preview.chat-markdown :where(ul, ol) {
+  margin: 0.2em 0;
+  padding-left: 1.15em;
+}
+
+.designer-node__text-preview.chat-markdown :where(img) {
+  max-width: 100%;
+  height: auto;
+}
+
+.designer-node__text-preview.chat-markdown .chat-markdown-table-wrap > table {
+  min-width: 0;
 }
 
 .designer-node__fit-content--table {
@@ -3090,6 +3106,11 @@ textarea.designer-node-toolbar__param-input {
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.designer-text-editor__text.chat-markdown {
+  white-space: normal;
+  font-family: inherit;
 }
 
 .designer-text-editor__error {

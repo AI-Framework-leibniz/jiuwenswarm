@@ -34,6 +34,7 @@ import {
 } from '../../designerCanvasNodes';
 import { isDesignerPreviewGraph } from '../../designerBootstrapGraph';
 import { isMediaNodeType, supportsNodeToolbar } from '../../mediaNodeConfig';
+import { MarkdownRenderer } from '../../../../components/MarkdownRenderer';
 import { DesignerStoryboardTable } from '../../DesignerStoryboardTable';
 import { DesignerActivityPeek } from '../DesignerActivityPeek';
 import { DesignerNodeActionBar } from '../controls/DesignerNodeActionBar';
@@ -347,9 +348,11 @@ function TextPreviewBody({ nodeId, nodeType }: { nodeId: string; nodeType: strin
   if (!text) return <PlaceholderBody nodeType={nodeType} />;
   return (
     <DocumentFitBody nodeId={nodeId} contentKey={text}>
-      <p className="designer-node__text-preview" data-testid="designer-node-text-preview">
-        {text}
-      </p>
+      <MarkdownRenderer
+        content={text}
+        className="designer-node__text-preview chat-markdown"
+        testId="designer-node-text-preview"
+      />
     </DocumentFitBody>
   );
 }
