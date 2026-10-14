@@ -94,7 +94,9 @@ export function DesignerChatPanel() {
   const bootstrapPhase = useDesignerChatStore((state) => state.bootstrapPhase);
   const domainGraph = useDesignerStore((state) => state.domainGraph);
   const selectedNodeId = useDesignerStore((state) => state.selectedNodeId);
+  const chatSidebarOpen = useDesignerUiStore((state) => state.chatSidebarOpen);
   const toggleChatSidebar = useDesignerUiStore((state) => state.toggleChatSidebar);
+  const panelRef = useRef<HTMLElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState('');
@@ -121,6 +123,11 @@ export function DesignerChatPanel() {
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [messages]);
+
+  useEffect(() => {
+    const panel = panelRef.current as (HTMLElement & { inert: boolean }) | null;
+    if (panel) panel.inert = !chatSidebarOpen;
+  }, [chatSidebarOpen]);
 
   const leaderPeek = useDesignerRunStore((state) => selectLeaderPeek(state));
   useEffect(() => {
@@ -254,10 +261,14 @@ export function DesignerChatPanel() {
 
   return (
     <aside
-      className="designer-chat-panel designer-chat-panel--docked"
+      ref={panelRef}
+      className={`designer-chat-panel designer-chat-panel--docked${chatSidebarOpen ? '' : ' is-collapsed'}`}
       aria-label={t('designer.sidebar.conversation')}
+      aria-hidden={chatSidebarOpen ? undefined : true}
       data-testid="designer-chat-panel"
+      data-collapsed={chatSidebarOpen ? 'false' : 'true'}
     >
+      <div className="designer-chat-panel__inner">
       <div className="designer-chat-panel__header">
         <h2 className="designer-chat-panel__title" data-testid="designer-chat-panel-title">
           {t('designer.sidebar.conversation')}
@@ -371,6 +382,7 @@ export function DesignerChatPanel() {
             </button>
           </div>
         </div>
+      </div>
       </div>
     </aside>
   );

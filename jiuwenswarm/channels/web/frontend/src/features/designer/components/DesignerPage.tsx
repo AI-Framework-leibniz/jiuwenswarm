@@ -346,7 +346,7 @@ export function DesignerPage({
       </div>
 
       {assetsSidebarOpen ? <DesignerAssetsSidebar /> : null}
-      {chatSidebarOpen ? <DesignerChatPanel /> : null}
+      <DesignerChatPanel />
 
       {viewerOpen ? (
         <DesignerMaterialViewer
