@@ -58,10 +58,12 @@ function PlaceholderBody({ nodeType }: { nodeType: string }) {
 function NodeOutputFrame({
   nodeId,
   running,
+  shimmer = false,
   children,
 }: {
   nodeId: string;
   running: boolean;
+  shimmer?: boolean;
   children: ReactNode;
 }) {
   const activity = useDesignerRunStore((state) => {
@@ -77,8 +79,12 @@ function NodeOutputFrame({
     <span className="designer-node__output-frame">
       {children}
       {running ? (
-        <span className="designer-node__running-overlay" data-testid="designer-node-running">
-          <Loader2 className="designer-node__running-icon" size={18} aria-hidden />
+        <span
+          className={`designer-node__running-overlay${shimmer ? ' designer-node__running-overlay--shimmer' : ''}`}
+          data-testid="designer-node-running"
+          data-variant={shimmer ? 'shimmer' : 'spinner'}
+        >
+          {shimmer ? null : <Loader2 className="designer-node__running-icon" size={18} aria-hidden />}
           <DesignerActivityPeek state={activity} testId="designer-node-activity" />
         </span>
       ) : null}
@@ -129,6 +135,7 @@ function DesignerNodeShell({
   selected = false,
   resolutionLabel = null,
   toolbar = null,
+  generatingShimmer = false,
 }: {
   nodeId: string;
   label: string;
@@ -140,6 +147,8 @@ function DesignerNodeShell({
   /** Pixel size label for image/video content, e.g. "1920×1080". */
   resolutionLabel?: string | null;
   toolbar?: ReactNode;
+  /** Image and video generation replaces the spinner with a scrolling fill. */
+  generatingShimmer?: boolean;
 }) {
   const { t } = useTranslation();
   const status = useDesignerRunStore(
@@ -165,7 +174,7 @@ function DesignerNodeShell({
 
   return (
     <div
-      className={`designer-node${media ? ' designer-node--media' : ''}${showMediaFill ? ' designer-node--media-filled' : ''}${selected ? ' is-selected' : ''}${statusClass} group`}
+      className={`designer-node${media ? ' designer-node--media' : ''}${showMediaFill ? ' designer-node--media-filled' : ''}${generatingShimmer ? ' is-generating-shimmer' : ''}${selected ? ' is-selected' : ''}${statusClass} group`}
       data-testid="designer-node"
       data-selected={selected ? 'true' : 'false'}
       data-status={status}
@@ -471,6 +480,14 @@ export function DesignerMediaNode({ id, data, selected }: NodeProps<DesignerFlow
     );
   }
 
+  const generatingShimmer =
+    status === DESIGNER_NODE_STATUS_RUNNING
+    && (
+      nodeType === DESIGNER_NODE_TYPE_IMAGE
+      || nodeType === DESIGNER_NODE_TYPE_VIDEO
+      || nodeType === DESIGNER_NODE_TYPE_AUDIO
+    );
+
   const toolbar = supportsNodeToolbar(nodeType) ? (
     <NodeToolbar
       isVisible={selected}
@@ -496,8 +513,13 @@ export function DesignerMediaNode({ id, data, selected }: NodeProps<DesignerFlow
           ? resolutionLabel
           : null
       }
+      generatingShimmer={generatingShimmer}
       body={
-        <NodeOutputFrame nodeId={id} running={status === DESIGNER_NODE_STATUS_RUNNING}>
+        <NodeOutputFrame
+          nodeId={id}
+          running={status === DESIGNER_NODE_STATUS_RUNNING}
+          shimmer={generatingShimmer}
+        >
           {inner}
         </NodeOutputFrame>
       }
