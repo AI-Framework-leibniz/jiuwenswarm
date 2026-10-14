@@ -1,0 +1,46 @@
+{
+  "package_type": "agent_template",
+  "name": "music",
+  "display_name": {
+    "zh": "配乐师",
+    "en": "Music Composer"
+  },
+  "description": "按成片的时长和情绪制作配乐，并交回音频产物。",
+  "persona": {
+    "dir": "persona"
+  },
+  "tools": [
+    {
+      "file": "tools/read_node_context.py",
+      "class": "ReadNodeContext"
+    },
+    {
+      "file": "tools/generate_music.py",
+      "class": "GenerateMusic"
+    },
+    {
+      "file": "tools/submit_node_output.py",
+      "class": "SubmitNodeOutput"
+    }
+  ],
+  "rails": [
+    {
+      "file": "rails/node_guard.py",
+      "class": "NodeGuardRail"
+    }
+  ],
+  "skills": [
+    {
+      "dir": "skills/music",
+      "mode": "all"
+    },
+    {
+      "dir": "skills/audio_bed",
+      "mode": "all"
+    }
+  ],
+  "metadata": {
+    "node_type": "music",
+    "output_kind": "audio"
+  }
+}
