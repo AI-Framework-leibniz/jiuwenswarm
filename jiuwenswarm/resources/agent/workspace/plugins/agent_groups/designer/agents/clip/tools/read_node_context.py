@@ -5,6 +5,7 @@ from typing import Any, AsyncIterator
 
 from openjiuwen.core.foundation.tool.base import Tool, ToolCard
 
+from jiuwenswarm.server.runtime.design.node_tools import read_node_context
 from support import args_of, ticket_of
 
 
@@ -16,7 +17,10 @@ class ReadNodeContext(Tool):
             ToolCard(
                 id="read_node_context",
                 name="read_node_context",
-                description="用整段票据读取这个节点本次要看的上下文。不要拆开票据。",
+                description=(
+                    "用整段票据读取这个节点本次要看的上下文：节点设定、上游产物、分镜行、锁定项、"
+                    "连续性、参考图绑定、提示词上限和用户画布编辑。不要拆开票据。"
+                ),
                 input_params={
                     "type": "object",
                     "properties": {"shot_ticket": {"type": "string"}},
@@ -32,15 +36,7 @@ class ReadNodeContext(Tool):
             ticket = ticket_of(args_of(inputs))
             if ticket is None:
                 return {"error": "missing_shot_ticket"}
-            return {
-                "storyboard_row": None,
-                "locks": {},
-                "continuity": {},
-                "reference_bindings": [],
-                "prompt_limit": None,
-                "user_canvas_edits": [],
-                "error": "context_resolver_unbound",
-            }
+            return await read_node_context(ticket)
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 

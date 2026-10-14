@@ -5,18 +5,19 @@ from typing import Any, AsyncIterator
 
 from openjiuwen.core.foundation.tool.base import Tool, ToolCard
 
+from jiuwenswarm.server.runtime.design.node_tools import submit_node_output
 from support import args_of, file_uri_ok, ticket_of
 
 
 class SubmitNodeOutput(Tool):
-    """Accept a file URI and report that the graph writer is not bound yet."""
+    """Write the file this node generated back to the execution graph."""
 
     def __init__(self) -> None:
         super().__init__(
             ToolCard(
                 id="submit_node_output",
                 name="submit_node_output",
-                description="把产物写回执行图。uri 必须是 file:// 绝对路径。",
+                description="把本节点生成的产物写回执行图。uri 必须是生成工具返回的 file:// 绝对路径。",
                 input_params={
                     "type": "object",
                     "properties": {
@@ -37,7 +38,8 @@ class SubmitNodeOutput(Tool):
         del kwargs
         try:
             data = args_of(inputs)
-            if ticket_of(data) is None:
+            ticket = ticket_of(data)
+            if ticket is None:
                 return {"success": False, "status": "rejected", "output_ref": None, "error": "missing_shot_ticket"}
             uri = data.get("uri")
             if uri is not None and not file_uri_ok(uri):
@@ -45,7 +47,13 @@ class SubmitNodeOutput(Tool):
             extras = data.get("extra_uris") or []
             if not isinstance(extras, list) or any(not file_uri_ok(item) for item in extras if item):
                 return {"success": False, "status": "rejected", "output_ref": None, "error": "extra_uris_must_be_file_absolute"}
-            return {"success": False, "status": "unbound", "output_ref": None, "error": "graph_writer_unbound"}
+            return await submit_node_output(
+                ticket,
+                uri=uri,
+                extra_uris=[item for item in extras if item],
+                text=data.get("text") if isinstance(data.get("text"), str) else "",
+                label=data.get("label") if isinstance(data.get("label"), str) else "",
+            )
         except Exception as exc:  # noqa: BLE001
             return {"success": False, "status": "rejected", "output_ref": None, "error": str(exc)}
 
