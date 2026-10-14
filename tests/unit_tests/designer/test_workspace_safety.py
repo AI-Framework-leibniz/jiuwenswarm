@@ -135,6 +135,31 @@ def test_get_design_workspace_returns_only_the_requested_session(monkeypatch):
     assert [item["session_id"] for item in payload["sessions"]] == ["s1", "s2"]
 
 
+def test_design_workspace_messages_keep_leader_finals(monkeypatch):
+    records = [
+        {"id": "r1:user", "role": "user", "content": "make a clip", "timestamp": 1.0},
+        {"id": "r1:assistant", "role": "assistant", "content": "on it", "timestamp": 2.0},
+        {"id": "r1:assistant", "role": "leader", "content": "", "timestamp": 2.5},
+        {"id": "r1:assistant", "role": "leader", "content": "graph ready", "timestamp": 3.0},
+        {"id": "r1:assistant", "role": "teammate", "content": "member note", "timestamp": 3.5},
+        {"id": "r1:assistant", "role": "leader", "content": "run failed", "timestamp": 4.0},
+    ]
+    monkeypatch.setattr(
+        "jiuwenswarm.server.runtime.session.session_history.load_history_records",
+        lambda session_id: records,
+    )
+
+    messages = designer_adapter._design_workspace_messages("design_session")
+
+    assert [(m["role"], m["content"]) for m in messages] == [
+        ("user", "make a clip"),
+        ("assistant", "on it"),
+        ("assistant", "graph ready"),
+        ("assistant", "run failed"),
+    ]
+    assert len({m["id"] for m in messages}) == len(messages)
+
+
 def test_default_project_can_host_a_design_canvas(monkeypatch):
     sessions = [
         {

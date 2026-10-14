@@ -379,22 +379,33 @@ def _stamp_canvas_title(graph: dict[str, Any], prompt: str) -> str:
 def _design_workspace_messages(session_id: str) -> list[dict[str, Any]]:
     """Chat history for one design session.
 
-    Leader turns are standard ``chat.send(mode='team.design')`` rounds, so
-    every user / assistant record of the session belongs to the canvas chat.
+    Leader turns are standard ``chat.send(mode='team.design')`` rounds: the
+    leader's own finals are persisted with role ``leader`` and belong to the
+    canvas chat like any assistant reply. Teammate output stays off the main
+    thread, as in work/code team mode. Records of one turn share the id
+    ``<request_id>:<role>``, so repeats get a suffix to stay addressable.
     """
     from jiuwenswarm.server.runtime.session.session_history import load_history_records
 
     messages: list[dict[str, Any]] = []
+    seen_ids: dict[str, int] = {}
     for record in load_history_records(session_id):
         role = str(record.get("role") or "")
+        if role == "leader":
+            role = "assistant"
         if role not in {"user", "assistant"}:
             continue
         content = str(record.get("content") or "")
         if not content:
             continue
+        message_id = str(record.get("id") or uuid.uuid4())
+        repeat = seen_ids.get(message_id, 0)
+        seen_ids[message_id] = repeat + 1
+        if repeat:
+            message_id = f"{message_id}#{repeat}"
         messages.append(
             {
-                "id": str(record.get("id") or uuid.uuid4()),
+                "id": message_id,
                 "role": role,
                 "content": content,
                 "kind": str(record.get("design_kind") or (
