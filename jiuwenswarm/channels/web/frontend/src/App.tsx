@@ -42,6 +42,10 @@ import { DesignerLanding } from './features/designer/components/DesignerLanding'
 import { designerWorkspaceClient } from './features/designer/designerGraphClient';
 import { useDesignerStore } from './features/designer/designerStore';
 import { useDesignerChatStore } from './features/designer/designerChatStore';
+import {
+  applyCreatedDesignWorkspace,
+  resolveDesignCreateProjectId,
+} from './features/designer/designerCreate';
 import { mediaItemsToBootstrapReferences } from './features/designer/designerReferences';
 import type { CodeReviewTarget } from './features/code-mode/types';
 
@@ -109,6 +113,7 @@ import {
   useHarnessStore,
   usePlanStore,
   useWorkspaceStore,
+  normalizeDesignProjectId,
   useCronStore,
   useSubagentStore,
   usePersonalContextStore,
@@ -632,11 +637,15 @@ function AppContent({
       sessionIdRef.current = NEW_CONVERSATION_ID;
       setSessionId(NEW_CONVERSATION_ID);
       setActiveNav('chat');
+      const designProjectId = normalizeDesignProjectId(route.projectId);
       void useWorkspaceStore.getState().setWorkMode('design').then(() => {
         const project = useWorkspaceStore.getState().projects.find(
-          (item) => item.project_id === route.projectId,
+          (item) => item.project_id === designProjectId,
         );
-        useWorkspaceStore.getState().setSelectedProject(project ?? null);
+        // Default design project is a sidebar mount, not a selected directory.
+        useWorkspaceStore.getState().setSelectedProject(
+          project && !project.is_default ? project : null,
+        );
       });
       setConversationSidebarCollapsed(true);
       setTeamAreaExpanded(false);
@@ -2981,49 +2990,47 @@ function AppContent({
             window.alert(converted.error);
             return;
           }
+          const bindProjectId = resolveDesignCreateProjectId();
           const workspace = await designerWorkspaceClient.create({
             prompt: messageContent,
             createToken: crypto.randomUUID(),
             references: converted.refs,
+            ...(bindProjectId ? { projectId: bindProjectId } : {}),
           });
-          const createdProjectId = workspace.project.project_id;
-          const createdSessionId = workspace.session.session_id;
           useDesignerStore.getState().applyGraph(workspace.graph);
           useDesignerChatStore.getState().replaceMessages(
             workspace.graph.graph_id,
             workspace.messages,
           );
+          const created = await applyCreatedDesignWorkspace(workspace, {
+            titleFallback: messageContent.slice(0, 80),
+          });
           // Seed the shared chat store (work-mode rendering) so the panel
           // shows the user bubble and thinking state while the first leader
           // round streams over the standard chat.send(team.design) pipeline.
-          useChatStore.getState().ensureRuntime(createdSessionId);
-          useChatStore.getState().addMessage(createdSessionId, {
+          useChatStore.getState().ensureRuntime(created.sessionId);
+          useChatStore.getState().addMessage(created.sessionId, {
             id: `designer-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             role: 'user',
             content: messageContent,
             timestamp: new Date().toISOString(),
           });
-          useChatStore.getState().setProcessing(createdSessionId, true);
-          useChatStore.getState().setThinking(createdSessionId, true);
-          const store = useWorkspaceStore.getState();
-          if (!store.expandedProjectIds[createdProjectId]) {
-            store.toggleProjectExpanded(createdProjectId);
-          }
-          void store.loadProjects();
+          useChatStore.getState().setProcessing(created.sessionId, true);
+          useChatStore.getState().setThinking(created.sessionId, true);
           navigate({
             kind: 'design-project',
-            projectId: createdProjectId,
-            sessionId: createdSessionId,
+            projectId: created.projectId,
+            sessionId: created.sessionId,
           });
           webClient
             .request('chat.send', {
-              session_id: createdSessionId,
+              session_id: created.sessionId,
               query: messageContent,
               mode: 'team.design',
             })
             .catch(() => {
-              useChatStore.getState().setProcessing(createdSessionId, false);
-              useChatStore.getState().setThinking(createdSessionId, false);
+              useChatStore.getState().setProcessing(created.sessionId, false);
+              useChatStore.getState().setThinking(created.sessionId, false);
             });
         } catch (error) {
           const code = error instanceof Error ? error.message : '';
@@ -3603,7 +3610,11 @@ function AppContent({
   }, [navigate, setSelectedProject]);
 
   const handleDesignWorkspaceCreated = useCallback((projectId: string, createdSessionId: string) => {
-    navigate({ kind: 'design-project', projectId, sessionId: createdSessionId });
+    navigate({
+      kind: 'design-project',
+      projectId: normalizeDesignProjectId(projectId),
+      sessionId: createdSessionId,
+    });
   }, [navigate]);
 
   const handleProjectRemoved = useCallback((projectId: string, removedWorkMode: WorkMode) => {
@@ -3900,7 +3911,7 @@ const showWorkspaceDivider = effectiveTeamAreaExpanded && !showConversationNotFo
               {workspaceWorkMode === 'design' && route.kind === 'design-project' ? (
                 route.sessionId ? (
                   <DesignerPage
-                    projectId={route.projectId}
+                    projectId={normalizeDesignProjectId(route.projectId)}
                     sessionId={route.sessionId}
                     sidebarCollapsed={conversationSidebarCollapsed}
                     onToggleSidebarCollapse={() =>
@@ -3908,7 +3919,11 @@ const showWorkspaceDivider = effectiveTeamAreaExpanded && !showConversationNotFo
                     }
                     onOpenSession={(nextProjectId, nextSessionId, options) => {
                       navigate(
-                        { kind: 'design-project', projectId: nextProjectId, sessionId: nextSessionId },
+                        {
+                          kind: 'design-project',
+                          projectId: normalizeDesignProjectId(nextProjectId),
+                          sessionId: nextSessionId,
+                        },
                         options,
                       );
                     }}

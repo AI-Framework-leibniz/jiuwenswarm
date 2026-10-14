@@ -7,13 +7,16 @@ import sendActiveIcon from '../../../assets/send_active.svg';
 import sendIcon from '../../../assets/send.svg';
 import ChatModelSelector from '../../../components/ChatPanel/ChatModelSelector';
 import { generateUuidV4 } from '../../../utils/uuid';
-import { useWorkspaceStore } from '../../../stores';
 import { useChatStore } from '../../../stores/chatStore';
 import {
   resolveChatModelSelection,
   useSessionStore,
 } from '../../../stores/sessionStore';
 import { useDesignerChatStore } from '../designerChatStore';
+import {
+  applyCreatedDesignWorkspace,
+  resolveDesignCreateProjectId,
+} from '../designerCreate';
 import { designerWorkspaceClient } from '../designerGraphClient';
 import { useDesignerStore } from '../designerStore';
 import { filesToBootstrapReferences } from '../designerReferences';
@@ -82,11 +85,13 @@ export function DesignerLanding({ onCreated }: DesignerLandingProps) {
         };
         createAttemptRef.current = attempt;
       }
+      const bindProjectId = resolveDesignCreateProjectId();
       const workspace = await designerWorkspaceClient.create({
         prompt: content,
         createToken: attempt.token,
         modelName,
         references: converted.refs,
+        ...(bindProjectId ? { projectId: bindProjectId } : {}),
       });
       createAttemptRef.current = null;
       useDesignerStore.getState().applyGraph(workspace.graph);
@@ -94,12 +99,10 @@ export function DesignerLanding({ onCreated }: DesignerLandingProps) {
         workspace.graph.graph_id,
         workspace.messages,
       );
-      await useWorkspaceStore.getState().loadProjects();
-      const project = useWorkspaceStore.getState().projects.find(
-        (item) => item.project_id === workspace.project.project_id,
-      );
-      if (project) useWorkspaceStore.getState().setSelectedProject(project);
-      onCreated(workspace.project.project_id, workspace.session.session_id);
+      const created = await applyCreatedDesignWorkspace(workspace, {
+        titleFallback: content.slice(0, 80),
+      });
+      onCreated(created.projectId, created.sessionId);
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
       useDesignerStore.getState().failBootstrapEntry(message);

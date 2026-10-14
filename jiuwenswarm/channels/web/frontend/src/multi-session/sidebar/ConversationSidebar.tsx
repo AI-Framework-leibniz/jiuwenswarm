@@ -85,6 +85,25 @@ function isDefaultProject(project: ProjectInfo): boolean {
   return project.is_default || project.project_id === 'default' || project.project_id === 'default_code' || project.project_id === 'default_design';
 }
 
+/** Virtual default project id for the active work mode sidebar mount. */
+function defaultProjectIdForWorkMode(mode: WorkMode): string {
+  if (mode === 'code') return 'default_code';
+  if (mode === 'design') return 'default_design';
+  return 'default';
+}
+
+function findDefaultProjectForWorkMode(
+  projects: ProjectInfo[],
+  mode: WorkMode,
+): ProjectInfo | undefined {
+  const expectedId = defaultProjectIdForWorkMode(mode);
+  return (
+    projects.find((project) => project.project_id === expectedId)
+    || projects.find((project) => project.is_default && project.work_mode === mode)
+    || projects.find(isDefaultProject)
+  );
+}
+
 interface ConversationSidebarProps {
   activeSessionId: string | null;
   onNew: (options?: NewConversationOptions) => void;
@@ -644,6 +663,7 @@ export function ConversationSidebar({
   onOpenCron,
   onSelectDesignSession,
   activeDesignSessionId,
+  onProjectRemoved,
   isCronActive,
   collapsed = false,
   floating = false,
@@ -805,8 +825,8 @@ export function ConversationSidebar({
     return byDir;
   }, [projects]);
   const defaultProject = useMemo(
-    () => projects.find(isDefaultProject),
-    [projects],
+    () => findDefaultProjectForWorkMode(projects, workMode),
+    [projects, workMode],
   );
 
   const pinnedProjects = useMemo(() => projects.filter((project) => project.pinned && !isDefaultProject(project)), [projects]);

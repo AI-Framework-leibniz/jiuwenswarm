@@ -32,6 +32,7 @@ from jiuwenswarm.common.schema.designer_graph import (
 from jiuwenswarm.common.schema.message import EventType, ReqMethod
 from jiuwenswarm.common.utils import get_agent_root_dir, get_agent_sessions_dir
 from jiuwenswarm.common.work_mode import (
+    DEFAULT_PROJECT_ID_DESIGN,
     DEFAULT_WEB_WORK_MODE,
     DESIGN_WORK_MODE,
     is_default_project_id,
@@ -471,6 +472,38 @@ def _design_workspace_messages(session_id: str) -> list[dict[str, Any]]:
 
 
 
+def _public_design_project_payload(project: Any | None) -> dict[str, Any]:
+    """Serialize the project half of a design workspace for the Web client.
+
+    Unbound design tasks (no directory) must surface as the virtual
+    ``default_design`` id so the frontend can build ``/design/<id>/<session>``
+    URLs and list the task under the sidebar's default「任务」section. An empty
+    ``project_id`` here used to produce ``/design//session_…`` and broke both
+    direct navigation and sidebar attribution.
+    """
+    if project is not None and not is_default_project_id(getattr(project, "project_id", None)):
+        return {
+            "project_id": str(project.project_id),
+            "name": str(project.name or ""),
+            "project_dir": str(project.project_dir or ""),
+            "work_mode": DESIGN_WORK_MODE,
+        }
+    return {
+        "project_id": DEFAULT_PROJECT_ID_DESIGN,
+        "name": "默认项目",
+        "project_dir": "",
+        "work_mode": DESIGN_WORK_MODE,
+    }
+
+
+def _session_matches_design_project(session: dict[str, Any], project_id: str) -> bool:
+    """Match a design session to a requested project id (including virtual default)."""
+    session_project_id = str(session.get("project_id") or "").strip()
+    if is_default_project_id(project_id):
+        return is_default_project_id(session_project_id)
+    return session_project_id == project_id
+
+
 def _get_design_workspace(
     params: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, str | None, str | None]:
@@ -479,7 +512,8 @@ def _get_design_workspace(
     The design task unit is the session (one session = one graph = one
     canvas); ``project_id`` is only an optional grouping directory, exactly
     like work-mode conversations. ``project_id``-only lookups (legacy) fall
-    back to the project's most recent design session.
+    back to the project's most recent design session. The virtual
+    ``default_design`` id groups directory-less tasks.
     """
     from jiuwenswarm.server.runtime.session.session_metadata import (
         collect_all_sessions_metadata,
@@ -491,7 +525,7 @@ def _get_design_workspace(
         return None, "session_id is required", "BAD_REQUEST"
 
     project = None
-    if project_id:
+    if project_id and not is_default_project_id(project_id):
         project = project_store.get_project_by_id(project_id, cache_bust=True)
         if project is None or project.hidden or project.work_mode != DESIGN_WORK_MODE:
             return None, "design project not found", "NOT_FOUND"
@@ -502,7 +536,7 @@ def _get_design_workspace(
         if str(item.get("work_mode") or "") == DESIGN_WORK_MODE
         and (
             not project_id
-            or str(item.get("project_id") or "") == project_id
+            or _session_matches_design_project(item, project_id)
         )
     ]
     if requested_session_id:
@@ -520,13 +554,13 @@ def _get_design_workspace(
     session_id = str(session.get("session_id") or "")
 
     if project is None:
-        session_project_id = str(session.get("project_id") or "")
-        if session_project_id:
+        session_project_id = str(session.get("project_id") or "").strip()
+        if session_project_id and not is_default_project_id(session_project_id):
             project = project_store.get_project_by_id(session_project_id, cache_bust=True)
 
     graphs = _store.list_graphs_for_project(str(session.get("project_id") or "")) if str(
         session.get("project_id") or ""
-    ) else [
+    ) and not is_default_project_id(str(session.get("project_id") or "")) else [
         g
         for g in _store.list_graphs()
         if str((g.get("metadata") or {}).get("session_id") or "") == session_id
@@ -547,18 +581,14 @@ def _get_design_workspace(
     if str(graph.get("title") or "") != previous_title:
         graph = dict(_store.save_graph(graph))
     run = _store.get_latest_run_for_graph(str(graph.get("graph_id") or ""))
+    project_payload = _public_design_project_payload(project)
     return {
-        "project": {
-            "project_id": (project.project_id if project is not None else ""),
-            "name": (project.name if project is not None else ""),
-            "project_dir": (project.project_dir if project is not None else ""),
-            "work_mode": DESIGN_WORK_MODE,
-        },
+        "project": project_payload,
         "session": {
             "session_id": session_id,
             "title": session.get("title"),
-            "project_id": (project.project_id if project is not None else ""),
-            "project_dir": (project.project_dir if project is not None else ""),
+            "project_id": project_payload["project_id"],
+            "project_dir": project_payload["project_dir"],
             "work_mode": DESIGN_WORK_MODE,
         },
         "graph": dict(hydrate_graph_node_outputs(graph, run)),
@@ -584,7 +614,9 @@ def _resolve_design_task_dir(params: dict[str, Any], session_id: str) -> tuple[s
     Work-mode semantics: a task is a session, never a directory. Directories
     (projects) exist only when the user picked one in the landing selector —
     artifacts then stay under that project. Without a project everything lands
-    in the owning team's team-workspace (same root the team rails use).
+    in the owning team's team-workspace (same root the team rails use), and
+    the public ``project_id`` is the virtual ``default_design`` so URLs and
+    the sidebar share one stable mount point.
     """
     requested_project_id = str(params.get("project_id") or "").strip()
     if requested_project_id and not is_default_project_id(requested_project_id):
@@ -597,7 +629,7 @@ def _resolve_design_task_dir(params: dict[str, Any], session_id: str) -> tuple[s
     team_ws = _design_team_workspace(session_id)
     refs_dir = team_ws / "designer" / "refs"
     refs_dir.mkdir(parents=True, exist_ok=True)
-    return "", "", str(refs_dir), str(team_ws)
+    return DEFAULT_PROJECT_ID_DESIGN, "默认项目", str(refs_dir), str(team_ws)
 
 
 async def _create_design_workspace_once(
@@ -635,14 +667,20 @@ async def _create_design_workspace_once(
             )
         except ValueError as exc:
             return None, str(exc), "NOT_FOUND"
+        # Same shape as work-mode: unbound tasks mount on the virtual default
+        # project id (design → default_design). Only a user-picked directory
+        # writes a real project_dir; the virtual id never implies a folder.
+        bound_to_directory = bool(project_id) and not is_default_project_id(project_id)
+        session_project_id = project_id or DEFAULT_PROJECT_ID_DESIGN
+        session_project_dir = leader_project_dir if bound_to_directory else ""
         init_session_metadata(
             session_id=session_id,
             channel_id=request.channel_id or "web",
             user_id=str(request.user_id or ""),
             title=title,
             mode="designer",
-            project_dir=leader_project_dir if project_id else "",
-            project_id=project_id,
+            project_dir=session_project_dir,
+            project_id=session_project_id,
             persist_session=True,
             model=model_name,
             work_mode=DESIGN_WORK_MODE,
@@ -655,7 +693,9 @@ async def _create_design_workspace_once(
             {
                 "schema_version": "designer-execution-graph.v1",
                 "graph_id": new_graph_id(),
-                "project_id": project_id,
+                # Unbound graphs stay project-less on disk; artifacts live under
+                # the team workspace and are looked up by metadata.session_id.
+                "project_id": session_project_id if bound_to_directory else "",
                 "title": title,
                 "description": prompt[:200],
                 "nodes": [],
@@ -689,16 +729,16 @@ async def _create_design_workspace_once(
         committed = True
         return {
             "project": {
-                "project_id": project_id,
-                "name": project_name,
-                "project_dir": leader_project_dir if project_id else "",
+                "project_id": session_project_id,
+                "name": project_name or "默认项目",
+                "project_dir": session_project_dir,
                 "work_mode": DESIGN_WORK_MODE,
             },
             "session": {
                 "session_id": session_id,
                 "title": title,
-                "project_id": project_id,
-                "project_dir": leader_project_dir if project_id else "",
+                "project_id": session_project_id,
+                "project_dir": session_project_dir,
                 "work_mode": DESIGN_WORK_MODE,
             },
             "graph": graph,
