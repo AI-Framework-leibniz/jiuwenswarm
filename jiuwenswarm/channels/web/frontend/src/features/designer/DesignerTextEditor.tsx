@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { MarkdownRenderer } from '../../components/MarkdownRenderer';
 import { DesignerStoryboardTable, DesignerStoryboardTableDraft } from './DesignerStoryboardTable';
 import { saveDesignerTextFile } from './designerAssetUrl';
+import { useDesignerGraphEditingLocked } from './useDesignerGraphEditingLocked';
 import {
   DESIGNER_MATERIAL_SAVED_EVENT,
   isDesignerTableMaterial,
@@ -28,6 +29,7 @@ export function DesignerTextEditor({
   startEditKey = 0,
   onEditingChange,
 }: DesignerTextEditorProps) {
+  const editingLocked = useDesignerGraphEditingLocked();
   const { t } = useTranslation();
   const editable = isEditableDesignerMaterial(material);
   const isTable = isDesignerTableMaterial(material);
@@ -97,17 +99,18 @@ export function DesignerTextEditor({
   }, [material.id, material.textUrl, reloadAt, t]);
 
   const startEdit = () => {
+    if (editingLocked) return;
     setEditor((current) => ({ ...current, draft: current.text, editing: true, conflict: false }));
     setError('');
     onEditingChange?.(true);
   };
 
   useEffect(() => {
-    if (!startEditKey || !editable) return;
+    if (!startEditKey || !editable || editingLocked) return;
     startEdit();
     // Only re-run when the viewer asks to edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startEditKey]);
+  }, [editingLocked, startEditKey]);
 
   const cancelEdit = () => {
     setEditor((current) => ({ ...current, draft: current.text, editing: false, conflict: false }));
@@ -191,8 +194,8 @@ export function DesignerTextEditor({
           ) : (
             <button
               type="button"
-              className="btn"
-              disabled={loading}
+              className={`btn${editingLocked ? ' designer-edit-control' : ''}`}
+              disabled={loading || editingLocked}
               onClick={startEdit}
               data-testid="designer-text-edit"
             >
