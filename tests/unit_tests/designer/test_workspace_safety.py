@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -134,6 +133,31 @@ def test_get_design_workspace_returns_only_the_requested_session(monkeypatch):
     assert payload["graph"]["graph_id"] == "g2"
     assert payload["messages"] == [{"id": "s2", "content": "s2"}]
     assert [item["session_id"] for item in payload["sessions"]] == ["s1", "s2"]
+
+
+def test_design_workspace_messages_keep_leader_finals(monkeypatch):
+    records = [
+        {"id": "r1:user", "role": "user", "content": "make a clip", "timestamp": 1.0},
+        {"id": "r1:assistant", "role": "assistant", "content": "on it", "timestamp": 2.0},
+        {"id": "r1:assistant", "role": "leader", "content": "", "timestamp": 2.5},
+        {"id": "r1:assistant", "role": "leader", "content": "graph ready", "timestamp": 3.0},
+        {"id": "r1:assistant", "role": "teammate", "content": "member note", "timestamp": 3.5},
+        {"id": "r1:assistant", "role": "leader", "content": "run failed", "timestamp": 4.0},
+    ]
+    monkeypatch.setattr(
+        "jiuwenswarm.server.runtime.session.session_history.load_history_records",
+        lambda session_id: records,
+    )
+
+    messages = designer_adapter._design_workspace_messages("design_session")
+
+    assert [(m["role"], m["content"]) for m in messages] == [
+        ("user", "make a clip"),
+        ("assistant", "on it"),
+        ("assistant", "graph ready"),
+        ("assistant", "run failed"),
+    ]
+    assert len({m["id"] for m in messages}) == len(messages)
 
 
 def test_default_project_can_host_a_design_canvas(monkeypatch):
@@ -492,89 +516,6 @@ async def test_selected_model_context_reaches_designer_model_calls(monkeypatch):
 
     assert result["model"] == "selected-model"
     assert result["model_name"] == "selected-model"
-
-
-@pytest.mark.asyncio
-async def test_chat_auto_run_failure_is_returned_in_summary(monkeypatch):
-    graph = {
-        "graph_id": "graph_design",
-        "project_id": "proj_design",
-        "metadata": {},
-        "nodes": [],
-        "edges": [],
-    }
-
-    async def fake_director_chat(*args, **kwargs):
-        return {
-            "graph": graph,
-            "changed": False,
-            "summary": "Updated workflow",
-            "run_node_ids": ["node_1"],
-        }
-
-    from jiuwenswarm.server.runtime.designer.orchestration import Director
-
-    monkeypatch.setattr(Director, "chat", fake_director_chat)
-    monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.designer.model_tools.require_llm",
-        lambda: None,
-    )
-    monkeypatch.setattr(designer_adapter._store, "get_graph", lambda graph_id: graph)
-    monkeypatch.setattr(
-        designer_adapter._executor,
-        "reconcile_loaded_graph",
-        lambda loaded: loaded,
-    )
-    monkeypatch.setattr(
-        designer_adapter,
-        "_start_run",
-        lambda params: (None, "unable to start", "INTERNAL_ERROR"),
-    )
-    request = AgentRequest(request_id="request", channel_id="web")
-
-    payload, error, code = await designer_adapter._chat_graph(
-        request,
-        {"graph_id": graph["graph_id"], "message": "Update it"},
-    )
-
-    assert error is None
-    assert code is None
-    assert payload is not None
-    assert payload["summary"] == "Updated workflow (unable to start)"
-
-
-def test_bootstrap_rejects_project_dir_outside_the_design_root(tmp_path, monkeypatch):
-    managed = tmp_path / "agent"
-    outside = tmp_path / "elsewhere"
-    outside.mkdir()
-    monkeypatch.setattr(designer_adapter, "get_agent_root_dir", lambda: managed)
-    design_root = managed / "workspace" / "design"
-    design_root.mkdir(parents=True)
-    good = design_root / "my-film"
-    good.mkdir()
-
-    assert designer_adapter._is_managed_design_project_dir(str(good)) is True
-    assert designer_adapter._is_managed_design_project_dir(str(design_root)) is False
-    assert designer_adapter._is_managed_design_project_dir(str(outside)) is False
-    assert designer_adapter._is_managed_design_project_dir("/tmp") is False
-
-    created: list[str] = []
-    monkeypatch.setattr(
-        designer_adapter.project_store,
-        "create_project_checked",
-        lambda name, project_dir, work_mode: created.append(project_dir)
-        or (SimpleNamespace(project_id="p1", project_dir=project_dir, work_mode=work_mode), False),
-    )
-    payload, error, code = designer_adapter._bootstrap_graph(
-        {"prompt": "a film", "project_dir": str(outside), "work_mode": "design"},
-        "web",
-        {"source": "llm"},
-    )
-
-    assert payload is None
-    assert code == "BAD_REQUEST"
-    assert "matching project_id" in str(error)
-    assert created == []
 
 
 def test_canvas_title_uses_model_phrase_not_the_prompt():

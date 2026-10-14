@@ -431,7 +431,7 @@ def flatten_template_prompt(template: Any, *, language: str = "cn") -> str:
 
 
 _DESIGNER_MEMBERS = frozenset(
-    {"leader", "character", "scene", "storyboard", "clip"}
+    {"leader", "teammate", "character", "scene", "storyboard", "clip", "text"}
 )
 
 
@@ -646,9 +646,12 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         "执行当前设计节点。先看 JSON 上下文，用工具完成本节点产物，最后 "
         "designer_node_complete。\n"
         "CRITICAL: Call designer_node_complete before finishing, then STOP. "
-        "Do not designer_node_run graph nodes that already exist — the scheduler "
-        "starts them after this node completes. Only designer_node_run a node you "
-        "just added with designer_graph_patch.\n"
+        "Do not designer_node_run other nodes: each canvas node runs on demand "
+        "from the canvas run button, never inside this node. To split work into "
+        "sub-nodes (e.g. storyboard clips), add them with designer_graph_patch "
+        "and then complete THIS node with the part you can produce from the "
+        "context above; the added nodes stay unrun on the canvas for the user "
+        "to trigger.\n"
         "TOOLS (not heuristics): Use call_model for text reasoning; call_image_model "
         "for images (configured image model); call_video_model for clips (configured "
         "video model); ffmpeg_compose / mix_audio for film assemble; read_upstream "
@@ -665,7 +668,13 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         "Keep character consistency (same faces/costumes) on every clip call.\n"
         "CANVAS: user_canvas_edits is what the user just did on the canvas, oldest first. "
         "Treat it as fact. New edges are inputs. Disconnected nodes are not inputs. "
-        "A replace means use that node's new output file. Do not restore removed nodes or edges.\n\n"
+        "A replace means use that node's new output file. Do not restore removed nodes or edges.\n"
+        "INPUT PRIORITY: the Upstream node inputs embedded in your prompt are the "
+        "CURRENT authority for upstream content (character sheets, scene specs, "
+        "storyboards). Your own node prompt is the task instruction, not a content "
+        "source — when the embedded upstream text describes a character or scene, "
+        "generate THAT content (e.g. the embedded 人物设定 defines the person to "
+        "draw), never an older or inferred variant of it.\n\n"
         f"{prior_section}"
         f"```json\n{json.dumps(snapshot, ensure_ascii=False, indent=2)}\n```"
     )
@@ -732,14 +741,15 @@ class DesignerGraphToolkit:
 
     async def node_run(self, node_id: str) -> str:
         if self.completed is not None:
-            return "already completed this node; scheduler will start remaining graph nodes"
+            return "already completed this node; remaining nodes run from the canvas run button"
         target = str(node_id or "").strip()
         if not target:
             return "node_id is required"
         if target == self.ctx.node_id:
             return "cannot run the current node"
         result = await self.spawner.spawn_node_agent(self.ctx.run_id, target)
-        self.spawned.append(target)
+        if "not available" not in result:
+            self.spawned.append(target)
         return result
 
     async def node_complete(
@@ -924,6 +934,23 @@ class DesignerGraphToolkit:
                 )
 
                 refs.extend(str(p) for p in node_ids_output_image_paths(self.ctx, nids))
+        elif role in {"image", ""}:
+            # Generic image node (canvas-added / leader-built, no pipeline
+            # recipe): the images its data-edge upstreams produced are its
+            # visual references, so "a new angle of the upstream still"
+            # carries that still into the model call.
+            try:
+                from jiuwenswarm.server.runtime.designer.handlers.common import (
+                    node_ids_output_image_paths,
+                )
+
+                pred_ids = data_predecessors(self.ctx.graph).get(str(node.get("id") or "")) or []
+                if pred_ids:
+                    refs.extend(
+                        str(p) for p in node_ids_output_image_paths(self.ctx, pred_ids)
+                    )
+            except Exception:  # noqa: BLE001
+                pass
         # Toolbar user edits win over leaf narration before the image call.
         try:
             from jiuwenswarm.server.runtime.designer.pipeline.video_prompt_practice import (
@@ -1492,7 +1519,7 @@ def build_designer_tools(toolkit: DesignerGraphToolkit) -> list[Any]:
             with tool_span as span_payload:
                 if toolkit.completed is not None and name == "designer_node_run":
                     return (
-                        "already completed this node; scheduler will start remaining graph nodes"
+                        "already completed this node; remaining nodes run from the canvas run button"
                     )
                 _emit_ctx_activity(
                     toolkit.ctx,
@@ -1529,6 +1556,39 @@ def build_designer_tools(toolkit: DesignerGraphToolkit) -> list[Any]:
             return merged
         return payload
 
+    def _normalize_patch(patch: dict[str, Any]) -> dict[str, Any]:
+        """Fold common LLM patch shapes onto the canonical upsert/remove form.
+
+        Models frequently emit ``{"nodes": [...]}`` / ``{"edges": [...]}`` or
+        nest the patch one level (``{"patch": {...}}``); without this the
+        canonical keys are absent, the merge becomes a silent no-op, and the
+        caller reports success with an unchanged graph.
+        """
+        normalized = dict(patch)
+        if "patch" in normalized and isinstance(normalized["patch"], dict):
+            inner = dict(normalized.pop("patch"))
+            inner.update({k: v for k, v in normalized.items() if k not in inner})
+            normalized = inner
+        if "nodes" in normalized and "upsert_nodes" not in normalized:
+            normalized["upsert_nodes"] = normalized.pop("nodes")
+        if "remove_nodes" in normalized and "remove_node_ids" not in normalized:
+            remove = normalized.pop("remove_nodes")
+            if isinstance(remove, list):
+                normalized["remove_node_ids"] = [
+                    item.get("id") if isinstance(item, dict) else item
+                    for item in remove
+                ]
+        if "edges" in normalized and "upsert_edges" not in normalized:
+            normalized["upsert_edges"] = normalized.pop("edges")
+        if "remove_edges" in normalized and "remove_edge_ids" not in normalized:
+            remove = normalized.pop("remove_edges")
+            if isinstance(remove, list):
+                normalized["remove_edge_ids"] = [
+                    item.get("id") if isinstance(item, dict) else item
+                    for item in remove
+                ]
+        return normalized
+
     async def graph_get(**_kwargs: Any) -> str:
         return json.dumps(toolkit.graph_get(), ensure_ascii=False)
 
@@ -1542,7 +1602,7 @@ def build_designer_tools(toolkit: DesignerGraphToolkit) -> list[Any]:
                 return "patch must be a JSON object"
         if not isinstance(patch, dict):
             return "patch must be an object"
-        return json.dumps(toolkit.graph_patch(patch), ensure_ascii=False)
+        return json.dumps(toolkit.graph_patch(_normalize_patch(patch)), ensure_ascii=False)
 
     async def node_run(**kwargs: Any) -> str:
         payload = _payload(**kwargs)
@@ -1617,7 +1677,13 @@ def build_designer_tools(toolkit: DesignerGraphToolkit) -> list[Any]:
         ),
         make_tool(
             "designer_graph_patch",
-            "按 Designer graph patch 增删节点或边。patch 可为对象或 JSON 字符串。",
+            "按 Designer graph patch 增删节点或边。patch 可为对象或 JSON 字符串。"
+            "格式：{\"upsert_nodes\": [{id,type,label,config:{prompt,role},layout?}], "
+            "\"upsert_edges\": [{id,source,target}], \"remove_node_ids\": [\"n_x\"], "
+            "\"remove_edge_ids\": [\"e_x\"]}。新增节点必须带 id/type/label/config.prompt。"
+            "CRITICAL: type 只能是这五种模态之一：\"text\"、\"table\"、\"image\"、\"video\"、\"audio\""
+            "——outline/character/storyboard/script/scene/clip/film 等都不是合法 type"
+            "（它们最多作为 config.pipeline 或 config.role 的取值；大纲/角色/分镜等文本创作一律用 type=\"text\"）。",
             {
                 "type": "object",
                 "properties": {
@@ -1644,7 +1710,10 @@ def build_designer_tools(toolkit: DesignerGraphToolkit) -> list[Any]:
         ),
         make_tool(
             "designer_node_complete",
-            "提交当前节点产物。可给 file uri，或 text 写成工作区 Markdown。",
+            "提交当前节点产物。可给 file uri，或 text 写成工作区 Markdown。"
+            "多产物提交（如分镜多张图）：把每个生成文件的 uri 依次放入 extra_uris 数组"
+            "（media 工具返回的每个文件都要收集），kind 按节点媒体类型填（image/video），"
+            "不要只提交最后一个文件。",
             {
                 "type": "object",
                 "properties": {

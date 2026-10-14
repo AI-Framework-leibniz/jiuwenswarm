@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import shutil
-import time
 import uuid
 from contextlib import asynccontextmanager
 from copy import deepcopy
@@ -22,15 +21,11 @@ import portalocker
 from jiuwenswarm.common.schema.agent import AgentRequest, AgentResponse
 
 from jiuwenswarm.common.schema.designer_graph import (
-    CONFIG_DELEGATE_HANDLER,
     GRAPH_SOURCE_MANUAL,
     SCHEMA_VERSION,
     DesignerGraphValidationError,
     apply_graph_patch,
     new_graph_id,
-    node_pipeline,
-    node_role,
-    NODE_ROLE_COMPOSE,
     normalize_execution_graph,
     utc_now_ms,
 )
@@ -41,7 +36,8 @@ from jiuwenswarm.common.work_mode import (
     DESIGN_WORK_MODE,
     is_default_project_id,
 )
-from jiuwenswarm.server.runtime.designer.executor import GraphExecutor
+from jiuwenswarm.server.runtime.design import RunCoordinator
+from jiuwenswarm.server.runtime.design.context import get_graph_coordinator
 from jiuwenswarm.server.runtime.designer.graph_store import DesignerGraphStore
 from jiuwenswarm.server.runtime.designer.media_settings import (
     MediaSettingsError,
@@ -57,7 +53,17 @@ from jiuwenswarm.server.runtime.session import project_store
 logger = logging.getLogger(__name__)
 
 _store = DesignerGraphStore()
-_executor = GraphExecutor(_store)
+
+DESIGNER_AGENT_GROUP = "designer"
+
+
+def _coordinator_for(graph_id: str) -> RunCoordinator:
+    """One RunCoordinator per graph (its run_id lives as long as the graph).
+
+    Shared process-wide with DesignTeamBridge and the capability provider so
+    every entry point observes the same in-flight trigger.
+    """
+    return get_graph_coordinator(_store, graph_id)
 
 
 def _workspace_receipt_path(token: str) -> Path:
@@ -203,7 +209,6 @@ def _get_graph(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | Non
     graph = _store.get_graph(graph_id)
     if graph is None:
         return None, "graph not found", "NOT_FOUND"
-    graph = _executor.reconcile_loaded_graph(graph)
     run = _store.get_latest_run_for_graph(graph_id)
     return {"graph": dict(hydrate_graph_node_outputs(graph, run))}, None, None
 
@@ -232,13 +237,23 @@ def _run_clip_summary(run: dict[str, Any] | None) -> tuple[bool, str | None]:
     return False, None
 
 
-def _summarize_graph(graph: dict[str, Any], run: dict[str, Any] | None = None) -> dict[str, Any]:
+def _summarize_graph(
+    graph: dict[str, Any],
+    run: dict[str, Any] | None = None,
+    project: Any | None = None,
+) -> dict[str, Any]:
     if run is None:
         run = _store.get_latest_run_for_graph(str(graph.get("graph_id") or ""))
     has_video, clip_label = _run_clip_summary(run)
+    project_id = str(graph.get("project_id") or "")
+    if project is None and project_id and not is_default_project_id(project_id):
+        project = project_store.get_project_by_id(project_id, cache_bust=True)
     return {
         "graph_id": graph.get("graph_id"),
-        "project_id": graph.get("project_id"),
+        "session_id": _graph_session_id(graph),
+        "project_id": project_id,
+        "project_dir": project.project_dir if project is not None else None,
+        "project_name": project.name if project is not None else None,
         "title": graph.get("title") or graph.get("graph_id"),
         "updated_at": graph.get("updated_at"),
         "run_id": run.get("run_id") if run else None,
@@ -362,22 +377,35 @@ def _stamp_canvas_title(graph: dict[str, Any], prompt: str) -> str:
 
 
 def _design_workspace_messages(session_id: str) -> list[dict[str, Any]]:
+    """Chat history for one design session.
+
+    Leader turns are standard ``chat.send(mode='team.design')`` rounds: the
+    leader's own finals are persisted with role ``leader`` and belong to the
+    canvas chat like any assistant reply. Teammate output stays off the main
+    thread, as in work/code team mode. Records of one turn share the id
+    ``<request_id>:<role>``, so repeats get a suffix to stay addressable.
+    """
     from jiuwenswarm.server.runtime.session.session_history import load_history_records
 
     messages: list[dict[str, Any]] = []
+    seen_ids: dict[str, int] = {}
     for record in load_history_records(session_id):
-        event_type = str(record.get("event_type") or "")
-        if not event_type.startswith("design."):
-            continue
         role = str(record.get("role") or "")
+        if role == "leader":
+            role = "assistant"
         if role not in {"user", "assistant"}:
             continue
         content = str(record.get("content") or "")
-        if not content and event_type != "design.graph_updated":
+        if not content:
             continue
+        message_id = str(record.get("id") or uuid.uuid4())
+        repeat = seen_ids.get(message_id, 0)
+        seen_ids[message_id] = repeat + 1
+        if repeat:
+            message_id = f"{message_id}#{repeat}"
         messages.append(
             {
-                "id": str(record.get("id") or uuid.uuid4()),
+                "id": message_id,
                 "role": role,
                 "content": content,
                 "kind": str(record.get("design_kind") or (
@@ -389,6 +417,7 @@ def _design_workspace_messages(session_id: str) -> list[dict[str, Any]]:
                     if isinstance(record.get("references"), list)
                     else {}
                 ),
+                **({"graph_id": record["graph_id"]} if record.get("graph_id") else {}),
             }
         )
     return messages
@@ -646,14 +675,40 @@ def _rollback_design_workspace(
         shutil.rmtree(project_dir, ignore_errors=True)
 
 
+def _attach_design_references(
+    graph: dict[str, Any],
+    raw_references: Any,
+) -> dict[str, Any]:
+    """Store uploads next to the canvas outputs and seed their canvas nodes."""
+    from jiuwenswarm.server.runtime.designer.handlers.common import canvas_output_dir
+    from jiuwenswarm.server.runtime.designer.user_references import (
+        attach_user_references_to_graph,
+        normalize_user_references,
+    )
+
+    if not isinstance(raw_references, list) or not raw_references:
+        return graph
+    refs_dir = canvas_output_dir(graph) / ".designer" / "refs"
+    user_refs = normalize_user_references(raw_references, dest_dir=refs_dir)
+    if not user_refs:
+        return graph
+    return attach_user_references_to_graph(graph, user_refs)
+
+
 async def _create_design_workspace_once(
     request: AgentRequest,
     params: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, str | None, str | None]:
-    from jiuwenswarm.server.runtime.session.session_history import write_history_records
+    """Create one design session on the default project with an empty canvas.
+
+    No leader round runs here: the first user message arrives as a standard
+    ``chat.send(mode='team.design')``, so the leader turn (streaming, history
+    persistence) rides the team pipeline and the canvas gets its graph via the
+    design tools' ``designer.*`` pushes.
+    """
+    from jiuwenswarm.server.runtime.designer.user_references import UserReferenceError
     from jiuwenswarm.server.runtime.session.session_metadata import (
         init_session_metadata,
-        update_session_metadata,
     )
 
     prompt = str(params.get("prompt") or "").strip()
@@ -676,79 +731,31 @@ async def _create_design_workspace_once(
             persist_session=True,
             model=model_name,
             work_mode=DESIGN_WORK_MODE,
+            agent_group_name=DESIGNER_AGENT_GROUP,
         )
-        bootstrap_params = {
-            "prompt": prompt,
-            "project_id": project_id,
-            "work_mode": DESIGN_WORK_MODE,
-            "session_id": session_id,
-            **({"model_name": model_name} if model_name else {}),
-            **(
-                {"references": params["references"]}
-                if isinstance(params.get("references"), list)
-                else {}
-            ),
-        }
-        bootstrap, error, code = await _bootstrap_graph_with_director(
-            bootstrap_params,
-            request.channel_id,
-            _leader_progress_callback(request),
+        graph = normalize_execution_graph(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "graph_id": new_graph_id(),
+                "project_id": project_id,
+                "title": _DESIGN_PLACEHOLDER_TITLE,
+                "description": prompt,
+                "source": GRAPH_SOURCE_MANUAL,
+                "nodes": [],
+                "edges": [],
+                "metadata": {
+                    "session_id": session_id,
+                    "work_mode": DESIGN_WORK_MODE,
+                    **({"model_name": model_name} if model_name else {}),
+                },
+            }
         )
-        if error is not None or not isinstance(bootstrap, dict):
-            return None, error or "failed to create graph", code or "INTERNAL_ERROR"
-        graph = bootstrap.get("graph")
-        if not isinstance(graph, dict) or not graph.get("graph_id"):
-            return None, "bootstrap response missing graph", "INTERNAL_ERROR"
-        graph_id = str(graph["graph_id"])
-        graph = dict(graph)
-        metadata = dict(graph.get("metadata") or {})
-        metadata["session_id"] = session_id
-        metadata["work_mode"] = DESIGN_WORK_MODE
-        if model_name:
-            metadata["model_name"] = model_name
-        graph["metadata"] = metadata
-        summary = _stamp_canvas_title(graph, prompt)
+        try:
+            graph = _attach_design_references(graph, params.get("references"))
+        except UserReferenceError as exc:
+            return None, str(exc), exc.code
         graph = dict(_store.save_graph(graph))
-        session_title = summary or "画布 1"
-
-        now = time.time()
-        records = [
-            {
-                "id": f"{uuid.uuid4()}:user",
-                "role": "user",
-                "request_id": request.request_id,
-                "channel_id": request.channel_id or "web",
-                "timestamp": now,
-                "content": prompt,
-                "event_type": "design.user",
-                "design_kind": "user",
-                **(
-                    {"references": params["references"]}
-                    if isinstance(params.get("references"), list)
-                    else {}
-                ),
-            },
-            {
-                "id": f"{uuid.uuid4()}:assistant",
-                "role": "assistant",
-                "request_id": request.request_id,
-                "channel_id": request.channel_id or "web",
-                "timestamp": now + 0.001,
-                "content": "Director composed the workflow.",
-                "event_type": "design.bootstrap_completed",
-                "design_kind": "bootstrap_done",
-                "graph_id": graph_id,
-            },
-        ]
-        write_history_records(session_id, records, preserve_existing_format=False)
-        update_session_metadata(
-            session_id=session_id,
-            title=session_title,
-            set_message_count=2,
-            last_user_message_at=now,
-            touch_last_message_at=True,
-            sync_write=True,
-        )
+        graph_id = str(graph["graph_id"])
         committed = True
         return {
             "project": {
@@ -759,13 +766,13 @@ async def _create_design_workspace_once(
             },
             "session": {
                 "session_id": session_id,
-                "title": session_title,
+                "title": "画布 1",
                 "project_id": project_id,
                 "project_dir": "",
                 "work_mode": DESIGN_WORK_MODE,
             },
             "graph": graph,
-            "messages": _design_workspace_messages(session_id),
+            "messages": [],
         }, None, None
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to create design workspace")
@@ -876,6 +883,7 @@ def _create_design_session(
         project_id=project_id,
         persist_session=True,
         work_mode=DESIGN_WORK_MODE,
+        agent_group_name=DESIGNER_AGENT_GROUP,
     )
     try:
         graph = normalize_execution_graph(
@@ -902,112 +910,69 @@ def _create_design_session(
     return _get_design_workspace({"project_id": project_id, "session_id": session_id})
 
 
-async def _compose_design_session(
+def _compose_design_session(
     request: AgentRequest,
     params: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, str | None, str | None]:
-    """Turn an empty session canvas into a directed graph without a new project."""
-    from jiuwenswarm.server.runtime.session.session_history import write_history_records
+    """Prepare an empty session canvas for its first leader message.
+
+    Attaches the uploads and the chosen model to the session's canvas. The
+    prompt itself is sent by the client as ``chat.send(mode='team.design')``;
+    the leader builds the graph from it.
+    """
+    from jiuwenswarm.server.runtime.designer.user_references import (
+        UserReferenceError,
+        is_user_reference_node,
+    )
     from jiuwenswarm.server.runtime.session.session_metadata import (
+        get_session_metadata,
         update_session_metadata,
     )
 
     project_id = str(params.get("project_id") or "").strip()
     session_id = str(params.get("session_id") or "").strip()
     prompt = str(params.get("prompt") or "").strip()
+    references = params.get("references")
     if not project_id or not session_id:
         return None, "project_id and session_id are required", "BAD_REQUEST"
-    if not prompt and not (
-        isinstance(params.get("references"), list) and params.get("references")
-    ):
+    if not prompt and not (isinstance(references, list) and references):
         return None, "prompt is required", "BAD_REQUEST"
     current, error, code = _get_design_workspace(
         {"project_id": project_id, "session_id": session_id}
     )
     if error is not None or current is None:
         return None, error, code
-    previous = current.get("graph") if isinstance(current.get("graph"), dict) else {}
-    previous_id = str(previous.get("graph_id") or "")
-    if previous.get("nodes"):
+    graph = current.get("graph") if isinstance(current.get("graph"), dict) else {}
+    if graph.get("nodes") and not all(
+        is_user_reference_node(node) for node in graph.get("nodes") or []
+    ):
         return None, "design session already has a canvas", "CONFLICT"
-    model_name = str(params.get("model_name") or "").strip()
-    bootstrap_params = {
-        "prompt": prompt or "根据参考素材创作",
-        "project_id": project_id,
-        "work_mode": DESIGN_WORK_MODE,
-        "optimize_for": "quality",
-        "session_id": session_id,
-        **({"model_name": model_name} if model_name else {}),
-        **(
-            {"references": params["references"]}
-            if isinstance(params.get("references"), list)
-            else {}
-        ),
-    }
-    bootstrap, error, code = await _bootstrap_graph_with_director(
-        bootstrap_params,
-        request.channel_id or "web",
-        _leader_progress_callback(request),
-        allow_additional_session=True,
-    )
-    if error is not None or not isinstance(bootstrap, dict):
-        return None, error or "failed to create graph", code or "INTERNAL_ERROR"
-    graph = bootstrap.get("graph")
-    if not isinstance(graph, dict) or not graph.get("graph_id"):
-        return None, "bootstrap response missing graph", "INTERNAL_ERROR"
     graph = dict(graph)
     metadata = dict(graph.get("metadata") or {})
-    metadata["session_id"] = session_id
-    metadata["work_mode"] = DESIGN_WORK_MODE
+    model_name = str(params.get("model_name") or "").strip()
+    if model_name:
+        metadata["model_name"] = model_name
     graph["metadata"] = metadata
-    graph["project_id"] = project_id
-    summary = _stamp_canvas_title(graph, prompt)
+    if prompt:
+        graph["description"] = prompt
     try:
-        graph = dict(_store.save_graph(graph))
+        graph = _attach_design_references(graph, references)
+        _store.save_graph(graph)
+    except UserReferenceError as exc:
+        return None, str(exc), exc.code
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Failed to save composed design session")
+        logger.exception("Failed to prepare design session")
         return None, str(exc), "INTERNAL_ERROR"
-    new_id = str(graph.get("graph_id") or "")
-    if previous_id and previous_id != new_id:
-        _store.delete_graph(previous_id)
-    now = time.time()
-    records = [
-        {
-            "id": f"{uuid.uuid4()}:user",
-            "role": "user",
-            "request_id": request.request_id,
-            "channel_id": request.channel_id or "web",
-            "timestamp": now,
-            "content": prompt,
-            "event_type": "design.user",
-            "design_kind": "user",
-            **(
-                {"references": params["references"]}
-                if isinstance(params.get("references"), list)
-                else {}
-            ),
-        },
-        {
-            "id": f"{uuid.uuid4()}:assistant",
-            "role": "assistant",
-            "request_id": request.request_id,
-            "channel_id": request.channel_id or "web",
-            "timestamp": now + 0.001,
-            "content": "Director composed the workflow.",
-            "event_type": "design.bootstrap_completed",
-            "design_kind": "bootstrap_done",
-            "graph_id": new_id,
-        },
-    ]
-    write_history_records(session_id, records, preserve_existing_format=False)
-    update_session_metadata(
-        session_id=session_id,
-        title=summary or None,
-        set_message_count=2,
-        last_user_message_at=now,
-        touch_last_message_at=True,
-        sync_write=True,
-    )
+    # Sessions created before the designer AgentGroup existed carry no group
+    # binding; the team path reads it on the first team.design round.
+    if not str(get_session_metadata(session_id).get("agent_group_name") or "").strip():
+        update_session_metadata(
+            session_id=session_id,
+            agent_group_name=DESIGNER_AGENT_GROUP,
+            touch_last_message_at=False,
+            sync_write=True,
+        )
+    _ = request
     return _get_design_workspace({"project_id": project_id, "session_id": session_id})
 
 
@@ -1026,16 +991,32 @@ def _list_graphs(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | N
     # callers load the one graph they need through designer.graph.get.
     payload: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
+    latest_runs = _store.latest_runs_by_graph()
+    projects: dict[str, Any] = {}
+
+    def _project(pid: str) -> Any:
+        if pid not in projects:
+            projects[pid] = (
+                project_store.get_project_by_id(pid, cache_bust=True)
+                if pid and not is_default_project_id(pid)
+                else None
+            )
+        return projects[pid]
+
     for graph in graphs:
         item = dict(graph)
-        run = _store.get_latest_run_for_graph(str(item.get("graph_id") or ""))
-        summaries.append(_summarize_graph(item, run))
+        item_project_id = str(item.get("project_id") or "")
+        project = _project(item_project_id)
+        run = latest_runs.get(str(item.get("graph_id") or ""))
+        summaries.append(_summarize_graph(item, run, project))
         # Do not hydrate outputs or ship full node bodies here — Agent WS
         # send budget is 6MB; a page of Designer graphs with images exceeds it.
         payload.append(
             {
                 "graph_id": item.get("graph_id"),
-                "project_id": item.get("project_id"),
+                "project_id": item_project_id,
+                "project_dir": project.project_dir if project is not None else None,
+                "project_name": project.name if project is not None else None,
                 "title": item.get("title"),
                 "updated_at": item.get("updated_at"),
                 "schema_version": item.get("schema_version"),
@@ -1092,47 +1073,6 @@ def _run_update_callback(request: AgentRequest):
         loop.call_soon_threadsafe(lambda: asyncio.create_task(_emit()))
 
     return on_update
-
-
-def _leader_progress_callback(request: AgentRequest):
-    loop = asyncio.get_running_loop()
-
-    def on_progress(kind: str, text: str, tool: str = "") -> None:
-        activity = {
-            "kind": str(kind or "stage"),
-            "text": str(text or ""),
-            "tool": str(tool or ""),
-            "at": utc_now_ms(),
-        }
-
-        async def _emit() -> None:
-            await _push_designer_event(
-                request=request,
-                event_type=EventType.DESIGNER_LEADER_ACTIVITY.value,
-                payload={"activity": activity},
-            )
-
-        loop.call_soon_threadsafe(lambda: asyncio.create_task(_emit()))
-
-    return on_progress
-
-
-def _graph_update_callback(request: AgentRequest):
-    loop = asyncio.get_running_loop()
-
-    def on_graph(graph: dict[str, Any]) -> None:
-        snapshot = deepcopy(graph)
-
-        async def _emit() -> None:
-            await _push_designer_event(
-                request=request,
-                event_type=EventType.DESIGNER_GRAPH_UPDATED.value,
-                payload={"graph": snapshot},
-            )
-
-        loop.call_soon_threadsafe(lambda: asyncio.create_task(_emit()))
-
-    return on_graph
 
 
 def _save_graph(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None, str | None]:
@@ -1243,182 +1183,6 @@ def _media_capabilities(
     return media_capabilities(), None, None
 
 
-def _is_managed_design_project_dir(project_dir: str) -> bool:
-    """True when ``project_dir`` is inside the Design workspace root."""
-    design_root = (get_agent_root_dir() / "workspace" / DESIGN_WORK_MODE).resolve()
-    try:
-        resolved = Path(project_dir).expanduser().resolve()
-    except (OSError, RuntimeError):
-        return False
-    return resolved != design_root and resolved.is_relative_to(design_root)
-
-
-def _bootstrap_graph(
-    params: dict[str, Any],
-    _channel_id: str,
-    analysis: dict[str, Any] | None = None,
-    on_progress: Any | None = None,
-    media_intent: Any | None = None,
-) -> tuple[dict[str, Any] | None, str | None, str | None]:
-    prompt = str(params.get("prompt") or "").strip()
-    raw_references = params.get("references")
-    if raw_references is None:
-        raw_references = params.get("user_references")
-    has_references = isinstance(raw_references, list) and len(raw_references) > 0
-    if not prompt and not has_references:
-        return None, "prompt is required", "BAD_REQUEST"
-    if not prompt:
-        prompt = "根据参考素材创作"
-
-    project_id = str(params.get("project_id") or "").strip()
-    requested_project_dir = str(params.get("project_dir") or "").strip()
-    # Same rule as work: a canvas does not create a project. No selection, or
-    # the virtual default id, stays on ``default``.
-    project_payload: dict[str, Any] | None = None
-    resolved_project_dir = ""
-
-    if is_default_project_id(project_id):
-        if requested_project_dir:
-            return None, "project_dir requires a matching project_id", "BAD_REQUEST"
-        project_id = DEFAULT_PROJECT_ID_WORK
-    else:
-        project = project_store.get_project_by_id(project_id, cache_bust=True)
-        if project is None or project.hidden:
-            return None, "project not found", "NOT_FOUND"
-        resolved_project_dir = str(project.project_dir or "")
-
-    title = params.get("title")
-
-    from jiuwenswarm.server.runtime.designer.model_tools import (
-        DesignerLlmError,
-        LLM_REQUIRED,
-    )
-    from jiuwenswarm.server.runtime.designer.media_intent import (
-        MediaIntent,
-        media_settings_from_intent,
-    )
-    from jiuwenswarm.server.runtime.designer.media_settings import write_media_settings
-    from jiuwenswarm.server.runtime.designer.skills_loader import attach_skills_metadata
-    from jiuwenswarm.server.runtime.designer.smart_graph import build_smart_video_graph
-    from jiuwenswarm.server.runtime.designer.user_references import (
-        UserReferenceError,
-        attach_user_references_to_graph,
-        image_reference_records,
-        normalize_user_references,
-        rebase_creative_intent_paths,
-    )
-
-    try:
-        session_id = str(params.get("session_id") or "").strip()
-        refs_dir = (
-            Path(resolved_project_dir) / ".designer" / "refs"
-            if resolved_project_dir
-            else Path(".") / ".designer" / "refs"
-        )
-        user_refs = normalize_user_references(raw_references, dest_dir=refs_dir)
-    except UserReferenceError as exc:
-        return None, str(exc), exc.code
-
-    # Catalog templates must not be dumped onto the canvas. Director/Leader
-    # always owns topology via the smart video pipeline.
-    if callable(on_progress):
-        on_progress("thinking", "Director · Reading brief")
-    # Never call LLM from this sync thread (asyncio.run breaks AsyncOpenAI).
-    # Caller must pass LLM analysis from the main event loop.
-    if not isinstance(analysis, dict) or str(analysis.get("source") or "") != "llm":
-        return (
-            None,
-            "Designer requires a successful LLM cast/shot analysis before building the graph.",
-            LLM_REQUIRED,
-        )
-    # Classify may have stamped temp analysis paths; point slots at project refs
-    # before topology reads those paths into n_ref / reference_image_plan.
-    if user_refs:
-        analysis = rebase_creative_intent_paths(analysis, user_refs) or analysis
-        # Safety net: if classify already produced reference_reads but stamp was
-        # lost, fail closed (do not silently fall into quality.v5 sheets).
-        # Image uploads without reference_reads may still attach onto classic
-        # graphs — Enter always classifies+stamps when paths exist.
-        from jiuwenswarm.server.runtime.designer.pipeline.reference_led import (
-            reference_led_active,
-        )
-
-        reads = analysis.get("reference_reads") if isinstance(analysis, dict) else None
-        if (
-            image_reference_records(user_refs)
-            and isinstance(reads, list)
-            and reads
-            and not reference_led_active(analysis)
-        ):
-            return (
-                None,
-                "Attached stills did not enter reference-led mode; retry Enter.",
-                "LLM_API_ERROR",
-            )
-    if callable(on_progress):
-        on_progress(
-            "tool_call",
-            "Director · Materializing graph",
-            "build_smart_video_graph",
-        )
-    try:
-        from jiuwenswarm.server.runtime.designer.smart_graph import apply_runtime_delegate
-
-        graph = apply_runtime_delegate(
-            build_smart_video_graph(
-                project_id=project_id,
-                prompt=prompt,
-                analysis=analysis,
-                title=str(title).strip() if isinstance(title, str) else None,
-            )
-        )
-    except DesignerLlmError as exc:
-        return None, exc.user_message, exc.code
-    meta = dict(graph.get("metadata") or {})
-    meta["scenario"] = "video"
-    meta["script_analysis"] = analysis
-    # Enter already authored Brief→Storyboard→Graph — skip Play redesign.
-    meta["director_composed_on_bootstrap"] = True
-    # Keep the shot set built above. Storyboard completion must not replace nodes.
-    meta["freeze_clip_topology"] = True
-    if isinstance(analysis.get("scene_locks"), dict) and analysis["scene_locks"]:
-        meta["scene_locks"] = analysis["scene_locks"]
-    graph["metadata"] = meta
-    video, image = media_settings_from_intent(
-        media_intent if isinstance(media_intent, MediaIntent) else MediaIntent()
-    )
-    write_media_settings(graph, video=video, image=image)
-    graph = attach_skills_metadata(graph, prompt)
-    if callable(on_progress):
-        cast_n = sum(
-            1
-            for n in (graph.get("nodes") or [])
-            if str(n.get("id") or "").startswith("n_character")
-        )
-        on_progress(
-            "stage",
-            f"Director · Graph materialised ({cast_n} solo cards)",
-        )
-    if user_refs:
-        graph = attach_user_references_to_graph(graph, user_refs)
-    if resolved_project_dir:
-        metadata = dict(graph.get("metadata") or {})
-        metadata["project_dir"] = resolved_project_dir
-        graph["metadata"] = metadata
-    session_id = str(params.get("session_id") or "").strip()
-    if session_id:
-        metadata = dict(graph.get("metadata") or {})
-        metadata["session_id"] = session_id
-        graph["metadata"] = metadata
-    if callable(on_progress):
-        on_progress("stage", "Director · Saving graph")
-    saved = _store.save_graph(graph)
-    payload: dict[str, Any] = {"graph": dict(saved), "project_id": project_id}
-    if project_payload is not None:
-        payload["project"] = project_payload
-    return payload, None, None
-
-
 def _get_run(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None, str | None]:
     run_id = str(params.get("run_id") or "").strip()
     if run_id:
@@ -1435,35 +1199,6 @@ def _get_run(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None,
     return None, "run_id or graph_id is required", "BAD_REQUEST"
 
 
-def _rerun_error_message(graph: dict[str, Any] | None, node_id: str, exc: Exception) -> str:
-    message = str(exc)
-    if "upstream not ready" not in message:
-        return message
-    if graph is not None and _is_comfyui_target(graph, node_id):
-        missing = message.split("upstream not ready:", 1)[-1].strip()
-        label = next(
-            (
-                str(node.get("label") or missing)
-                for node in graph.get("nodes") or []
-                if isinstance(node, dict) and str(node.get("id") or "") == missing
-            ),
-            missing,
-        )
-        return f"ComfyUI reference has no file yet; upload or generate it first: {label}"
-    role = ""
-    if graph is not None:
-        for node in graph.get("nodes") or []:
-            if str(node.get("id") or "") == node_id:
-                role = node_pipeline(node) or node_role(node)
-                break
-    if role == NODE_ROLE_COMPOSE or node_id in {"n_compose", "n_final"}:
-        detail = message.split("upstream not ready:", 1)[-1].strip()
-        if detail and detail != message:
-            return f"已连接的视频「{detail}」还没有文件，无法合并。请先生成该片段。"
-        return "已连接的视频片段还没有文件，无法合并。请先生成这些片段。"
-    return message
-
-
 def _is_comfyui_target(graph: dict[str, Any], node_id: str) -> bool:
     from jiuwenswarm.common.schema.designer_graph import is_comfyui_node
 
@@ -1475,104 +1210,150 @@ def _is_comfyui_target(graph: dict[str, Any], node_id: str) -> bool:
 
 
 def _start_run(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    """Resolve the run target (graph + optional node); no execution here.
+
+    ``node_id`` present → single-node trigger (only that node re-executes,
+    downstream frozen; ``cascade=true`` turns it into "rerun from X" — X plus
+    its downstream closure re-execute, upstream stays frozen at current
+    values); absent → full-graph trigger (unfrozen nodes execute in
+    topological order). The run_id is the graph's lifelong identity, minted
+    by the coordinator on first trigger.
+    """
     graph_id = str(params.get("graph_id") or "").strip()
     run_id = str(params.get("run_id") or "").strip()
     node_id = str(params.get("node_id") or "").strip()
+    cascade = bool(params.get("cascade"))
     graph = _store.get_graph(graph_id) if graph_id else None
-    contribution_warning = ""
-    if graph is not None and not (node_id and _is_comfyui_target(graph, node_id)):
-        try:
-            from jiuwenswarm.server.runtime.designer.orchestration import Director
-
-            audit = Director().audit_contribution_for_run(graph)
-            contribution_warning = str(audit.get("warning") or "")
-            _store.save_graph(graph)
-        except Exception:
-            logger.debug("Director contribution audit failed", exc_info=True)
     if run_id:
         existing = _store.get_run(run_id)
         if existing is None:
             return None, "run not found", "NOT_FOUND"
         if graph is None:
-            graph = _store.get_graph(existing["graph_id"])
+            graph = _store.get_graph(str(existing.get("graph_id") or ""))
         elif str(existing.get("graph_id") or "") != str(graph.get("graph_id") or ""):
             return None, "run does not belong to graph", "BAD_REQUEST"
-        if node_id:
-            if graph is None:
-                return None, "graph not found", "NOT_FOUND"
-            try:
-                run = _executor.create_rerun(graph, source_run=existing, node_id=node_id)
-            except ValueError as exc:
-                return None, _rerun_error_message(graph, node_id, exc), "BAD_REQUEST"
-            except KeyError:
-                return None, "node not found", "NOT_FOUND"
-            run_id = run["run_id"]
-        elif (existing.get("metadata") or {}).get("target_node_id"):
-            # The workflow Continue action explicitly leaves single-node scope.
-            if _executor.has_active_tasks(existing["graph_id"]):
-                return None, "任务正在运行或停止，请稍后继续工作流", "BAD_REQUEST"
-            existing["metadata"].pop("target_node_id")
-            _store.save_run(existing)
-    elif graph is not None and node_id:
-        source = _store.get_latest_run_for_graph(graph["graph_id"])
-        # A ComfyUI node runs on its own, so it needs no earlier Play.
-        if source is None and not _is_comfyui_target(graph, node_id):
-            return None, "no previous run to rerun from", "BAD_REQUEST"
-        try:
-            run = _executor.create_rerun(graph, source_run=source, node_id=node_id)
-        except ValueError as exc:
-            return None, _rerun_error_message(graph, node_id, exc), "BAD_REQUEST"
-        except KeyError:
-            return None, "node not found", "NOT_FOUND"
-        run_id = run["run_id"]
-    elif graph is not None:
-        run = _executor.create_run(graph)
-        run_id = run["run_id"]
-    else:
-        return None, "graph_id or run_id is required", "BAD_REQUEST"
     if graph is None:
-        return None, "graph not found", "NOT_FOUND"
-    # Stamp warning onto the run record so the UI can show it without blocking.
-    if contribution_warning:
+        if graph_id or run_id:
+            return None, "graph not found", "NOT_FOUND"
+        return None, "graph_id or run_id is required", "BAD_REQUEST"
+    node_ids: list[str] | None = None
+    if node_id:
+        if not any(str(n.get("id") or "") == node_id for n in graph.get("nodes") or []):
+            return None, "node not found", "NOT_FOUND"
+        node_ids = [node_id]
+    elif cascade:
+        return None, "cascade requires node_id", "BAD_REQUEST"
+    contribution_warning = ""
+    if not (node_id and _is_comfyui_target(graph, node_id)):
         try:
-            run_obj = _store.get_run(run_id)
-            if isinstance(run_obj, dict):
-                run_obj = dict(run_obj)
-                run_obj["warning"] = contribution_warning
-                warnings = list(run_obj.get("warnings") or [])
-                if contribution_warning not in warnings:
-                    warnings.append(contribution_warning)
-                run_obj["warnings"] = warnings[:8]
-                _store.save_run(run_obj)
+            from jiuwenswarm.server.runtime.designer.orchestration import Director
+
+            audit = Director().audit_contribution_for_run(graph)
+            contribution_warning = str(audit.get("warning") or "")
+            graph = dict(_store.save_graph(graph))
         except Exception:
-            logger.debug("Failed to stamp run contribution warning", exc_info=True)
+            logger.debug("Director contribution audit failed", exc_info=True)
     return {
-        "run_id": run_id,
+        "graph": dict(graph),
         "graph_id": graph["graph_id"],
+        "node_ids": node_ids,
+        "cascade": cascade,
         "warning": contribution_warning or None,
         "warnings": [contribution_warning] if contribution_warning else [],
     }, None, None
+
+
+_RUN_TASKS: set[asyncio.Task[None]] = set()
+
+
+def _launch_run_trigger(
+    coordinator: RunCoordinator,
+    payload: dict[str, Any],
+    on_update: Any,
+) -> None:
+    """Run the trigger on a background task; failures land on the run record.
+
+    The trigger's own error handling writes a failed run and pushes it
+    through ``on_update``; a task-level exception (outside the coordinator)
+    is logged — the record keeps its last persisted state.
+    """
+
+    async def _run() -> None:
+        try:
+            await coordinator.start(
+                payload["graph"],
+                node_ids=payload["node_ids"],
+                cascade=bool(payload.get("cascade")),
+                on_update=on_update,
+            )
+        except Exception:  # noqa: BLE001 — background task must never raise
+            logger.exception(
+                "[DesignerAdapter] run trigger crashed: graph_id=%s",
+                payload.get("graph_id"),
+            )
+
+    task = asyncio.create_task(_run())
+    _RUN_TASKS.add(task)
+    task.add_done_callback(_RUN_TASKS.discard)
+
+
+def _initial_running_run(payload: dict[str, Any]) -> dict[str, Any]:
+    """The 'running' snapshot the run.start response answers with.
+
+    Mirrors the first ``on_update`` the coordinator emits once the lock is
+    taken without racing the background task: read the minted run record, or
+    synthesize a draft-shaped one when the run_id is brand new.
+    """
+    graph = payload["graph"]
+    graph_id = str(graph.get("graph_id") or "")
+    meta = dict(graph.get("metadata") or {})
+    run_id = str(meta.get("team_design_run_id") or "").strip()
+    run = _store.get_run(run_id) if run_id else None
+    if run is not None:
+        return dict(run)
+    now = utc_now_ms()
+    return {
+        "schema_version": "designer-execution-run.v1",
+        "run_id": run_id,
+        "graph_id": graph_id,
+        "project_id": str(graph.get("project_id") or ""),
+        "status": "running",
+        "node_states": {
+            node_id: {
+                "status": "pending",
+                "started_at": None,
+                "completed_at": None,
+            }
+            for node_id in (payload.get("node_ids") or [])
+        },
+        "current_node_ids": [],
+        "created_at": now,
+        "updated_at": now,
+    }
 
 
 def _pause_run(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None, str | None]:
     run_id = str(params.get("run_id") or "").strip()
     if not run_id:
         return None, "run_id is required", "BAD_REQUEST"
-    try:
-        run = _executor.pause_run(run_id)
-    except KeyError:
-        return None, "run not found", "NOT_FOUND"
-    return {"run": dict(run)}, None, None
+    return (
+        None,
+        "team.design runs do not support pause; cancel the trigger and re-run",
+        "NOT_IMPLEMENTED",
+    )
 
 
 def _cancel_run(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None, str | None]:
     run_id = str(params.get("run_id") or "").strip()
     if not run_id:
         return None, "run_id is required", "BAD_REQUEST"
-    try:
-        run = _executor.cancel_run(run_id)
-    except KeyError:
+    run = _store.get_run(run_id)
+    if run is None:
         return None, "run not found", "NOT_FOUND"
+    graph_id = str(run.get("graph_id") or "")
+    if graph_id:
+        _coordinator_for(graph_id).cancel(run_id)
+        run = _store.get_run(run_id) or run
     return {"run": dict(run)}, None, None
 
 
@@ -1584,355 +1365,26 @@ def _choose_output(params: dict[str, Any]) -> tuple[dict[str, Any] | None, str |
         return None, "run_id is required", "BAD_REQUEST"
     if not node_id:
         return None, "node_id is required", "BAD_REQUEST"
+    run = _store.get_run(run_id)
+    graph_id = str((run or {}).get("graph_id") or "")
+    if run is None or not graph_id:
+        return None, "run or node not found", "NOT_FOUND"
     try:
-        run = _executor.choose_output(run_id, node_id, choice)
+        updated = _coordinator_for(graph_id).choose_output(run_id, node_id, choice)
     except KeyError:
         return None, "run or node not found", "NOT_FOUND"
     except ValueError as exc:
         return None, str(exc), "BAD_REQUEST"
-    return {"run": dict(run)}, None, None
-
-
-async def _start_chat_run(
-    request: AgentRequest,
-    graph: dict[str, Any],
-    run_node_ids: list[str],
-) -> tuple[dict[str, Any] | None, str | None]:
-    """Start the run a chat turn asked for; returns (run payload, error)."""
-    start_params: dict[str, Any] = {"graph_id": graph["graph_id"], "node_id": run_node_ids[0]}
-    latest = _store.get_latest_run_for_graph(graph["graph_id"])
-    if latest is not None:
-        start_params["run_id"] = str(latest.get("run_id") or "")
-    payload, error, _code = _start_run(start_params)
-    if error is not None or payload is None:
-        return None, error
-    run = await _executor.start_run(
-        str(payload["run_id"]),
-        on_update=_run_update_callback(request),
-        on_graph_update=_graph_update_callback(request),
-    )
-    run_payload = dict(run)
-    await _push_designer_event(
-        request=request,
-        event_type=EventType.DESIGNER_RUN_UPDATED.value,
-        payload={"run": run_payload},
-    )
-    return run_payload, None
-
-
-async def _chat_graph(request: AgentRequest, params: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None, str | None]:
-    from jiuwenswarm.server.runtime.designer.orchestration import Director
-    from jiuwenswarm.server.runtime.designer.chat_document_sync import (
-        ChatDocumentConflict,
-        read_chat_documents,
-        save_document_update,
-    )
-    from jiuwenswarm.server.runtime.designer.model_tools import (
-        DesignerLlmError,
-        require_llm,
-        use_preferred_designer_model,
-    )
-
-    graph_id = str(params.get("graph_id") or "").strip()
-    message = str(params.get("message") or params.get("prompt") or "").strip()
-    if not graph_id:
-        return None, "graph_id is required", "BAD_REQUEST"
-    if not message:
-        return None, "message is required", "BAD_REQUEST"
-    graph = _store.get_graph(graph_id)
-    if graph is None:
-        return None, "graph not found", "NOT_FOUND"
-    selected_node_id = str(params.get("selected_node_id") or params.get("node_id") or "").strip()
-    run_new_nodes = bool(params.get("run_new_nodes") or params.get("runNewNodes"))
-    progress = _leader_progress_callback(request)
-    try:
-        require_llm()
-        run = _store.get_latest_run_for_graph(graph_id)
-        documents = read_chat_documents(graph, run)
-        pending_documents = any(
-            state.get("candidate_output_ref") or state.get("candidate_output_refs")
-            for node_id, state in ((run or {}).get("node_states") or {}).items() if node_id in documents
-        )
-        was_active = _executor.has_active_tasks(graph_id)
-        preferred_model = str((graph.get("metadata") or {}).get("model_name") or "")
-        with use_preferred_designer_model(preferred_model):
-            result = await Director().chat(
-                graph,
-                message,
-                documents=documents,
-                pending_documents=pending_documents,
-                selected_node_id=selected_node_id,
-                run_new_nodes=run_new_nodes,
-                progress=progress,
-            )
-        updated_text_uris = []
-        saved = graph
-        if result.get("changed") or result.get("run_node_ids"):
-            if was_active or _executor.has_active_tasks(graph_id):
-                return None, "工作流任务尚未结束；运行中请先停止，任务正在停止时请稍后重试。", "CONFLICT"
-            current_graph = _store.get_graph(graph_id)
-            current_run = _store.get_latest_run_for_graph(graph_id)
-            if (current_graph != graph or current_run != run
-                    or read_chat_documents(current_graph, current_run) != documents):
-                return None, "工作流或文本已在本次请求期间发生变化，请重新提交。", "CONFLICT"
-        if result.get("changed"):
-            saved, run, updated_text_uris = save_document_update(
-                _store, result["graph"], run, documents, result["texts"]
-            )
-        progress("stage", str(result.get("summary") or "done"))
-    except DesignerLlmError as exc:
-        return None, exc.user_message, exc.code
-    except ChatDocumentConflict as exc:
-        return None, str(exc), "CONFLICT"
-    except DesignerGraphValidationError as exc:
-        return None, str(exc), "BAD_REQUEST"
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[DesignerAdapter] graph chat failed: %s", exc)
-        return None, str(exc), "INTERNAL_ERROR"
-
-    summary = str(result.get("summary") or "")
-    session_id = str((saved.get("metadata") or {}).get("session_id") or "").strip()
-    if session_id:
-        from jiuwenswarm.server.runtime.session.session_history import append_history_record
-
-        now = time.time()
-        history_request_id = request.request_id or str(uuid.uuid4())
-        append_history_record(
-            session_id=session_id,
-            request_id=history_request_id,
-            channel_id=request.channel_id or "web",
-            role="user",
-            content=message,
-            timestamp=now,
-            event_type="design.user",
-            extra={"design_kind": "user", "graph_id": graph_id},
-            mode="designer",
-        )
-        append_history_record(
-            session_id=session_id,
-            request_id=history_request_id,
-            channel_id=request.channel_id or "web",
-            role="assistant",
-            content=summary or "Updated the workflow.",
-            timestamp=now + 0.001,
-            event_type="design.graph_updated",
-            extra={"design_kind": "chat_ack", "graph_id": graph_id},
-            mode="designer",
-        )
-    run_payload = dict(run) if run is not None and result.get("changed") else None
-    run_ids = list(result.get("run_node_ids") or [])
-    if run_ids:
-        started, error = await _start_chat_run(request, saved, run_ids)
-        if started is not None:
-            run_payload = started
-        elif error:
-            summary = f"{summary} ({error})".strip()
-    return {
-        "graph": dict(saved),
-        "updated_text_uris": updated_text_uris,
-        "summary": summary,
-        "intent": result.get("intent") or "answer",
-        "run_node_ids": run_ids,
-        "run": run_payload,
-    }, None, None
-
-
-async def _bootstrap_graph_with_director(
-    params: dict[str, Any],
-    channel_id: str,
-    on_progress: Any | None = None,
-    allow_additional_session: bool = False,
-) -> tuple[dict[str, Any] | None, str | None, str | None]:
-    from jiuwenswarm.server.runtime.designer.model_tools import (
-        use_preferred_designer_model,
-    )
-
-    with use_preferred_designer_model(str(params.get("model_name") or "").strip()):
-        return await _bootstrap_graph_with_director_impl(
-            params,
-            channel_id,
-            on_progress,
-            allow_additional_session=allow_additional_session,
-        )
-
-
-async def _bootstrap_graph_with_director_impl(
-    params: dict[str, Any],
-    channel_id: str,
-    on_progress: Any | None = None,
-    allow_additional_session: bool = False,
-) -> tuple[dict[str, Any] | None, str | None, str | None]:
-    """Enter: seed cast → Brief/Director → Storyboard/Director → Graph/Director.
-
-    Never runs AsyncOpenAI inside ``asyncio.to_thread`` / ``asyncio.run``.
-    """
-    from jiuwenswarm.server.runtime.designer.model_tools import (
-        DesignerLlmError,
-        require_llm,
-    )
-    from jiuwenswarm.server.runtime.designer.media_intent import extract_media_intent
-    from jiuwenswarm.server.runtime.designer.script_analysis import analyze_creative_brief
-    from jiuwenswarm.server.runtime.designer.user_references import (
-        UserReferenceError,
-        analysis_prompt_with_references,
-        classify_reference_images,
-        image_reference_records,
-        materialize_user_references_for_analysis,
-    )
-
-    prompt = str(params.get("prompt") or "").strip() or "根据参考素材创作"
-    raw_references = params.get("references")
-    if raw_references is None:
-        raw_references = params.get("user_references")
-    # One Work/Code-style local credential gate at the user-visible Enter boundary.
-    # Nested helpers call the model bluntly; billing/API failures raise there.
-    try:
-        require_llm()
-    except DesignerLlmError as exc:
-        return None, exc.user_message, exc.code
-    # Materialize base64/path uploads to a temp dir BEFORE classify/stamp.
-    # Preview-only normalize left base64 with path="" and skipped reference-led.
-    try:
-        user_refs_preview = (
-            materialize_user_references_for_analysis(raw_references)
-            if isinstance(raw_references, list) and raw_references
-            else []
-        )
-    except UserReferenceError as exc:
-        return None, str(exc), getattr(exc, "code", None) or "BAD_REQUEST"
-    except Exception:  # noqa: BLE001
-        user_refs_preview = []
-    analysis_prompt = analysis_prompt_with_references(prompt, user_refs_preview)
-    image_refs = image_reference_records(user_refs_preview)
-
-    if callable(on_progress):
-        on_progress("thinking", "Director · Reading video format")
-    media_intent = await extract_media_intent(prompt)
-    if callable(on_progress):
-        on_progress("thinking", "Director · Extracting cast and scenes (LLM)")
-    try:
-        analysis = await analyze_creative_brief(
-            analysis_prompt,
-            timeout_sec=120.0,
-            reference_images=[str(item.get("path") or "") for item in image_refs],
-            film_duration_sec=media_intent.film_duration_sec,
-        )
-    except DesignerLlmError as exc:
-        return None, exc.user_message, exc.code
-    if not isinstance(analysis, dict) or str(analysis.get("source") or "") != "llm":
-        return (
-            None,
-            "Chat model did not return a usable cast/shot analysis.",
-            "LLM_API_ERROR",
-        )
-    if callable(on_progress):
-        n = len(analysis.get("characters") or [])
-        on_progress(
-            "stage",
-            f"Director · LLM cast locked ({n} characters)",
-        )
-    if image_refs:
-        if callable(on_progress):
-            on_progress("thinking", "Supervisor · Reading reference images")
-        reads = await classify_reference_images(prompt, image_refs, analysis)
-        if not reads:
-            return (
-                None,
-                "Attached stills could not be assigned a reference role.",
-                "LLM_API_ERROR",
-            )
-        from jiuwenswarm.server.runtime.designer.pipeline.reference_led import (
-            ReferenceIntentError,
-            stamp_creative_intent,
-        )
-
-        try:
-            analysis = stamp_creative_intent(analysis, reads, image_refs)
-        except ReferenceIntentError as exc:
-            return None, str(exc), "LLM_API_ERROR"
-
-    payload, error, code = await asyncio.to_thread(
-        _bootstrap_graph,
-        params,
-        channel_id,
-        analysis,
-        on_progress,
-        media_intent,
-    )
-    if error is not None or not isinstance(payload, dict):
-        return payload, error, code
-    graph = payload.get("graph")
-    if not isinstance(graph, dict):
-        return payload, error, code
-
-    from jiuwenswarm.server.runtime.designer.orchestration import Director
-    from jiuwenswarm.server.runtime.designer.smart_graph import apply_runtime_delegate
-
-    try:
-        if callable(on_progress):
-            on_progress("thinking", "Director · Authoring brief (LLM)")
-        await Director().author_creative_brief(graph)
-        if callable(on_progress):
-            on_progress("thinking", "Director · Reviewing / approving brief")
-        await Director().review_brief(graph)
-        if callable(on_progress):
-            on_progress("thinking", "Director · Designing storyboard (LLM)")
-        await Director().author_storyboard(graph)
-        if callable(on_progress):
-            on_progress("thinking", "Director · Reviewing / approving storyboard")
-        await Director().review_storyboard(graph)
-        if callable(on_progress):
-            on_progress(
-                "tool_call",
-                "Director · Designing execution graph (LLM)",
-                "design_execution_graph",
-            )
-        await Director().design_execution_graph(
-            graph,
-        )
-        if callable(on_progress):
-            on_progress("thinking", "Director · Validating / approving graph + locks")
-        await Director().validate_plan(graph)
-        graph = apply_runtime_delegate(graph)
-        meta = dict(graph.get("metadata") or {})
-        cast_n = sum(
-            1
-            for n in (graph.get("nodes") or [])
-            if str(n.get("id") or "").startswith("n_character")
-        )
-        meta["director_composed_on_bootstrap"] = True
-        graph["metadata"] = meta
-        if callable(on_progress):
-            on_progress(
-                "stage",
-                f"Director · Approved — {cast_n} character specs",
-            )
-        saved = _store.save_graph(graph)
-        payload = dict(payload)
-        payload["graph"] = dict(saved)
-        return payload, None, None
-    except DesignerLlmError as exc:
-        logger.info(
-            "Director bootstrap approval chain failed (LLM): %s",
-            exc,
-            exc_info=True,
-        )
-        return None, exc.user_message, exc.code
-    except Exception as exc:  # noqa: BLE001
-        logger.info(
-            "Director bootstrap approval chain failed: %s",
-            exc,
-            exc_info=True,
-        )
-        return (
-            None,
-            f"Director approval chain failed: {exc}",
-            "LLM_API_ERROR",
-        )
+    return {"run": dict(updated)}, None, None
 
 
 class DesignerAdapter(GatewayAdapter):
-    """Designer execution graph adapter."""
+    """Designer execution graph adapter.
+
+    The canvas conversation (graph authoring and edits) rides the standard
+    ``chat.send(mode='team.design')`` pipeline; this adapter only serves the
+    workspace, graph CRUD and the run triggers.
+    """
 
     methods: frozenset[str] = frozenset(
         {
@@ -1943,9 +1395,7 @@ class DesignerAdapter(GatewayAdapter):
             ReqMethod.DESIGNER_GRAPH_GET.value,
             ReqMethod.DESIGNER_GRAPH_LIST.value,
             ReqMethod.DESIGNER_GRAPH_SAVE.value,
-            ReqMethod.DESIGNER_GRAPH_BOOTSTRAP.value,
             ReqMethod.DESIGNER_GRAPH_PATCH.value,
-            ReqMethod.DESIGNER_GRAPH_CHAT.value,
             ReqMethod.DESIGNER_MEDIA_CAPABILITIES.value,
             ReqMethod.DESIGNER_RUN_START.value,
             ReqMethod.DESIGNER_RUN_GET.value,
@@ -1970,24 +1420,17 @@ class DesignerAdapter(GatewayAdapter):
                     _create_design_session, request, params
                 )
             elif method == ReqMethod.DESIGNER_WORKSPACE_SESSION_COMPOSE:
-                payload, error, code = await _compose_design_session(request, params)
+                payload, error, code = await asyncio.to_thread(
+                    _compose_design_session, request, params
+                )
             elif method == ReqMethod.DESIGNER_GRAPH_GET:
                 payload, error, code = await asyncio.to_thread(_get_graph, params)
             elif method == ReqMethod.DESIGNER_GRAPH_LIST:
                 payload, error, code = await asyncio.to_thread(_list_graphs, params)
             elif method == ReqMethod.DESIGNER_GRAPH_SAVE:
                 payload, error, code = await asyncio.to_thread(_save_graph, params)
-            elif method == ReqMethod.DESIGNER_GRAPH_BOOTSTRAP:
-                # Enter: provisional graph, then Director LLM approval chain.
-                payload, error, code = await _bootstrap_graph_with_director(
-                    params,
-                    request.channel_id,
-                    _leader_progress_callback(request),
-                )
             elif method == ReqMethod.DESIGNER_GRAPH_PATCH:
                 payload, error, code = await asyncio.to_thread(_patch_graph, params)
-            elif method == ReqMethod.DESIGNER_GRAPH_CHAT:
-                payload, error, code = await _chat_graph(request, params)
             elif method == ReqMethod.DESIGNER_MEDIA_CAPABILITIES:
                 payload, error, code = await asyncio.to_thread(_media_capabilities, params)
             elif method == ReqMethod.DESIGNER_RUN_GET:
@@ -1995,12 +1438,20 @@ class DesignerAdapter(GatewayAdapter):
             elif method == ReqMethod.DESIGNER_RUN_START:
                 payload, error, code = await asyncio.to_thread(_start_run, params)
                 if error is None and payload is not None:
-                    run = await _executor.start_run(
-                        str(payload["run_id"]),
-                        on_update=_run_update_callback(request),
-                        on_graph_update=_graph_update_callback(request),
-                    )
-                    run_out = dict(run)
+                    coordinator = _coordinator_for(str(payload["graph_id"]))
+                    if coordinator.is_active():
+                        return build_error_response(
+                            request,
+                            "a trigger is already executing on this graph; wait for "
+                            "it to finish (the canvas shows its progress)",
+                            code="CONFLICT",
+                        )
+                    # Accept-and-trigger: a run spans many worker LLM turns, so
+                    # answer with the initial 'running' record at once; the
+                    # canvas follows progress via designer.run.updated /
+                    # designer.node.updated pushes and designer.run.get.
+                    _launch_run_trigger(coordinator, payload, _run_update_callback(request))
+                    run_out = _initial_running_run(payload)
                     warning = str(payload.get("warning") or "").strip()
                     warnings = [
                         str(x)
@@ -2048,9 +1499,7 @@ class DesignerAdapter(GatewayAdapter):
         if error is not None:
             return build_error_response(request, error, code=code or "BAD_REQUEST")
         if isinstance(payload, dict) and payload.get("graph") is not None and method in {
-            ReqMethod.DESIGNER_GRAPH_BOOTSTRAP,
             ReqMethod.DESIGNER_GRAPH_PATCH,
-            ReqMethod.DESIGNER_GRAPH_CHAT,
         }:
             await _push_designer_event(
                 request=request,

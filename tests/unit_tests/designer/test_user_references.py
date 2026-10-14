@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -314,67 +313,54 @@ def test_user_reference_node_is_immutable_passthrough(tmp_path: Path) -> None:
     assert cfg["read_only"] is True
 
 
-def test_bootstrap_graph_registers_user_references(
-    designer_store, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_workspace_references_land_in_the_project_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from jiuwenswarm.server.runtime.gateway_adapter import designer_adapter as adapter
+    from jiuwenswarm.server.runtime.session.project_store import Project
 
-    monkeypatch.setattr(adapter, "_store", designer_store)
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    project = Project(
+        project_id="proj_refs01",
+        name="Refs",
+        project_dir=str(project_dir),
+        work_mode="design",
+    )
     monkeypatch.setattr(
         adapter.project_store,
         "get_project_by_id",
-        lambda project_id, cache_bust=False: SimpleNamespace(
-            project_id=project_id,
-            project_dir=str(tmp_path / "proj"),
-            work_mode="work",
-            hidden=False,
-        ),
+        lambda project_id, cache_bust=False: project if project_id == project.project_id else None,
     )
-    (tmp_path / "proj").mkdir()
     image = tmp_path / "hero.png"
     image.write_bytes(_png_bytes())
-    # Sync bootstrap only materializes; LLM analysis is produced on the event loop.
-    analysis = {
-        "source": "llm",
-        "characters": [{"id": "char_1", "name": "Hero", "description": "reference cast"}],
-        "scenes": [{"id": "set_1", "name": "Set", "description": "location"}],
-        "clips": [
+    graph = {
+        "schema_version": "designer-execution-graph.v1",
+        "graph_id": "graph_refs",
+        "project_id": project.project_id,
+        "title": "Refs",
+        "nodes": [],
+        "edges": [],
+        "metadata": {"session_id": "design_refs"},
+    }
+
+    attached = adapter._attach_design_references(
+        graph,
+        [
             {
-                "clip_index": 1,
-                "action": "stands",
-                "camera": "medium",
-                "on_screen": ["char_1"],
-                "setting_id": "set_1",
-                "timeline": "0-5s",
+                "kind": "image",
+                "filename": "hero.png",
+                "mime_type": "image/png",
+                "path": str(image),
             }
         ],
-        "target_clip_count": 1,
-    }
-    payload, error, code = adapter._bootstrap_graph(
-        {
-            "prompt": "按参考图做一个短片",
-            "project_id": "proj_refs01",
-            "references": [
-                {
-                    "kind": "image",
-                    "filename": "hero.png",
-                    "mime_type": "image/png",
-                    "path": str(image),
-                }
-            ],
-        },
-        "web",
-        analysis,
     )
-    assert error is None
-    assert code is None
-    assert payload is not None
-    refs = payload["graph"]["metadata"]["user_references"]
+
+    refs = attached["metadata"]["user_references"]
     assert refs[0]["kind"] == "image"
-    assert Path(refs[0]["path"]).is_file()
-    brief = next(node for node in payload["graph"]["nodes"] if node["id"] == "n_brief")
-    assert brief["config"]["prompt"] == "按参考图做一个短片"
-    assert brief["config"]["user_reference_ids"] == ["ref_01"]
+    stored = Path(refs[0]["path"])
+    assert stored.is_file()
+    assert stored.parent == (project_dir / ".designer" / "refs").resolve()
 
 
 def test_user_reference_video_and_audio_paths(tmp_path: Path) -> None:

@@ -178,6 +178,23 @@ class DesignerGraphStore:
             return []
         return self.list_graphs(project_id)
 
+    def get_latest_graph_for_session(
+        self, session_id: str
+    ) -> DesignerExecutionGraph | None:
+        """The session's freshest graph (one design session owns one graph).
+
+        The chat path resolves the graph to bind from the session id alone —
+        the context registry is in-process state that a server restart clears,
+        the store is durable.
+        """
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            return None
+        for graph in self.list_graphs():
+            if str((graph.get("metadata") or {}).get("session_id") or "") == session_id:
+                return graph
+        return None
+
     def delete_graph(self, graph_id: str) -> bool:
         """Delete a graph created by an uncommitted workspace transaction."""
         path = _record_path(_graphs_dir(), str(graph_id or ""))
@@ -235,4 +252,26 @@ class DesignerGraphStore:
                 if ts >= latest_ts:
                     latest = run
                     latest_ts = ts
+        return latest
+
+    def latest_runs_by_graph(self) -> dict[str, DesignerExecutionRun]:
+        """Latest run per graph in one scan over the run files.
+
+        List views need the latest run of every graph at once; calling
+        ``get_latest_run_for_graph`` per graph re-parses every run file each
+        time (O(graphs x runs)).
+        """
+        latest: dict[str, DesignerExecutionRun] = {}
+        with _STORE_LOCK:
+            for path in _runs_dir().glob("*.json"):
+                try:
+                    run = normalize_execution_run(_read_json(path))
+                except (DesignerGraphValidationError, ValueError, json.JSONDecodeError):
+                    continue
+                graph_id = str(run.get("graph_id") or "")
+                if not graph_id:
+                    continue
+                held = latest.get(graph_id)
+                if held is None or int(run.get("updated_at") or 0) >= int(held.get("updated_at") or 0):
+                    latest[graph_id] = run
         return latest
