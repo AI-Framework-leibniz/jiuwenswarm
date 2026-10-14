@@ -254,17 +254,21 @@ CONFIG_DELEGATES: frozenset[str] = frozenset(
 
 DESIGNER_AGENT_GROUP_NAME = "designer"
 
+# Values are bare member names of the bound designer AgentGroup: the
+# swarmflow engine's agent_template gate rejects "group/member" refs (the
+# group is the session binding). Text-producing nodes resolve to the text
+# member, whose manifest carries the worker submit tool.
 ROLE_DEFAULT_TEMPLATES: dict[str, str] = {
-    PIPELINE_BRIEF: f"{DESIGNER_AGENT_GROUP_NAME}/leader",
-    PIPELINE_CHARACTER: f"{DESIGNER_AGENT_GROUP_NAME}/character",
-    PIPELINE_SCENE: f"{DESIGNER_AGENT_GROUP_NAME}/scene",
-    PIPELINE_STORYBOARD: f"{DESIGNER_AGENT_GROUP_NAME}/storyboard",
-    PIPELINE_CLIP: f"{DESIGNER_AGENT_GROUP_NAME}/clip",
-    PIPELINE_COMPOSE: f"{DESIGNER_AGENT_GROUP_NAME}/clip",
-    NODE_TYPE_TEXT: f"{DESIGNER_AGENT_GROUP_NAME}/leader",
-    NODE_TYPE_TABLE: f"{DESIGNER_AGENT_GROUP_NAME}/storyboard",
-    NODE_TYPE_IMAGE: f"{DESIGNER_AGENT_GROUP_NAME}/character",
-    NODE_TYPE_VIDEO: f"{DESIGNER_AGENT_GROUP_NAME}/clip",
+    PIPELINE_BRIEF: "text",
+    PIPELINE_CHARACTER: "character",
+    PIPELINE_SCENE: "scene",
+    PIPELINE_STORYBOARD: "storyboard",
+    PIPELINE_CLIP: "clip",
+    PIPELINE_COMPOSE: "clip",
+    NODE_TYPE_TEXT: "text",
+    NODE_TYPE_TABLE: "storyboard",
+    NODE_TYPE_IMAGE: "character",
+    NODE_TYPE_VIDEO: "clip",
 }
 
 # ── Edge kinds ────────────────────────────────────────────────────────────────
@@ -309,6 +313,7 @@ ACTIVITY_KINDS: frozenset[str] = frozenset(
 ACTIVITY_TEXT_MAX = 120
 ACTIVITY_TAIL_LIMIT = 8
 ACTIVITY_LOG_LIMIT = 20
+NODE_HISTORY_LIMIT = 20
 
 NODE_STATUSES: frozenset[str] = frozenset(
     {
@@ -452,6 +457,14 @@ class DesignerNodeState(TypedDict, total=False):
     activity: DesignerNodeActivity
     activity_tail: list[str]
     activity_log: list[DesignerNodeActivity]
+    text: str
+    candidate_text: str
+    history: list[dict[str, Any]]
+    # Content-iteration version of the node's output (starts at 1, +1 per
+    # single-node rerun / cascade execution of the node). The compiler encodes
+    # it into the engine ``phase`` ("v{n}") so a rerun misses the WAL cache and
+    # executes live while untouched nodes replay. Store-side truth only.
+    version: int
 
 
 class DesignerExecutionRun(TypedDict, total=False):
@@ -606,7 +619,12 @@ def normalize_node_config(raw: Any) -> DesignerNodeConfig:
             raise DesignerGraphValidationError(
                 "node.config.agent_template must be a non-empty string"
             )
-        config[CONFIG_KEY_AGENT_TEMPLATE] = agent_template.strip()
+        value = agent_template.strip()
+        # Legacy payloads carry "designer/<member>"; the engine takes bare names.
+        group, sep, member = value.partition("/")
+        if sep and group.strip() == DESIGNER_AGENT_GROUP_NAME and member.strip():
+            value = member.strip()
+        config[CONFIG_KEY_AGENT_TEMPLATE] = value
     collaborate = raw.get(CONFIG_KEY_COLLABORATE)
     if collaborate is not None:
         if not isinstance(collaborate, bool):
@@ -643,7 +661,13 @@ def normalize_node(raw: Any) -> DesignerGraphNode:
     node_id = _require_str(raw.get("id"), "node.id")
     node_type = _require_str(raw.get("type"), "node.type")
     if node_type not in NODE_TYPES:
-        raise DesignerGraphValidationError(f"unsupported node type: {node_type!r}")
+        raise DesignerGraphValidationError(
+            f"unsupported node type: {node_type!r}. node.type must be one of "
+            f"{sorted(NODE_TYPES)} (modality only). Narrative roles like "
+            "outline/character/storyboard/script/scene are NOT node types — "
+            "use type='text' (or the fitting modality) and put the role in "
+            "config.pipeline / config.role."
+        )
     label = raw.get("label")
     config = normalize_node_config(raw.get("config"))
     if not str(config.get(CONFIG_KEY_PIPELINE) or "").strip():
@@ -1385,6 +1409,12 @@ def normalize_node_state(raw: Any) -> DesignerNodeState:
     error = raw.get("error")
     if isinstance(error, str):
         state["error"] = error
+    version = raw.get("version")
+    if version is not None:
+        if isinstance(version, int) and not isinstance(version, bool) and version > 0:
+            state["version"] = version
+        else:
+            raise DesignerGraphValidationError("node_state.version must be a positive integer")
     blocked_by = raw.get("blocked_by")
     if blocked_by is not None:
         if not isinstance(blocked_by, list) or not all(
@@ -1409,6 +1439,32 @@ def normalize_node_state(raw: Any) -> DesignerNodeState:
             for item in (normalize_node_activity(entry) for entry in log)
             if item is not None
         ][-ACTIVITY_LOG_LIMIT:]
+    # team.design execution state: the node's output text snapshot (feeds
+    # compile-time upstream inlining), the single-node rerun candidate text,
+    # and the per-node rerun history (one entry per trigger).
+    for text_key in ("text", "candidate_text"):
+        text_val = raw.get(text_key)
+        if text_val is not None:
+            if not isinstance(text_val, str):
+                raise DesignerGraphValidationError(f"node_state.{text_key} must be a string")
+            state[text_key] = text_val  # type: ignore[literal-required]
+    history = raw.get("history")
+    if history is not None:
+        if not isinstance(history, list):
+            raise DesignerGraphValidationError("node_state.history must be an array")
+        entries: list[dict[str, Any]] = []
+        for entry in history:
+            if not isinstance(entry, dict):
+                continue
+            normalized_entry: dict[str, Any] = {
+                "ts": entry.get("ts") if isinstance(entry.get("ts"), int) else utc_now_ms(),
+                "text": str(entry.get("text") or ""),
+            }
+            ref = normalize_asset_ref(entry.get("output_ref"))
+            if ref is not None:
+                normalized_entry["output_ref"] = ref
+            entries.append(normalized_entry)
+        state["history"] = entries[-NODE_HISTORY_LIMIT:]
     return state
 
 def normalize_execution_run(raw: Any) -> DesignerExecutionRun:
@@ -1519,8 +1575,14 @@ def node_delegate(node: DesignerGraphNode) -> str:
 
 
 def node_agent_template(node: DesignerGraphNode) -> str:
-    """Resolve the AgentTemplate ref for a node (explicit, else pipeline / type default)."""
+    """Resolve the AgentTemplate member name for a node (explicit, else pipeline / type default).
+
+    The value is a bare member name; a legacy ``designer/`` prefix on raw
+    graph payloads is stripped here too.
+    """
     explicit = str(node_config(node).get(CONFIG_KEY_AGENT_TEMPLATE) or "").strip()
+    if explicit.startswith(f"{DESIGNER_AGENT_GROUP_NAME}/"):
+        explicit = explicit.partition("/")[2].strip()
     if explicit:
         return explicit
     pipeline = node_pipeline(node)
