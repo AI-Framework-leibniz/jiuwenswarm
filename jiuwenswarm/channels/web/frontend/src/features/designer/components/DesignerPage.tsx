@@ -22,6 +22,18 @@ import { DesignerChatPanel, DesignerEmptyState } from './DesignerChatPanel';
 import { DesignerRunControl } from './DesignerRunControl';
 import { designerWorkspaceClient } from '../designerGraphClient';
 import { useWorkspaceStore } from '../../../stores/workspaceStore';
+import { useChatStore } from '../../../stores/chatStore';
+import { useSessionStore } from '../../../stores/sessionStore';
+import {
+  beginHistoryRestore,
+  HISTORY_GET_METHOD,
+  type HistoryRestoreHandle,
+} from '../../../features/historyRestore';
+import {
+  normalizeToolCallPayload,
+  normalizeToolResultPayload,
+} from '../../../features/tool-events/toolEventNormalizer';
+import { webRequest } from '../../../services/webClient';
 import './DesignerPage.css';
 
 type DesignerPageProps = {
@@ -160,6 +172,120 @@ export function DesignerPage({
     effectiveProjectId,
     sessionId,
   ]);
+
+  // DesignerChatPanel renders useChatStore, not designerChatStore. Design
+  // routes keep App.sessionId on "new", so the shared history.get effect never
+  // runs — restore into the design session runtime on open / refresh.
+  const historyRestoreRef = useRef<HistoryRestoreHandle | null>(null);
+  useEffect(() => {
+    if (!sessionId || bootstrapInProgress) return;
+    const chat = useChatStore.getState();
+    const existing = chat.getRuntime(sessionId);
+    // Live create already seeded the user bubble / stream — do not clobber it.
+    if (existing?.historyPagerMeta || (existing?.messages?.length ?? 0) > 0) {
+      return;
+    }
+    chat.ensureRuntime(sessionId);
+    if (useSessionStore.getState().getRuntime(sessionId)?.mode !== 'team') {
+      useSessionStore.getState().setMode(sessionId, 'team');
+    }
+    historyRestoreRef.current?.dispose();
+    const handle = beginHistoryRestore({
+      sessionId,
+      onReady: (messages, cursorMeta) => {
+        useChatStore.getState().replaceHistoryMessages(
+          sessionId,
+          messages.map((message) => ({ ...message, historyBatchSeq: 1 })),
+        );
+        useChatStore.getState().setHistoryPagerMeta(sessionId, {
+          nextCursor: cursorMeta.nextCursor,
+          hasMore: cursorMeta.hasMore,
+          snapshotId: cursorMeta.snapshotId,
+          snapshotEnd: cursorMeta.snapshotEnd,
+          loadedBatchSeq: 1,
+          publishedBatchSeq: 1,
+          historyComplete: !cursorMeta.hasMore,
+        });
+        useChatStore.getState().setLoadingHistory(sessionId, false);
+      },
+      onEmpty: (cursorMeta) => {
+        useChatStore.getState().replaceHistoryMessages(sessionId, []);
+        useChatStore.getState().setHistoryPagerMeta(sessionId, {
+          nextCursor: cursorMeta.nextCursor,
+          hasMore: cursorMeta.hasMore,
+          snapshotId: cursorMeta.snapshotId,
+          snapshotEnd: cursorMeta.snapshotEnd,
+          loadedBatchSeq: 1,
+          publishedBatchSeq: 1,
+          historyComplete: !cursorMeta.hasMore,
+        });
+        useChatStore.getState().setLoadingHistory(sessionId, false);
+      },
+      onToolReplay: (items) => {
+        const store = useChatStore.getState();
+        for (const item of items) {
+          if (item.kind === 'tool_call') {
+            const n = normalizeToolCallPayload(item.payload);
+            store.addToolCall(
+              sessionId,
+              {
+                id: n.id,
+                name: n.name,
+                arguments: n.arguments,
+                outputOrder: n.outputOrder,
+                description: n.description,
+                formatted_args: n.formatted_args,
+                call_goal: n.call_goal,
+                display_name: n.display_name,
+                memberName: n.memberName,
+                reviewer: n.reviewer,
+              },
+              { startedAt: item.at, historyBatchSeq: 1 },
+            );
+          } else if (item.kind === 'tool_result') {
+            const n = normalizeToolResultPayload(item.payload);
+            store.addToolResult(
+              sessionId,
+              {
+                toolName: n.toolName,
+                result: n.result,
+                success: n.success,
+                ...(n.pending ? { pending: true } : {}),
+                toolCallId: n.toolCallId,
+                summary: n.summary,
+                skillTree: n.skillTree,
+                ...(n.mermaid ? { mermaid: n.mermaid } : {}),
+                ...(n.timedOut ? { timedOut: true } : {}),
+                ...(n.beamSearch ? { beamSearch: n.beamSearch } : {}),
+                reviewer: n.reviewer,
+              },
+              { updatedAt: item.at },
+            );
+          }
+        }
+        store.settleHistoricalToolExecutions(sessionId);
+      },
+      onFailure: () => {
+        useChatStore.getState().setLoadingHistory(sessionId, false);
+      },
+    });
+    historyRestoreRef.current = handle;
+    useChatStore.getState().setLoadingHistory(sessionId, true);
+    void webRequest(HISTORY_GET_METHOD, {
+      session_id: sessionId,
+      cursor: null,
+      limit: 50,
+    }).catch(() => {
+      handle.dispose();
+      useChatStore.getState().setLoadingHistory(sessionId, false);
+    });
+    return () => {
+      handle.dispose();
+      if (historyRestoreRef.current === handle) {
+        historyRestoreRef.current = null;
+      }
+    };
+  }, [bootstrapInProgress, sessionId]);
 
   useEffect(() => {
     const nextId = domainGraph?.graph_id ?? null;

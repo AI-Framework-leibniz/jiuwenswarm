@@ -29,7 +29,10 @@ export function chatRoutePath(route: ChatRoute): string {
   if (route.kind === 'chat-new') return '/chat/new';
   if (route.kind === 'chat-session') return `/chat/${encodeURIComponent(route.sessionId)}`;
   if (route.kind === 'design-project') {
-    const projectPath = `/design/${encodeURIComponent(route.projectId)}`;
+    // Empty projectId must never become `/design//session` — unbound design
+    // tasks mount under the virtual default_design project.
+    const projectId = route.projectId.trim() || 'default_design';
+    const projectPath = `/design/${encodeURIComponent(projectId)}`;
     return route.sessionId
       ? `${projectPath}/${encodeURIComponent(route.sessionId)}`
       : projectPath;

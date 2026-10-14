@@ -12,7 +12,12 @@ export {
   resolveConfiguredModelName,
   resolveEffectiveModel,
 } from './sessionStore';
-export { PROJECT_SESSION_PAGE_SIZE, useWorkspaceStore } from './workspaceStore';
+export {
+  DEFAULT_DESIGN_PROJECT_ID,
+  PROJECT_SESSION_PAGE_SIZE,
+  normalizeDesignProjectId,
+  useWorkspaceStore,
+} from './workspaceStore';
 export { useHarnessStore } from './harnessStore';
 export { ensureSessionRuntimes } from './ensureSessionRuntimes';
 export { useCronStore, filterJobsForProject, isDefaultProjectId, isWebChannelJob } from './cronStore';

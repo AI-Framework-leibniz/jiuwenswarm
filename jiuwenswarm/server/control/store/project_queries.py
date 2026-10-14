@@ -248,8 +248,8 @@ def _last_user_message_ts(session: dict[str, Any]) -> float:
 def _session_matches_requested_work_mode(session: dict[str, Any], raw_work_mode: Any) -> bool:
     """Keep project session lists inside the caller's work mode.
 
-    The default project is shared. Design canvases and work conversations both
-    use its id, so a list that does not filter would mix them.
+    work / code / design each have their own virtual default id, but callers
+    still pass work_mode so a mis-attributed session cannot leak across modes.
     """
     if not isinstance(raw_work_mode, str) or not raw_work_mode.strip():
         return True
@@ -430,7 +430,11 @@ def load_project_list(
         )
 
     default_ids: list[str] = []
-    if work_mode in (None, DEFAULT_WEB_WORK_MODE, DESIGN_WORK_MODE):
+    # Each work_mode only gets its own virtual default. Including work's
+    # ``default`` under design made the Web sidebar's projects.find(isDefault)
+    # resolve to the wrong node, so default_design sessions never rendered
+    # under「任务」even though project.get_sessions(default_design) was fine.
+    if work_mode in (None, DEFAULT_WEB_WORK_MODE):
         default_ids.append(DEFAULT_PROJECT_ID_WORK)
     if work_mode in (None, DEFAULT_TUI_WORK_MODE):
         default_ids.append(DEFAULT_PROJECT_ID_CODE)

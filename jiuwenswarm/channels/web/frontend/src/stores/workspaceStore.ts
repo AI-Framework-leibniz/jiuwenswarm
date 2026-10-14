@@ -15,7 +15,13 @@ const DEFAULT_CODE_PROJECT_ID = 'default_code';
 // Backend attribute_session_project files project-less design sessions under
 // 'default_design' (work_mode.py) — the synthetic design node must query the
 // same id or those sessions never appear in the sidebar.
-const DEFAULT_DESIGN_PROJECT_ID = 'default_design';
+export const DEFAULT_DESIGN_PROJECT_ID = 'default_design';
+
+/** Public route/sidebar id for a design task with no real project directory. */
+export function normalizeDesignProjectId(projectId: string | null | undefined): string {
+  const trimmed = String(projectId ?? '').trim();
+  return trimmed || DEFAULT_DESIGN_PROJECT_ID;
+}
 
 function normalizeProject(project: ProjectInfo, fallbackWorkMode: WorkMode): ProjectInfo {
   return {
@@ -160,16 +166,48 @@ function collectProjectSessionIds(state: WorkspaceState, projectId: string): str
 }
 
 
-function findProjectIdForSession(projects: ProjectInfo[], session: Pick<Session, 'project_id'>): string {
+function findDefaultProjectIdForMode(projects: ProjectInfo[], workMode: WorkMode): string {
+  const expectedId = workMode === 'code'
+    ? DEFAULT_CODE_PROJECT_ID
+    : workMode === 'design'
+      ? DEFAULT_DESIGN_PROJECT_ID
+      : DEFAULT_PROJECT_ID;
+  return projects.find((project) => project.project_id === expectedId)?.project_id
+    ?? projects.find((project) => isDefaultProject(project) && project.work_mode === workMode)?.project_id
+    ?? expectedId;
+}
+
+function isVirtualDefaultProjectId(projectId: string): boolean {
+  return projectId === DEFAULT_PROJECT_ID
+    || projectId === DEFAULT_CODE_PROJECT_ID
+    || projectId === DEFAULT_DESIGN_PROJECT_ID;
+}
+
+function findProjectIdForSession(
+  projects: ProjectInfo[],
+  session: Pick<Session, 'project_id' | 'work_mode'>,
+  fallbackWorkMode: WorkMode,
+): string {
   const projectId = session.project_id?.trim();
-  if (!projectId || projectId === DEFAULT_PROJECT_ID) {
-    return findDefaultProjectId(projects);
+  const workMode: WorkMode = session.work_mode === 'code' || session.work_mode === 'design'
+    ? session.work_mode
+    : fallbackWorkMode;
+  if (!projectId) {
+    return findDefaultProjectIdForMode(projects, workMode);
+  }
+  if (isVirtualDefaultProjectId(projectId)) {
+    // Keep explicit default_design / default_code; map legacy empty/"default"
+    // onto the session work-mode mount so design tasks do not land under work.
+    if (projectId === DEFAULT_PROJECT_ID && workMode !== 'work') {
+      return findDefaultProjectIdForMode(projects, workMode);
+    }
+    return projectId;
   }
   if (projects.length === 0) {
     return projectId;
   }
   const project = findProject(projects, projectId);
-  return project ? project.project_id : findDefaultProjectId(projects);
+  return project ? project.project_id : findDefaultProjectIdForMode(projects, workMode);
 }
 
 function patchSessionLists(
@@ -613,7 +651,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           ),
         };
       }
-      const projectId = findProjectIdForSession(state.projects, session);
+      const projectId = findProjectIdForSession(state.projects, session, state.workMode);
       if (!projectId) return current;
       const currentProjectSessions = current.projectSessions[projectId] || [];
       const sessionWasVisible = currentProjectSessions.some((item) => item.session_id === session.session_id);
@@ -653,7 +691,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       pinned: result.pinned,
       pin_order: result.pin_order,
     };
-    const projectId = findProjectIdForSession(get().projects, patch);
+    const projectId = findProjectIdForSession(get().projects, patch, get().workMode);
     sessionState.updateSession(sessionId, patch);
     set((state) => ({
       projectSessions: patchSessionLists(
@@ -693,7 +731,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       sessionState.currentSession?.session_id === sessionId
         ? sessionState.currentSession
         : sessionState.sessions.find((item) => item.session_id === sessionId);
-    const projectId = session ? findProjectIdForSession(get().projects, session) : null;
+    const projectId = session
+      ? findProjectIdForSession(get().projects, session, get().workMode)
+      : null;
     if (projectId) await get().loadProjectSessions(projectId);
   },
 
@@ -708,7 +748,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   refreshSessionWorkspace: async (session) => {
     await get().loadProjects();
-    const projectId = session ? findProjectIdForSession(get().projects, session) : null;
+    const projectId = session
+      ? findProjectIdForSession(get().projects, session, get().workMode)
+      : null;
     if (projectId) {
       await get().loadProjectSessions(projectId);
     }
