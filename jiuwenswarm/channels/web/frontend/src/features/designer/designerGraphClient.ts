@@ -50,7 +50,7 @@ export const designerWorkspaceClient = {
         ...(params.modelName ? { model_name: params.modelName } : {}),
         ...(params.references?.length ? { references: params.references } : {}),
       },
-      { timeoutMs: 20 * 60 * 1000 },
+      { timeoutMs: 60_000 },
     ),
   get: (projectId: string, sessionId?: string) =>
     webRequest<DesignerWorkspace>('designer.workspace.get', {
@@ -78,7 +78,7 @@ export const designerWorkspaceClient = {
         ...(params.modelName ? { model_name: params.modelName } : {}),
         ...(params.references?.length ? { references: params.references } : {}),
       },
-      { timeoutMs: 20 * 60 * 1000 },
+      { timeoutMs: 60_000 },
     ),
 };
 
