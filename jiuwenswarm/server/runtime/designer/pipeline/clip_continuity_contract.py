@@ -151,6 +151,11 @@ def update_scene_hold_from_shot(
     if not seats:
         seats = spatial_positions_from_shot(shot)
     if seats:
+        from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+            scrub_motion_anchors,
+        )
+
+        seats = scrub_motion_anchors(seats)
         # Latest authored end state wins in the setting store (unlike opening
         # merges, which only fill what the authored row omits).
         merged_cast: dict[str, dict[str, str]] = {
@@ -173,11 +178,11 @@ def update_scene_hold_from_shot(
     pose = _short(str(end.get("pose") or ""), limit=160)
     if pose and pose.lower() not in action.lower():
         # Prefer compact "still true" phrasing without replaying motion verbs.
-        if not re.search(
-            r"\b(walks?|runs?|climbs?|carries?|sets?|puts?|says?|speaks?)\b",
-            pose,
-            flags=re.I,
-        ):
+        from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+            looks_like_motion_phrase,
+        )
+
+        if not looks_like_motion_phrase(pose):
             if pose not in hold["phrases"]:
                 hold["phrases"].append(pose)
     irreversible = _short(str(shot.get("irreversible") or end.get("irreversible") or ""), limit=160)
@@ -256,10 +261,14 @@ def reconcile_shot_to_contract(
         "exit": _id_list(end.get("exited") or shot.get("exiting_character_ids")),
     }
     shot["clip_contract"] = contract
+    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+        scrub_motion_anchors,
+    )
+
     shot["scene_hold"] = {
         "props": dict(hold.get("props") or {}),
         "phrases": list(hold.get("phrases") or [])[:8],
-        "cast": dict(opening),
+        "cast": scrub_motion_anchors(opening),
     }
     return contract
 
@@ -318,9 +327,11 @@ def hold_lines_for_cfg(cfg: dict[str, Any] | None) -> list[str]:
     pose = _short(str(start.get("pose") or ""), limit=140)
     action = str(cfg.get("clip_action") or cfg.get("action") or "")
     if pose and pose.lower() not in action.lower():
-        if not re.search(
-            r"\b(walks?|runs?|climbs?|carries?|sets?|puts?)\b", pose, flags=re.I
-        ):
+        from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+            looks_like_motion_phrase,
+        )
+
+        if not looks_like_motion_phrase(pose):
             line = pose.rstrip(".") + "."
             if line not in lines:
                 lines.append(line)
@@ -392,8 +403,15 @@ def enforce_prompt_continuity(
     for cid, anchor in list(seats.items())[:6]:
         if not isinstance(anchor, dict):
             continue
-        place = str(anchor.get("place") or anchor.get("zone") or "").strip()
+        place = ""
+        for key in ("place", "zone"):
+            cand = str(anchor.get(key) or "").strip()
+            if cand and not looks_like_motion_phrase(cand):
+                place = cand
+                break
         posture = str(anchor.get("posture") or anchor.get("pose") or "").strip()
+        if looks_like_motion_phrase(posture):
+            posture = ""
         bits = [b for b in (posture, f"at {place}" if place else "") if b]
         if not bits:
             continue

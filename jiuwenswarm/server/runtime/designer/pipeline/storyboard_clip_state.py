@@ -112,6 +112,77 @@ def spatial_anchors_from(data: Any) -> dict[str, dict[str, str]]:
     return legacy if isinstance(legacy, dict) and legacy else {}
 
 
+_STANCE_WORDS = frozenset(
+    {
+        "standing",
+        "half-standing",
+        "seated",
+        "sitting",
+        "kneeling",
+        "crouching",
+        "reclining",
+        "leaning",
+        "walking",
+        "running",
+        "perched",
+        "lying",
+        "facing",
+        "during",
+        "evening",
+        "morning",
+        "ceiling",
+        "opening",
+        "closing",
+    }
+)
+_MOTION_WORD_RE = re.compile(r"[a-z][a-z'-]*ing\b", re.I)
+
+
+def looks_like_motion_phrase(text: str) -> bool:
+    """True when text reads as a doing/motion phrase, not a static stance/place.
+
+    Opening anchors must stay static ("standing at center"); a previous shot's
+    doing text ("carrying a basket of bread") must never become an opening pose
+    or place — video models render it again (replayed beats, doubled people).
+    """
+    body = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    if not body:
+        return False
+    for word in _MOTION_WORD_RE.findall(body):
+        if word not in _STANCE_WORDS:
+            return True
+    return False
+
+
+def scrub_motion_anchors(positions: dict[str, Any] | None) -> dict[str, Any]:
+    """Positions with motion-phrase posture/pose/place slots removed.
+
+    Keeps where everyone is (zone/screen/landmark/facing); only drops slots
+    that read as a doing, because those are not first-frame states.
+    """
+    out: dict[str, Any] = {}
+    for cid, anchor in (positions or {}).items():
+        if not isinstance(anchor, dict):
+            out[cid] = anchor
+            continue
+        anchor = dict(anchor)
+        for key in ("posture", "pose", "place"):
+            if looks_like_motion_phrase(str(anchor.get(key) or "")):
+                anchor.pop(key, None)
+        out[cid] = anchor
+    return out
+
+
+def _scrub_carried_positions(state: dict[str, Any]) -> dict[str, Any]:
+    """Drop previous-shot doing text carried into opening anchors."""
+    seats = state.get("seats")
+    if not isinstance(seats, dict) or not seats:
+        return state
+    out = dict(state)
+    out["seats"] = scrub_motion_anchors(seats)
+    return out
+
+
 def _normalize_props(raw: Any) -> dict[str, str]:
     """Director-authored object state: object label -> place it now sits/stays."""
     out: dict[str, str] = {}
@@ -538,6 +609,7 @@ def ensure_clip_start_end_states(
                 # Keep where everyone is. Drop the previous motion so this clip
                 # does not play the last shot's tail again.
                 start = _hold_state(prior_end, last_action_by_setting.get(sid) or "")
+                start = _scrub_carried_positions(start)
             else:
                 start = _infer_start_from_shot(shot)
         elif _is_action_restatement(str(start.get("pose") or ""), last_action_by_setting.get(sid) or ""):
@@ -653,6 +725,8 @@ def stamp_shot_states_on_clip_cfg(
             _stamp_spatial_anchors(out, dict(plan_positions))
         holds = [str(x) for x in (out.get("pose_holds") or []) if str(x).strip()]
         pose = str(start.get("pose") or "").strip()
+        if looks_like_motion_phrase(pose):
+            pose = ""
         if pose:
             hold = pose if pose.lower().startswith("already") else f"Opening hold: {pose}"
             if hold not in holds:
@@ -668,8 +742,15 @@ def stamp_shot_states_on_clip_cfg(
         for cid, anchor in list(spatial_anchors_from(out).items())[:8]:
             if not isinstance(anchor, dict):
                 continue
-            place = anchor.get("place") or anchor.get("zone") or anchor.get("seat") or ""
-            posture = anchor.get("posture") or anchor.get("pose") or ""
+            place = ""
+            for key in ("place", "zone", "seat"):
+                cand = str(anchor.get(key) or "").strip()
+                if cand and not looks_like_motion_phrase(cand):
+                    place = cand
+                    break
+            posture = str(anchor.get("posture") or anchor.get("pose") or "").strip()
+            if looks_like_motion_phrase(posture):
+                posture = ""
             bits = [b for b in (posture, f"at {place}" if place else "") if b]
             if not bits:
                 continue
@@ -809,8 +890,15 @@ def start_end_story_lines(cfg: dict[str, Any] | None) -> list[str]:
         positions = spatial_anchors_from(cfg)
     for cid, anchor in list(positions.items())[:6]:
         if isinstance(anchor, dict):
-            place = anchor.get("place") or anchor.get("zone") or anchor.get("seat") or ""
+            place = ""
+            for key in ("place", "zone", "seat"):
+                cand = str(anchor.get(key) or "").strip()
+                if cand and not looks_like_motion_phrase(cand):
+                    place = cand
+                    break
             posture = str(anchor.get("posture") or anchor.get("pose") or "").strip()
+            if looks_like_motion_phrase(posture):
+                posture = ""
             facing = str(anchor.get("facing") or "").strip()
             bits = []
             if posture:

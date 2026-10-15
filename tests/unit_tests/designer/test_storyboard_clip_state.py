@@ -102,3 +102,72 @@ def test_story_curve_keeps_one_climax_and_carries_the_end() -> None:
     assert any("red coat" in line for line in lines)
     assert "lands beneath" not in " ".join(lines)
     assert not any("already finished" in line for line in lines)
+
+
+def test_carry_drops_previous_motion_from_opening() -> None:
+    """Same-setting carry keeps positions but never the previous doing text."""
+    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+        ensure_clip_start_end_states,
+        start_end_story_lines,
+        stamp_shot_states_on_clip_cfg,
+    )
+
+    shots = ensure_clip_start_end_states(
+        [
+            {
+                "clip_index": 1,
+                "setting_id": "set_1",
+                "action": "The host sets the table.",
+                "on_screen": ["char_1"],
+                "spatial_anchors": {
+                    "char_1": {
+                        "place": "center",
+                        "posture": "placing plates and silverware on the table",
+                    }
+                },
+            },
+            {
+                "clip_index": 2,
+                "setting_id": "set_1",
+                "action": "The family arrives.",
+                "on_screen": ["char_1"],
+            },
+        ]
+    )
+    carried = (shots[1].get("start_state") or {}).get("seats") or {}
+    anchor = carried.get("char_1") or {}
+    assert "placing" not in str(anchor.get("posture") or "")
+    assert "placing" not in str(anchor.get("pose") or "")
+    assert anchor.get("place") == "center"
+    cfg2 = stamp_shot_states_on_clip_cfg({}, shot=shots[1])
+    assert "placing" not in " ".join(start_end_story_lines(cfg2))
+    for value in (cfg2.get("spatial_anchors") or {}).values():
+        assert "placing" not in str(value)
+
+
+def test_story_lines_keep_stance_and_drop_motion_pose() -> None:
+    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+        start_end_story_lines,
+        stamp_shot_states_on_clip_cfg,
+    )
+
+    verb_cfg = stamp_shot_states_on_clip_cfg(
+        {},
+        shot={
+            "clip_index": 1,
+            "start_state": {
+                "seats": {"char_1": {"place": "center", "posture": "receiving the bowl"}}
+            },
+        },
+    )
+    assert "receiving" not in " ".join(start_end_story_lines(verb_cfg))
+    stance_cfg = stamp_shot_states_on_clip_cfg(
+        {},
+        shot={
+            "clip_index": 1,
+            "start_state": {
+                "seats": {"char_1": {"place": "center", "posture": "standing"}}
+            },
+        },
+    )
+    assert any("standing" in line for line in start_end_story_lines(stance_cfg))

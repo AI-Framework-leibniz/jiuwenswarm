@@ -704,6 +704,7 @@ def _wardrobe_for(token: str, cfg: dict[str, Any], graph: dict[str, Any] | None)
 
 def _seat_for(token: str, cfg: dict[str, Any], graph: dict[str, Any] | None) -> str:
     from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+        looks_like_motion_phrase,
         spatial_anchors_from,
     )
 
@@ -717,7 +718,9 @@ def _seat_for(token: str, cfg: dict[str, Any], graph: dict[str, Any] | None) -> 
                 break
     if isinstance(anchor, dict):
         bits: list[str] = []
-        pose = str(anchor.get("pose") or "").strip()
+        pose = str(anchor.get("pose") or anchor.get("posture") or "").strip()
+        if pose and looks_like_motion_phrase(pose):
+            pose = ""
         zone = str(anchor.get("zone") or "").strip()
         landmark = str(anchor.get("landmark") or "").strip()
         screen = str(anchor.get("screen") or "").strip()
@@ -807,6 +810,78 @@ def _on_screen_tokens(cfg: dict[str, Any]) -> list[str]:
     ]
 
 
+def _reference_image_indices(
+    cfg: dict[str, Any], graph: dict[str, Any] | None
+) -> tuple[dict[str, int], int]:
+    """Image positions (1-based) from the reference plan actually attached.
+
+    ``reference_image_plan`` is the ordered list sent to the video model (see
+    ``reference_led.video_generation_overrides``). Numbering the scene and each
+    cast member from THAT list keeps prompt numbers in sync with the
+    attachments — a clip with a smaller cast still receives the full plan.
+    """
+    plan = cfg.get("reference_image_plan")
+    if not isinstance(plan, list) or not plan:
+        return {}, 0
+    try:
+        from jiuwenswarm.server.runtime.designer.pipeline.reference_led import (
+            ROLE_CHARACTER,
+            ROLE_SCENE,
+            _SUBJECT_ROLE,
+            _node_image_path,
+        )
+    except Exception:  # noqa: BLE001
+        return {}, 0
+    all_ids = [
+        str(ch.get("id") or "").strip()
+        for ch in (_analysis(graph).get("characters") or [])
+        if isinstance(ch, dict) and str(ch.get("id") or "").strip()
+    ]
+    cast_index: dict[str, int] = {}
+    scene_index = 0
+    position = 0
+    for entry in plan:
+        if not isinstance(entry, dict):
+            continue
+        path = str(entry.get("path") or "").strip() or _node_image_path(
+            graph, str(entry.get("node_id") or "")
+        )
+        if not path:
+            continue
+        position += 1
+        role = str(entry.get("role") or "").strip()
+        # Plans may carry canonical roles ("scene_source") or short subjects
+        # ("scene"); both must resolve to the same slot.
+        role = _SUBJECT_ROLE.get(role, role)
+        if role == ROLE_CHARACTER:
+            matched = ""
+            names = {
+                str(n).strip().casefold()
+                for n in (entry.get("names") or [])
+                if str(n).strip()
+            }
+            if names:
+                for cid in all_ids:
+                    if cid in cast_index:
+                        continue
+                    if (_name_for_id(cid, graph) or "").casefold() in names:
+                        matched = cid
+                        break
+            if not matched:
+                for cid in all_ids:
+                    if cid not in cast_index:
+                        matched = cid
+                        break
+            if matched:
+                cast_index[matched] = position
+                display = _name_for_id(matched, graph)
+                if display:
+                    cast_index[display] = position
+        elif role == ROLE_SCENE and not scene_index:
+            scene_index = position
+    return cast_index, scene_index
+
+
 def _story_cast_sentence(
     *,
     who: str,
@@ -864,7 +939,8 @@ def compose_practice_prompt(
     names = [n for n in on_screen_names(cfg, graph) if n.casefold() not in gone_names]
     place = _scene_name(cfg)
     extra_labels = [str(item).strip() for item in (extra_image_labels or []) if str(item).strip()]
-    scene_index = max(1, len(tokens) + len(extra_labels) + 1)
+    cast_index, plan_scene_index = _reference_image_indices(cfg, graph)
+    scene_index = plan_scene_index or max(1, len(tokens) + len(extra_labels) + 1)
     scene_word = _image_word(scene_index, family)
     sentences: list[str] = []
 
@@ -899,7 +975,7 @@ def compose_practice_prompt(
         sentences.append(
             _story_cast_sentence(
                 who=who,
-                image_word=_image_word(index, family),
+                image_word=_image_word(cast_index.get(token, index), family),
                 wardrobe=_wardrobe_for(token, cfg, graph),
                 seat=_seat_for(token, cfg, graph),
                 doing=_action_for(token, cfg, graph, action),

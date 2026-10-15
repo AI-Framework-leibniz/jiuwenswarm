@@ -146,3 +146,45 @@ def test_reference_led_prepare_preserves_structured_spatial_positions() -> None:
     assert cfg0["spatial_anchors"]["char_a"]["place"] == "head of table"
     assert cfg1["spatial_anchors"]["char_a"]["posture"] == "standing"
     assert "raises a glass" not in str((cfg1.get("start_state") or {}).get("pose") or "")
+
+
+def test_visible_blocking_keeps_doing_out_of_pose() -> None:
+    """Clip policy synthesizes static stance poses — never the cast doing text."""
+    from jiuwenswarm.server.runtime.designer.pipeline.clip_policy import (
+        apply_compose_character_specs_setting_policy,
+    )
+    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+        looks_like_motion_phrase,
+        spatial_positions_from_shot,
+    )
+
+    analysis = {
+        "characters": [
+            {"id": "char_1", "name": "Mom"},
+            {"id": "char_2", "name": "Dad"},
+        ],
+        "clips": [
+            {
+                "clip_index": 1,
+                "setting_id": "set_1",
+                "action": "The table is set.",
+                "on_screen": ["char_1", "char_2"],
+                "cast_actions": {
+                    "char_1": "placing plates and silverware on the table",
+                    "char_2": "sipping tea while seated",
+                },
+            }
+        ],
+    }
+    out = apply_compose_character_specs_setting_policy(analysis)
+    shot = out["clips"][0]
+    positions = (shot.get("blocking") or {}).get("positions") or []
+    assert positions
+    for pos in positions:
+        assert not looks_like_motion_phrase(str(pos.get("pose") or "")), pos
+    poses = {str(pos.get("character_id")): str(pos.get("pose") or "") for pos in positions}
+    assert poses.get("char_2") == "seated_on_surface"
+    anchors = spatial_positions_from_shot(shot)
+    for anchor in anchors.values():
+        for key in ("posture", "pose", "place"):
+            assert not looks_like_motion_phrase(str(anchor.get(key) or "")), anchor

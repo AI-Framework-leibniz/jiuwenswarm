@@ -558,6 +558,31 @@ def build_scene_specs_for_setting(
     }
 
 
+_STATIC_STANCES = frozenset(
+    {
+        "seated_on_surface",
+        "kneeling_on_surface",
+        "reclining_on_surface",
+        "leaning_on_support",
+        "crouching_on_surface",
+        "standing_beside_support",
+    }
+)
+
+
+def _stance_from_action(action: str) -> str:
+    """Static stance token for a pose slot; '' when the text is only a doing."""
+    try:
+        from jiuwenswarm.server.runtime.designer.pipeline.wan_r2v_best_practices import (
+            infer_pose_from_action,
+        )
+
+        pose = str(infer_pose_from_action(action) or "")
+    except Exception:  # noqa: BLE001
+        pose = ""
+    return pose if pose in _STATIC_STANCES else ""
+
+
 def _expand_blocking_to_visible(
     shot: dict[str, Any],
     by_id: dict[str, dict[str, Any]],
@@ -572,26 +597,37 @@ def _expand_blocking_to_visible(
         for p in positions
         if isinstance(p, dict)
     }
+    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+        looks_like_motion_phrase,
+    )
+
     zones = ("center", "left", "right", "foreground", "background")
     for i, cid in enumerate(visible):
         if cid in have:
-            # Refresh pose from cast_actions when provided.
+            # Refresh the pose slot with a STATIC stance only — this shot's
+            # doing text stays in cast_actions and must never become a pose.
             for p in positions:
                 if isinstance(p, dict) and str(p.get("character_id") or "") == cid:
-                    if actions.get(cid):
-                        p["pose"] = actions[cid][:160]
+                    stance = _stance_from_action(str(actions.get(cid) or ""))
+                    if stance:
+                        p["pose"] = stance
+                    elif looks_like_motion_phrase(str(p.get("pose") or "")):
+                        p.pop("pose", None)
                     break
             continue
         ch = by_id.get(cid) or {}
-        positions.append(
-            {
-                "character_id": cid,
-                "name": str(ch.get("name") or cid),
-                "zone": zones[i % len(zones)],
-                "pose": actions.get(cid) or "present_in_frame_clearly_visible",
-                "facing": "toward_primary_action_focus",
-            }
-        )
+        entry: dict[str, Any] = {
+            "character_id": cid,
+            "name": str(ch.get("name") or cid),
+            "zone": zones[i % len(zones)],
+            "facing": "toward_primary_action_focus",
+        }
+        stance = _stance_from_action(str(actions.get(cid) or ""))
+        if stance:
+            entry["pose"] = stance
+        elif not str(actions.get(cid) or "").strip():
+            entry["pose"] = "present_in_frame_clearly_visible"
+        positions.append(entry)
     # Drop blocking entries for people not visible this shot.
     positions = [
         p
@@ -604,8 +640,8 @@ def _expand_blocking_to_visible(
         "positions": positions,
         "rule": (
             "Place ONLY on_screen / visible cast. Offscreen characters must not appear. "
-            "Pose = cast_actions / doing for this shot. Same-scene edits keep landmark "
-            "and seats unless storyboard moves someone."
+            "Pose = static stance only; doing stays in cast_actions. Same-scene edits "
+            "keep landmark and seats unless storyboard moves someone."
         ),
     }
 

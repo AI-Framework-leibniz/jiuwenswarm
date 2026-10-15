@@ -781,3 +781,69 @@ def test_prior_clip_story_pull_does_not_copy_prior_wan_prompt() -> None:
     assert "continuity_clip_node_id" not in out
     assert not out.get("previous_clip_wan_prompt")
     assert out["setting_id"] == "set_dining"
+
+
+def test_seat_slot_drops_motion_phrases() -> None:
+    from jiuwenswarm.server.runtime.designer.pipeline.video_prompt_practice import (
+        _seat_for,
+        compose_practice_prompt,
+    )
+
+    cfg = {
+        "cast_names": ["Mom"],
+        "on_screen": ["Mom"],
+        "clip_action": "Mom looks up.",
+        "cast_actions": {"Mom": "looking up and smiling"},
+        "costume_lock": "Mom: light blue blouse",
+        "spatial_anchors": {
+            "Mom": {
+                "pose": "placing plates and silverware on the table",
+                "zone": "center",
+                "landmark": "table",
+            }
+        },
+        "scene_specs": {"scene_name": "dining room"},
+        "style_lock": {"look": "cartoonish animated feature"},
+    }
+    seat = _seat_for("Mom", cfg, graph={})
+    assert "placing" not in seat
+    assert "center" in seat
+    text = compose_practice_prompt(cfg=cfg, graph={}, action=cfg["clip_action"])
+    assert "placing" not in text.lower()
+
+
+def test_scene_and_cast_image_numbers_follow_reference_plan() -> None:
+    from jiuwenswarm.server.runtime.designer.pipeline.video_prompt_practice import (
+        compose_practice_prompt,
+    )
+
+    graph = {
+        "metadata": {
+            "script_analysis": {
+                "characters": [
+                    {"id": "char_1", "name": "Mom"},
+                    {"id": "char_2", "name": "Dad"},
+                    {"id": "char_3", "name": "Daughter"},
+                    {"id": "char_4", "name": "Son"},
+                ]
+            }
+        }
+    }
+    cfg = {
+        "clip_index": 1,
+        "cast_names": ["char_1", "char_2"],
+        "on_screen": ["char_1", "char_2"],
+        "clip_action": "The parents finish setting the table.",
+        "cast_actions": {"char_1": "placing plates", "char_2": "carrying the pot"},
+        "reference_image_plan": [
+            {"role": "character", "node_id": "n_character_1", "path": "char1.png"},
+            {"role": "character", "node_id": "n_character_2", "path": "char2.png"},
+            {"role": "character", "node_id": "n_character_3", "path": "char3.png"},
+            {"role": "character", "node_id": "n_character_4", "path": "char4.png"},
+            {"role": "scene", "node_id": "n_scene_1", "path": "scene1.png"},
+        ],
+    }
+    text = compose_practice_prompt(cfg=cfg, graph=graph, action=cfg["clip_action"])
+    assert "The scene is as in Image 5" in text
+    assert "Mom from Image 1" in text
+    assert "Dad from Image 2" in text
