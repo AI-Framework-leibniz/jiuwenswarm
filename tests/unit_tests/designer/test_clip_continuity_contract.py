@@ -1,5 +1,5 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""General continuity contract: reconcile, hold chain, prompt verify."""
+"""Continuity contract: authored-state chains, holds, enforcement, user-origin guard."""
 
 from __future__ import annotations
 
@@ -8,257 +8,177 @@ import types
 
 try:
     import openjiuwen.core.kv_cache  # noqa: F401
-except ImportError:
-    _package = types.ModuleType("openjiuwen")
+except ImportError:  # pragma: no cover - shared designer test shim
+    _pkg = types.ModuleType("openjiuwen")
     _core = types.ModuleType("openjiuwen.core")
     _kv = types.ModuleType("openjiuwen.core.kv_cache")
-
-    class KVCacheAffinityConfig:
-        pass
-
-    _kv.KVCacheAffinityConfig = KVCacheAffinityConfig
-    _package.core = _core
-    _core.kv_cache = _kv
-    sys.modules.setdefault("openjiuwen", _package)
+    _kv.KVCacheAffinityConfig = type("KVCacheAffinityConfig", (), {})
+    _pkg.core, _core.kv_cache = _core, _kv
+    sys.modules.setdefault("openjiuwen", _pkg)
     sys.modules.setdefault("openjiuwen.core", _core)
     sys.modules["openjiuwen.core.kv_cache"] = _kv
 
+from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
+    apply_continuity_contracts,
+    enforce_prompt_continuity,
+    extract_prop_holds,
+    extract_prop_removals,
+    hold_lines_for_cfg,
+    reconcile_shot_to_contract,
+    stamp_contract_on_clip_cfg,
+)
+from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+    ensure_clip_start_end_states,
+    stamp_shot_states_on_clip_cfg,
+)
 
-def test_reconcile_uses_director_authored_positions() -> None:
+
+def _p(idx: int, setting: str, action: str = "Beat.", on_screen: tuple = ("char_1",), **extra) -> dict:
+    return {"clip_index": idx, "setting_id": setting, "action": action,
+            "on_screen": list(on_screen), **extra}
+
+
+def _pipe(shots: list[dict]) -> list[dict]:
+    """ensure → stamp → enforce, the production clip path. Returns cfg per clip."""
+    rows = []
+    for shot in ensure_clip_start_end_states(shots):
+        cfg = stamp_shot_states_on_clip_cfg({}, shot=shot)
+        enforce_prompt_continuity(str(shot.get("action") or "Camera holds."), cfg)
+        rows.append(cfg)
+    return rows
+
+
+def _props_of(cfg: dict) -> dict:
+    for source, nested in ((cfg.get("clip_contract"), True), (cfg.get("scene_hold"), False)):
+        if not isinstance(source, dict):
+            continue
+        holder = source.get("hold") if nested else source
+        props = holder.get("props") if isinstance(holder, dict) else None
+        if isinstance(props, dict) and props:
+            return props
+    return {}
+
+
+def _blob(cfg: dict) -> str:
+    return (str(_props_of(cfg)) + " " + str(cfg.get("pose_holds") or [])).lower()
+
+
+def test_reconcile_uses_authored_positions_only() -> None:
     """Opening/ending positioning come from authored states — no text inference."""
-    from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
-        reconcile_shot_to_contract,
+    shot = _p(
+        2, "set_1", "The child climbs onto the chair and sits upright.",
+        start_state={"seats": {"char_a": {"place": "left side", "posture": "standing"}}},
+        end_state={"seats": {"char_a": {"place": "left side", "posture": "seated"}}},
     )
-
-    shot = {
-        "clip_index": 2,
-        "setting_id": "set_1",
-        "action": "The child climbs onto the chair and sits upright.",
-        "on_screen": ["char_a"],
-        "cast_actions": {"char_a": "climbing into the chair and sitting upright"},
-        "start_state": {
-            "seats": {"char_a": {"place": "left side", "posture": "standing"}},
-        },
-        "end_state": {
-            "seats": {"char_a": {"place": "left side", "posture": "seated"}},
-        },
-    }
-    contract = reconcile_shot_to_contract(shot)
-    opening = contract["opening"]["char_a"]
-    ending = shot["end_state"]["seats"]["char_a"]
+    opening = reconcile_shot_to_contract(shot)["opening"]["char_a"]
     assert opening.get("posture") == "standing"
-    assert ending.get("posture") == "seated"
+    assert shot["end_state"]["seats"]["char_a"].get("posture") == "seated"
 
 
-def test_reconcile_without_authored_states_invents_nothing() -> None:
-    """No authored positioning means the contract stays empty — never guessed."""
-    from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
-        reconcile_shot_to_contract,
-    )
-
-    shot = {
-        "clip_index": 2,
-        "setting_id": "set_1",
-        "action": "The child climbs onto the chair and sits upright.",
-        "on_screen": ["char_a"],
-        "cast_actions": {"char_a": "climbing into the chair and sitting upright"},
-    }
-    contract = reconcile_shot_to_contract(shot)
-    assert contract["opening"] == {}
-    assert not (shot.get("end_state") or {}).get("seats")
-
-
-def test_prop_holds_use_director_authored_state() -> None:
-    from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
-        enforce_prompt_continuity,
-        extract_prop_holds,
-        extract_prop_removals,
-    )
-    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
-        ensure_clip_start_end_states,
-        stamp_shot_states_on_clip_cfg,
-    )
-
-    placed = {
-        "clip_index": 1,
-        "setting_id": "set_1",
-        "action": "Host sets the blue ceramic teapot on the mantel.",
-        "on_screen": ["char_1"],
-        "end_state": {"props": {"blue ceramic teapot": "the mantel"}},
-    }
-    holds = extract_prop_holds(placed)
-    assert holds
-    label = " ".join(str(v.get("label") or "") for v in holds.values()).lower()
-    assert "teapot" in label
-
-    cleared = {
-        "clip_index": 2,
-        "setting_id": "set_1",
-        "action": "Host lifts the teapot away.",
-        "on_screen": ["char_1"],
-        "end_state": {"cleared": ["blue ceramic teapot"]},
-    }
-    assert extract_prop_removals(cleared)
-
-    # Scenario prose is NEVER parsed for props — authored state only.
-    prose_only = {
-        "clip_index": 9,
-        "setting_id": "set_1",
-        "action": "Host sets down the blue ceramic teapot at the mantel.",
-    }
-    assert extract_prop_holds(prose_only) == {}
-    assert extract_prop_removals(prose_only) == []
-
-    shots = ensure_clip_start_end_states(
-        [
-            placed,
-            cleared,
-            {
-                "clip_index": 3,
-                "setting_id": "set_1",
-                "action": "Guest looks at the empty mantel.",
-                "on_screen": ["char_2"],
-            },
-        ]
-    )
-    cfg3 = stamp_shot_states_on_clip_cfg({}, shot=shots[2])
-    fixed, _ = enforce_prompt_continuity("Guest looks around.", cfg3)
-    assert "teapot" not in fixed.lower()
-
-
-def test_authored_prop_hold_survives_agent_rewrite() -> None:
-    """A prop the Director placed stays true until cleared — even after rewrites."""
-    from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
-        apply_continuity_contracts,
-        enforce_prompt_continuity,
-    )
-    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
-        stamp_shot_states_on_clip_cfg,
-    )
-
-    shots = apply_continuity_contracts(
-        [
-            {
-                "clip_index": 1,
-                "setting_id": "set_1",
-                "action": "Mom sets the steaming casserole on the wooden dining table.",
-                "on_screen": ["char_2"],
-                "cast_actions": {"char_2": "sets the dish"},
-                "end_state": {
-                    "pose": "the meal is on the table",
-                    "props": {
-                        "steaming casserole dish": "the center of the wooden dining table"
-                    },
-                },
-            },
-            {
-                "clip_index": 2,
-                "setting_id": "set_1",
-                "action": "Mom sits. Kids climb into chairs.",
-                "on_screen": ["char_2", "char_3"],
-                "cast_actions": {
-                    "char_2": "seating herself at the right side",
-                    "char_3": "climbing into her chair",
-                },
-            },
-        ]
-    )
-    cfg = stamp_shot_states_on_clip_cfg({}, shot=shots[1])
-    fixed, _ = enforce_prompt_continuity("Mom sits. Kids climb into chairs.", cfg)
-    assert "casserole" in fixed.lower() or "dish" in fixed.lower()
-    assert "meal" in fixed.lower()
+def test_prose_is_never_parsed_and_nothing_is_guessed() -> None:
+    """No authored state → empty contract, empty prop holds/removals."""
+    shot = _p(2, "set_1", "Host sets down the blue ceramic teapot at the mantel and sits.")
+    assert reconcile_shot_to_contract(shot)["opening"] == {}
+    assert extract_prop_holds(shot) == {}
+    assert extract_prop_removals(shot) == []
 
 
 def test_prop_hold_carries_to_next_shot_and_prompt() -> None:
-    from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
-        apply_continuity_contracts,
-        enforce_prompt_continuity,
-        hold_lines_for_cfg,
-        stamp_contract_on_clip_cfg,
-    )
-    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
-        stamp_shot_states_on_clip_cfg,
-    )
-
+    """Authored prop survives the agent rewrite: hold lines + enforce reinjection."""
     shots = apply_continuity_contracts(
         [
-            {
-                "clip_index": 1,
-                "setting_id": "set_1",
-                "action": (
-                    "A cook sets the steaming platter at the center of the table. "
-                    "Guests walk in."
-                ),
-                "on_screen": ["char_a"],
-                "cast_actions": {"char_a": "setting the platter down"},
-                "end_state": {
-                    "pose": "the meal is on the table",
-                    "props": {"steaming platter": "the center of the table"},
-                    "seats": {"char_a": {"place": "near table", "posture": "standing"}},
-                },
-            },
-            {
-                "clip_index": 2,
-                "setting_id": "set_1",
-                "action": "Guests sit and fold their hands.",
-                "on_screen": ["char_a", "char_b"],
-                "cast_actions": {
-                    "char_a": "standing at the head of the table",
-                    "char_b": "sitting at the right side",
-                },
-            },
+            _p(
+                1, "set_1", "A cook sets the steaming platter at the center of the table.",
+                end_state={"props": {"steaming platter": "the center of the table"}},
+            ),
+            _p(2, "set_1", "Guests sit and fold their hands.", on_screen=("char_a", "char_b")),
         ]
     )
-    assert "platter" in str(shots[0].get("scene_hold_after") or {}).lower() or (
-        "platter" in str(shots[1].get("clip_contract") or {}).lower()
+    cfg = stamp_contract_on_clip_cfg(
+        stamp_shot_states_on_clip_cfg({}, shot=shots[1]), shot=shots[1]
     )
-    hold = (shots[1].get("clip_contract") or {}).get("hold") or {}
-    props = hold.get("props") or {}
-    assert props, "shot 2 must inherit prop holds from shot 1"
-    assert any("platter" in str(v.get("label") or "").lower() for v in props.values())
-
-    cfg = stamp_shot_states_on_clip_cfg({}, shot=shots[1])
-    cfg = stamp_contract_on_clip_cfg(cfg, shot=shots[1])
-    lines = hold_lines_for_cfg(cfg)
-    assert any("platter" in ln.lower() for ln in lines)
-    # Agent dropped the prop — enforce reinjects.
-    fixed, notes = enforce_prompt_continuity(
-        "Guests sit and fold their hands. Camera holds medium.",
-        cfg,
-    )
+    assert any("platter" in line.lower() for line in hold_lines_for_cfg(cfg))
+    fixed, notes = enforce_prompt_continuity("Guests sit and fold their hands.", cfg)
     assert "platter" in fixed.lower()
     assert notes
 
 
-def test_authored_end_state_position_wins_without_text_overrides() -> None:
-    from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
-        reconcile_shot_to_contract,
+def test_setting_cut_and_return_isolates_holds() -> None:
+    rows = _pipe(
+        [
+            _p(1, "set_a", "Places the gift box.", end_state={"props": {"gift box": "the mantel"}}),
+            _p(2, "set_b", "Cut to the hallway.", on_screen=("char_2",)),
+            _p(3, "set_a", "Back by the mantel."),
+        ]
+    )
+    assert "gift" in _blob(rows[0])
+    assert "gift" not in _blob(rows[1])
+    assert "gift" in _blob(rows[2])
+
+
+def test_cleared_prop_stops_being_held() -> None:
+    rows = _pipe(
+        [
+            _p(1, "set_1", "Places the crate.", end_state={"props": {"wooden crate": "the floor"}}),
+            _p(2, "set_1", "Removes the crate.", end_state={"cleared": ["wooden crate"]}),
+            _p(3, "set_1", "Guest enters.", on_screen=("char_2",)),
+        ]
+    )
+    assert "crate" in _blob(rows[0])
+    assert "crate" not in _blob(rows[2])
+
+
+def test_multiple_prop_holds_survive() -> None:
+    rows = _pipe(
+        [
+            _p(1, "set_1", "Places the teapot and the ledger.",
+               end_state={"props": {"blue teapot": "the mantel", "leather ledger": "the shelf"}}),
+            _p(2, "set_1", "Quiet beat."),
+        ]
+    )
+    blob = _blob(rows[1])
+    assert "teapot" in blob and "ledger" in blob
+
+
+def test_enforce_prompt_continuity_never_truncates() -> None:
+    """Backend limits are advisory — enforcement must not cut text (was [:4000])."""
+    long_prompt = "The camera creeps slowly across the room. " * 120
+    assert len(long_prompt) > 4000
+    out, _ = enforce_prompt_continuity(long_prompt, {})
+    assert out == long_prompt.strip()
+
+
+def test_user_origin_prompt_is_not_appended_with_holds() -> None:
+    """Toolbar/user edits win over hold re-injection (no 'Continuity holds' block)."""
+    from jiuwenswarm.server.runtime.designer.pipeline.video_prompt_practice import (
+        director_approve_video_prompt,
     )
 
-    shot = {
-        "clip_index": 2,
-        "setting_id": "set_1",
-        "action": "Mom sits at the right side of the table.",
-        "on_screen": ["char_mom"],
-        "cast_actions": {"char_mom": "seating herself at the right side of the table"},
-        "start_state": {
-            "seats": {"char_mom": {"place": "table center", "posture": "standing"}},
-        },
-        "end_state": {
-            "seats": {
-                "char_mom": {
-                    "place": "the right side of the table",
-                    "posture": "seated",
-                }
-            },
-        },
-    }
-    contract = reconcile_shot_to_contract(shot)
-    end_place = (shot.get("end_state") or {}).get("seats", {}).get("char_mom", {}).get(
-        "place", ""
+    shot = _p(1, "set_1", "Places the gift box.", end_state={"props": {"gift box": "the mantel"}})
+    cfg = stamp_shot_states_on_clip_cfg({}, shot=ensure_clip_start_end_states([shot])[0])
+    user_text = "Host walks out of frame; the mantel is left empty behind him."
+    cfg["generate"] = {"prompt": user_text, "prompt_origin": "user"}
+    approved, reasons = director_approve_video_prompt(
+        user_text, cfg=cfg, graph={}, clip_index=1, action="", camera=""
     )
-    assert "right" in end_place.lower()
-    assert contract["opening"]["char_mom"].get("posture") == "standing"
+    assert "Continuity holds" not in approved
+    assert "holds_skipped_user_origin" in reasons
+
+
+def test_later_authored_end_position_updates_scene_hold() -> None:
+    """Latest authored end position wins in the setting store (not first-seen)."""
+    seats_v1 = {"char_1": {"place": "near window", "posture": "standing"}}
+    seats_v2 = {"char_1": {"place": "at the table", "posture": "seated"}}
+    shots = apply_continuity_contracts(
+        [
+            _p(1, "set_1", "Stands near the window.", end_state={"seats": seats_v1}),
+            _p(2, "set_1", "Sits at the table.", end_state={"seats": seats_v2}),
+            _p(3, "set_1", "Quiet beat."),
+        ]
+    )
+    anchor = (shots[2].get("clip_contract") or {}).get("opening", {}).get("char_1") or {}
+    assert "table" in str(anchor.get("place") or "").lower()
+    assert str(anchor.get("posture") or "").lower() == "seated"
 
 
 def test_brief_instruction_forbids_lock_sections() -> None:
@@ -268,129 +188,4 @@ def test_brief_instruction_forbids_lock_sections() -> None:
     assert "forbidden" in text
     assert "production lock bible" in text
     assert "copy locks, do not drop them" not in text
-
-
-def test_ensure_chains_contracts() -> None:
-    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
-        ensure_clip_start_end_states,
-        stamp_shot_states_on_clip_cfg,
-    )
-
-    shots = ensure_clip_start_end_states(
-        [
-            {
-                "clip_index": 1,
-                "setting_id": "set_a",
-                "action": "Host places the gift box on the mantel.",
-                "on_screen": ["char_1"],
-                "cast_actions": {"char_1": "places the gift box on the mantel"},
-                "end_state": {"props": {"gift box": "the mantel"}},
-            },
-            {
-                "clip_index": 2,
-                "setting_id": "set_a",
-                "action": "Host turns and smiles.",
-                "on_screen": ["char_1"],
-                "cast_actions": {"char_1": "standing by the mantel, smiling"},
-            },
-        ]
-    )
-    assert shots[1].get("clip_contract")
-    cfg2 = stamp_shot_states_on_clip_cfg({}, shot=shots[1])
-    assert cfg2.get("scene_hold") or cfg2.get("clip_contract")
-    prompt = "Host turns and smiles at camera."
-    from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
-        enforce_prompt_continuity,
-    )
-
-    fixed, _ = enforce_prompt_continuity(prompt, cfg2)
-    assert "gift" in fixed.lower() or "box" in fixed.lower() or "mantel" in fixed.lower()
-
-
-def test_enforce_prompt_continuity_never_truncates() -> None:
-    """Backend limits are advisory — enforcement must not cut text (was [:4000])."""
-    from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
-        enforce_prompt_continuity,
-    )
-
-    long_prompt = "The camera creeps slowly across the room. " * 120  # > 4000 chars
-    assert len(long_prompt) > 4000
-    out, _ = enforce_prompt_continuity(long_prompt, {})
-    assert len(out) > 4000
-    assert out == long_prompt.strip()
-
-
-def test_user_origin_prompt_is_not_appended_with_holds() -> None:
-    """Toolbar/user edits win over hold re-injection (no 'Continuity holds' block)."""
-    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
-        ensure_clip_start_end_states,
-        stamp_shot_states_on_clip_cfg,
-    )
-    from jiuwenswarm.server.runtime.designer.pipeline.video_prompt_practice import (
-        director_approve_video_prompt,
-    )
-
-    shot = {
-        "clip_index": 1,
-        "setting_id": "set_1",
-        "action": "Host places the gift box on the mantel.",
-        "on_screen": ["char_1"],
-        "end_state": {"props": {"gift box": "the mantel"}},
-    }
-    ensured = ensure_clip_start_end_states([shot])[0]
-    cfg = stamp_shot_states_on_clip_cfg({}, shot=ensured)
-    assert cfg.get("clip_contract")
-
-    user_text = "Host walks out of frame; the mantel is left empty behind him."
-    cfg["generate"] = {"prompt": user_text, "prompt_origin": "user"}
-    cfg["user_edit_prompt"] = user_text
-    approved, reasons = director_approve_video_prompt(
-        user_text,
-        cfg=cfg,
-        graph={},
-        clip_index=1,
-        action="",
-        camera="",
-    )
-    assert "Continuity holds" not in approved
-    assert "holds_skipped_user_origin" in reasons
-
-
-def test_later_authored_end_position_updates_scene_hold() -> None:
-    """Latest authored end position wins in the setting store (not first-seen)."""
-    from jiuwenswarm.server.runtime.designer.pipeline.clip_continuity_contract import (
-        apply_continuity_contracts,
-    )
-
-    shots = apply_continuity_contracts(
-        [
-            {
-                "clip_index": 1,
-                "setting_id": "set_1",
-                "action": "Host stands near the window.",
-                "on_screen": ["char_1"],
-                "end_state": {
-                    "seats": {"char_1": {"place": "near window", "posture": "standing"}}
-                },
-            },
-            {
-                "clip_index": 2,
-                "setting_id": "set_1",
-                "action": "Host sits at the table.",
-                "on_screen": ["char_1"],
-                "end_state": {
-                    "seats": {"char_1": {"place": "at the table", "posture": "seated"}}
-                },
-            },
-            {
-                "clip_index": 3,
-                "setting_id": "set_1",
-                "action": "Quiet beat in the same room.",
-                "on_screen": ["char_1"],
-            },
-        ]
-    )
-    opening3 = (shots[2].get("clip_contract") or {}).get("opening") or {}
-    anchor = opening3.get("char_1") or {}
-    assert "table" in str(anchor.get("place") or "").lower()
-    assert str(anchor.get("posture") or "").lower() == "seated"
+    assert "seating plans" not in text

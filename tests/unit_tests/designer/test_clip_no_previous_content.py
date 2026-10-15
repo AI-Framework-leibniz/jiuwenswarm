@@ -81,8 +81,8 @@ def test_positive_continuity_is_this_row_locks() -> None:
 
 def test_assignment_clause_omits_already_done() -> None:
     from jiuwenswarm.server.runtime.designer.pipeline.clip_prompt_handoff import (
-        this_shot_assignment_clause,
         same_scene_prompt_gate_clause,
+        this_shot_assignment_clause,
     )
 
     assign = this_shot_assignment_clause(
@@ -105,3 +105,13 @@ def test_assignment_clause_omits_already_done() -> None:
     assert "Mom set the bowls" not in gate
     assert "ALREADY FINISHED" not in gate
     assert "previous clip" in gate.lower()
+
+
+def test_previous_clip_last_frame_is_not_a_reference() -> None:
+    """Dropping image chaining is explicit: the gated last-frame chain resolves empty."""
+    from jiuwenswarm.server.runtime.designer.pipeline.clip_last_frame_handoff import (
+        resolve_gated_last_frame_chain,
+    )
+
+    assert resolve_gated_last_frame_chain({"clip_index": 2}, graph={"nodes": []}) == []
+    assert resolve_gated_last_frame_chain(None) == []
