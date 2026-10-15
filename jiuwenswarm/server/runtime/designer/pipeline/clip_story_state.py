@@ -78,7 +78,7 @@ def extract_finished_events(
     """Typed already-done events from prior Wan/storyboard text (domain-agnostic).
 
     Only exit + motion-onset — never sit/stand or genre-specific pose rules.
-    Placement continuity comes from seat_anchors / storyboard, not hardcodes.
+    Placement continuity comes from spatial_anchors / storyboard, not hardcodes.
     """
     blob = str(text or "").strip()
     if not blob:
@@ -227,7 +227,7 @@ def narrative_from_wan_prompt(text: str, *, limit: int = 2500) -> str:
         cleaned = re.sub(r"\s+", " ", raw)[:limit]
     return cleaned[:limit]
 
-def seat_anchors_from_cfg(cfg: dict[str, Any] | None) -> dict[str, dict[str, str]]:
+def blocking_positions_from_cfg(cfg: dict[str, Any] | None) -> dict[str, dict[str, str]]:
     """Per-character zone / landmark / screen from this shot's blocking."""
     cfg = cfg if isinstance(cfg, dict) else {}
     out: dict[str, dict[str, str]] = {}
@@ -404,6 +404,7 @@ def apply_story_state_to_next_cfg(
                 "previous_clip_wan_prompt",
                 "previous_clip_action",
                 "previous_clip_speech",
+                "spatial_anchors",
                 "seat_anchors",
             ):
                 cfg.pop(key, None)
@@ -481,7 +482,7 @@ def apply_story_state_to_next_cfg(
 
     forced_off = list(carried_exit)
     sid = str(cfg.get("setting_id") or src.get("setting_id") or "").strip()
-    src_seats = seat_anchors_from_cfg(src)
+    src_seats = blocking_positions_from_cfg(src)
     remaining = [c for c in src_on if c not in set(forced_off)]
     merged = merge_setting_seats(
         graph,
@@ -495,11 +496,12 @@ def apply_story_state_to_next_cfg(
     for cid in on_screen_ids(cfg):
         if cid in store:
             this_seats[cid] = dict(store[cid])
-    local = seat_anchors_from_cfg(cfg)
+    local = blocking_positions_from_cfg(cfg)
     for cid, anchor in local.items():
         this_seats.setdefault(cid, {}).update(anchor)
     if this_seats:
-        cfg["seat_anchors"] = this_seats
+        cfg["spatial_anchors"] = this_seats
+        cfg.pop("seat_anchors", None)
     return cfg
 
 

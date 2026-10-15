@@ -86,13 +86,17 @@ def positive_continuity_clause(
             character_name_map,
             on_screen_ids,
         )
+        from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+            spatial_anchors_from,
+        )
     except Exception:  # noqa: BLE001
         character_name_map = lambda _chars: {}  # type: ignore[assignment]
         on_screen_ids = lambda _cfg: []  # type: ignore[assignment]
+        spatial_anchors_from = lambda _data: {}  # type: ignore[assignment]
 
     names = character_name_map(characters)
     on = on_screen_ids(cfg)
-    seats = cfg.get("seat_anchors") if isinstance(cfg.get("seat_anchors"), dict) else {}
+    seats = spatial_anchors_from(cfg)
     holds: list[str] = []
     for cid in on:
         anchor = seats.get(cid) if isinstance(seats.get(cid), dict) else {}
@@ -231,7 +235,12 @@ def capture_regenerate_packet(
         "character_node_ids": [str(x) for x in (cfg.get("character_node_ids") or []) if str(x)],
         "scene_node_id": str(cfg.get("scene_node_id") or ""),
         "on_screen": [str(x) for x in (cfg.get("on_screen") or []) if str(x)],
-        "seat_anchors": cfg.get("seat_anchors") if isinstance(cfg.get("seat_anchors"), dict) else None,
+        # Unified convention: single canonical key (legacy seat_anchors read-compat).
+        "spatial_anchors": (
+            cfg.get("spatial_anchors")
+            if isinstance(cfg.get("spatial_anchors"), dict)
+            else (cfg.get("seat_anchors") if isinstance(cfg.get("seat_anchors"), dict) else None)
+        ),
         "previous_clip_action": str(cfg.get("previous_clip_action") or ""),
         "previous_clip_wan_prompt": str(cfg.get("previous_clip_wan_prompt") or ""),
         "reference_images": image_paths[:8],
@@ -294,7 +303,8 @@ def apply_regenerate_packet(
         "character_node_ids",
         "scene_node_id",
         "on_screen",
-        "seat_anchors",
+        "spatial_anchors",
+        "seat_anchors",  # legacy packet key (pre-unification snapshots)
         "previous_clip_action",
         "previous_clip_wan_prompt",
     ):

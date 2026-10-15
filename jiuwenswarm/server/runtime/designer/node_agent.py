@@ -610,7 +610,12 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         "occupancy": locks["occupancy"],
         # This-row locks only — do not expose prior-shot already_done / beat_done.
         "pose_holds": cfg.get("pose_holds"),
-        "seat_anchors": cfg.get("seat_anchors"),
+        # Unified convention: canonical spatial_anchors (legacy key read-compat).
+        "spatial_anchors": (
+            cfg.get("spatial_anchors")
+            if isinstance(cfg.get("spatial_anchors"), dict)
+            else (cfg.get("seat_anchors") if isinstance(cfg.get("seat_anchors"), dict) else None)
+        ),
         "forbidden_speech": cfg.get("forbidden_speech"),
         "end_state": cfg.get("end_state"),
         "start_state": cfg.get("start_state"),
@@ -639,7 +644,7 @@ def build_node_user_query(node: DesignerGraphNode, ctx: NodeExecutionContext) ->
         "CLIP WRITING: translate THIS storyboard row and its locks into ONE positive "
         "story-form video prompt for the configured video model (Wan / Seedance / "
         "MiniMax best practices). Authority fields: clip_action, cast_actions, "
-        "start_state, end_state, seat_anchors, occupancy, speech_line / "
+        "start_state, end_state, spatial_anchors, occupancy, speech_line / "
         "speech_by_character, camera, costume, scene_specs, style_lock. "
         "Keep sit/stand posture, seat places, action, and spoken words exactly as "
         "this row states — do not invent a different posture or dialogue. "

@@ -53,7 +53,7 @@ def test_stamp_clears_continuity_clip_node() -> None:
     )
     assert "continuity_clip_node_id" not in cfg
     assert cfg.get("start_state")
-    assert cfg.get("seat_anchors")
+    assert cfg.get("spatial_anchors")
 
 
 def test_story_curve_keeps_one_climax_and_carries_the_end() -> None:

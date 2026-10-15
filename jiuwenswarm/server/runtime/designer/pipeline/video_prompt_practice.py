@@ -457,9 +457,13 @@ def _scrub_lock_phrase(text: str) -> str:
 
 
 def _position_lines(cfg: dict[str, Any], graph: dict[str, Any] | None) -> list[str]:
-    """Where on-screen people stay — from seat anchors / positioning lock."""
+    """Where on-screen people stay — from spatial anchors / positioning lock."""
+    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+        spatial_anchors_from,
+    )
+
     lines: list[str] = []
-    seats = cfg.get("seat_anchors") if isinstance(cfg.get("seat_anchors"), dict) else {}
+    seats = spatial_anchors_from(cfg)
     for cid, anchor in seats.items():
         if not isinstance(anchor, dict):
             continue
@@ -699,8 +703,12 @@ def _wardrobe_for(token: str, cfg: dict[str, Any], graph: dict[str, Any] | None)
 
 
 def _seat_for(token: str, cfg: dict[str, Any], graph: dict[str, Any] | None) -> str:
+    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+        spatial_anchors_from,
+    )
+
     name = _name_for_id(token, graph) or str(token or "").strip()
-    seats = cfg.get("seat_anchors") if isinstance(cfg.get("seat_anchors"), dict) else {}
+    seats = spatial_anchors_from(cfg)
     anchor = seats.get(token) if isinstance(seats.get(token), dict) else None
     if anchor is None:
         for key, value in seats.items():
@@ -1142,7 +1150,11 @@ def prompt_respects_practice(
         if name.casefold() in text.casefold():
             reasons.append(f"exited_cast_leaked:{name}")
             break
-    seats = cfg.get("seat_anchors") if isinstance(cfg.get("seat_anchors"), dict) else {}
+    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+        spatial_anchors_from,
+    )
+
+    seats = spatial_anchors_from(cfg)
     if seats and not re.search(
         r"(?i)\b(?:stays|placement|screen-?left|screen-?right|near|beside|zone|facing|"
         r"standing|seated|sitting|leaning|kneeling)\b",

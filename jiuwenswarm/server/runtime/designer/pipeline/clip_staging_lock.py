@@ -80,13 +80,11 @@ def build_positioning_lock(
         bits.append(line)
 
     # Hard spatial positioning (place / posture / facing for any stance).
-    positions = (
-        shot.get("spatial_anchors")
-        if isinstance(shot.get("spatial_anchors"), dict)
-        else {}
+    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+        spatial_anchors_from,
     )
-    if not positions and isinstance(shot.get("seat_anchors"), dict):
-        positions = shot["seat_anchors"]
+
+    positions = spatial_anchors_from(shot)
     start = shot.get("start_state") if isinstance(shot.get("start_state"), dict) else {}
     if not positions and isinstance(start.get("seats"), dict):
         positions = start["seats"]

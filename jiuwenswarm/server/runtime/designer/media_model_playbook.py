@@ -108,7 +108,7 @@ Prompt craft: follow the configured VIDEO_GEN family's best practices
 (Wan / Seedance / MiniMax) — Character + Action + Lines + Scene in positive story form.
   Name character1… / Image N (or @Image N on Seedance) in attach order.
   speech_line / speech_by_character exact or silent; sit/stand and seat places exact
-  from start_state / cast_actions / seat_anchors; camera from this row.
+  from start_state / cast_actions / spatial_anchors; camera from this row.
 Always lead with positive story-form binding (no LOCK banners on the tool body):
   STORYBOARD ROW GATE: agree with THIS storyboard row exactly; do not invent posture
   or dialogue; do not film another shot's beat.

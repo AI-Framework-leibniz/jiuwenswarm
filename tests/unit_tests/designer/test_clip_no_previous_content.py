@@ -46,12 +46,12 @@ def test_strip_previous_clip_fields_clears_reference_led_carry() -> None:
             "already_done": ["shot1"],
             "beat_done": ["onset"],
             "previous_clip_speech": "hello",
-            "seat_anchors": {"char_1": {"zone": "head"}},
+            "spatial_anchors": {"char_1": {"zone": "head"}},
         }
     )
     assert out["clip_action"] == "pray"
     assert out["speech_line"] == "Amen."
-    assert out["seat_anchors"]["char_1"]["zone"] == "head"
+    assert out["spatial_anchors"]["char_1"]["zone"] == "head"
     assert "previous_action" not in out
     assert "previous_end_state" not in out
     assert "already_done" not in out

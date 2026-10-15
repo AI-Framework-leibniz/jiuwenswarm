@@ -76,10 +76,6 @@ def detailed_spatial_anchor(anchor: Any) -> dict[str, str]:
     return {"place": text[:120]}
 
 
-# Back-compat alias (wire/docs historically said "seat").
-detailed_seat_anchor = detailed_spatial_anchor
-
-
 def merge_spatial_maps(*maps: Any) -> dict[str, dict[str, str]]:
     """Merge spatial position maps; later maps fill missing detail keys only."""
     out: dict[str, dict[str, str]] = {}
@@ -101,7 +97,19 @@ def merge_spatial_maps(*maps: Any) -> dict[str, dict[str, str]]:
     return out
 
 
-merge_seat_maps = merge_spatial_maps
+def spatial_anchors_from(data: Any) -> dict[str, dict[str, str]]:
+    """Unified spatial-anchor read: canonical ``spatial_anchors`` only.
+
+    Persisted graphs written before the unification may still carry the legacy
+    ``seat_anchors`` wire name — accepted here as a read-only fallback. Writers
+    must only ever emit ``spatial_anchors``.
+    """
+    data = data if isinstance(data, dict) else {}
+    anchors = data.get("spatial_anchors")
+    if isinstance(anchors, dict) and anchors:
+        return anchors
+    legacy = data.get("seat_anchors")
+    return legacy if isinstance(legacy, dict) and legacy else {}
 
 
 def _normalize_props(raw: Any) -> dict[str, str]:
@@ -134,8 +142,9 @@ def _normalize_props(raw: Any) -> dict[str, str]:
 def spatial_positions_from_shot(shot: dict[str, Any] | None) -> dict[str, dict[str, str]]:
     """Build detailed spatial positioning plan (place + posture for any stance).
 
-    Director-authored metadata only: spatial_anchors (preferred), seat_anchors
-    (legacy wire key), start/end state seats, and structured blocking positions.
+    Director-authored metadata only: spatial_anchors (canonical; legacy
+    seat_anchors accepted for graphs persisted before the unification),
+    start/end state seats, and structured blocking positions.
     Never parses scenario prose.
     """
     shot = shot if isinstance(shot, dict) else {}
@@ -181,17 +190,11 @@ seats_from_shot = spatial_positions_from_shot
 
 
 def _stamp_spatial_anchors(target: dict[str, Any], positions: dict[str, dict[str, str]]) -> None:
-    """Write spatial positioning under both canonical and legacy keys."""
+    """Write spatial positioning under the canonical key only (unified convention)."""
     if not positions:
         return
-    payload = dict(positions)
-    target["spatial_anchors"] = payload
-    # Legacy wire alias — read-compat only for upstream consumers that still read
-    # seat_anchors (video_prompt_practice, wan_prompt_hygiene, shot_consistency_contract,
-    # clip_story_state, production_specs, node_agent, clip_staging_lock).
-    # Canonical name is spatial_anchors; do not add new readers; drop this write
-    # once those readers migrate.
-    target["seat_anchors"] = payload
+    target["spatial_anchors"] = dict(positions)
+    target.pop("seat_anchors", None)  # legacy wire name is read-only now
 
 
 def normalize_shot_state(raw: Any) -> dict[str, Any]:
@@ -637,8 +640,7 @@ def stamp_shot_states_on_clip_cfg(
     start = normalize_shot_state(shot.get("start_state") or out.get("start_state"))
     end = normalize_shot_state(shot.get("end_state") or out.get("end_state"))
     plan_positions = spatial_positions_from_shot(shot) or merge_spatial_maps(
-        out.get("spatial_anchors"),
-        out.get("seat_anchors"),
+        spatial_anchors_from(out),
         start.get("seats") if isinstance(start, dict) else None,
     )
     if start:
@@ -663,7 +665,7 @@ def stamp_shot_states_on_clip_cfg(
                 out.setdefault("pose_holds", [])
                 out["pose_holds"] = [hold, *list(out.get("pose_holds") or [])][:8]
         # Per-character spatial holds: posture (sit/stand/walk/…) + place.
-        for cid, anchor in list((out.get("spatial_anchors") or out.get("seat_anchors") or {}).items())[:8]:
+        for cid, anchor in list(spatial_anchors_from(out).items())[:8]:
             if not isinstance(anchor, dict):
                 continue
             place = anchor.get("place") or anchor.get("zone") or anchor.get("seat") or ""
@@ -803,10 +805,8 @@ def start_end_story_lines(cfg: dict[str, Any] | None) -> list[str]:
     elif start.get("facing"):
         lines.append(f"Opening: facing {start['facing']}.")
     positions = start.get("seats") if isinstance(start.get("seats"), dict) else {}
-    if not positions and isinstance(cfg.get("spatial_anchors"), dict):
-        positions = cfg["spatial_anchors"]
-    if not positions and isinstance(cfg.get("seat_anchors"), dict):
-        positions = cfg["seat_anchors"]
+    if not positions:
+        positions = spatial_anchors_from(cfg)
     for cid, anchor in list(positions.items())[:6]:
         if isinstance(anchor, dict):
             place = anchor.get("place") or anchor.get("zone") or anchor.get("seat") or ""

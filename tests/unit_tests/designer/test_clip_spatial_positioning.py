@@ -32,13 +32,7 @@ from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
 
 
 def _cfg_positions(cfg: dict) -> dict:
-    return (
-        cfg.get("spatial_anchors")
-        if isinstance(cfg.get("spatial_anchors"), dict)
-        else cfg.get("seat_anchors")
-        if isinstance(cfg.get("seat_anchors"), dict)
-        else {}
-    )
+    return cfg.get("spatial_anchors") if isinstance(cfg.get("spatial_anchors"), dict) else {}
 
 
 @pytest.mark.parametrize(
@@ -121,7 +115,8 @@ def test_spatial_positioning_failure_cases(failure_case: str) -> None:
         }
         cfg = stamp_shot_states_on_clip_cfg({}, shot=ensure_clip_start_end_states([shot])[0])
         assert cfg.get("spatial_anchors", {}).get("char_a", {}).get("posture") == "standing"
-        assert cfg.get("seat_anchors", {}).get("char_a", {}).get("place") == "balcony rail"
+        assert cfg.get("spatial_anchors", {}).get("char_a", {}).get("place") == "balcony rail"
+        assert "seat_anchors" not in cfg, "legacy seat_anchors must not be written"
 
     elif failure_case == "authored_state_standing_by_door":
         shot = {
@@ -346,7 +341,7 @@ def test_reference_led_graph_stamps_spatial_positions_on_clip_nodes() -> None:
     assert cfg.get("start_state")
     assert cfg.get("spatial_anchors", {}).get("char_a", {}).get("place") == "head of table"
     assert cfg.get("spatial_anchors", {}).get("char_a", {}).get("posture") == "standing"
-    assert cfg.get("seat_anchors", {}).get("char_a", {}).get("posture") == "standing"
+    assert cfg.get("spatial_anchors", {}).get("char_a", {}).get("posture") == "standing"
     prompt = str((cfg.get("generate") or {}).get("prompt") or "")
     assert "head of table" in prompt.lower() or "begins" in prompt.lower()
 

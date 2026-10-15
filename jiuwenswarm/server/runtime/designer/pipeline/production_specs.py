@@ -216,16 +216,8 @@ def leaf_lock_packet(
             shot.get("start_state") if isinstance(shot.get("start_state"), dict) else {}
         ),
         "end_state": shot.get("end_state") if isinstance(shot.get("end_state"), dict) else shot.get("end_state"),
+        # Unified convention: single canonical key (legacy seat_anchors read-compat).
         "spatial_anchors": (
-            shot.get("spatial_anchors")
-            if isinstance(shot.get("spatial_anchors"), dict)
-            else (
-                shot.get("seat_anchors")
-                if isinstance(shot.get("seat_anchors"), dict)
-                else {}
-            )
-        ),
-        "seat_anchors": (
             shot.get("spatial_anchors")
             if isinstance(shot.get("spatial_anchors"), dict)
             else (

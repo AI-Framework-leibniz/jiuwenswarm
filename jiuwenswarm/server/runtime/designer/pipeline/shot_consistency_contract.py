@@ -234,9 +234,13 @@ def agent_structured_continuity_block(cfg: dict[str, Any] | None) -> str:
     ]
     if holds:
         lines.append("- Opening holds: " + "; ".join(holds[:6]))
-    seats = cfg.get("seat_anchors") if isinstance(cfg.get("seat_anchors"), dict) else {}
-    if not seats and isinstance(end.get("seat_anchors"), dict):
-        seats = end["seat_anchors"]
+    from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
+        spatial_anchors_from,
+    )
+
+    seats = spatial_anchors_from(cfg)
+    if not seats and isinstance(end.get("seats"), dict):
+        seats = end["seats"]
     if seats:
         bits = []
         for cid, anchor in list(seats.items())[:6]:

@@ -82,7 +82,7 @@ def test_seat_hold_and_exit_stamp_onto_next_clip() -> None:
     # strip already_done and use this-row locks only.
     assert "char_child" in (out.get("offscreen") or [])
     assert "char_child" not in (out.get("on_screen") or ["char_dad", "char_mum"])
-    seats = out.get("seat_anchors") or {}
+    seats = out.get("spatial_anchors") or {}
     assert "char_dad" in seats
     assert "window" in str(seats["char_dad"]).lower()
     from jiuwenswarm.server.runtime.designer.pipeline.clip_story_state import (
@@ -596,7 +596,7 @@ def test_director_rewrites_lock_essay_into_image_binding() -> None:
             "in the scene from Image 3, is leaning forward."
         ),
         "previous_clip_action": "The Mother listens while the Young Child leans forward.",
-        "seat_anchors": {
+        "spatial_anchors": {
             "Mother": {"pose": "seated", "landmark": "table", "screen": "screen-left"},
             "Young Child": {"pose": "seated", "landmark": "table", "screen": "screen-right"},
         },
@@ -695,7 +695,7 @@ def test_compose_keeps_prior_prompt_continuity() -> None:
             ),
             "previous_clip_action": "Dad walks to the door",
             "already_done": ["Dad walked to the door"],
-            "seat_anchors": {"Dad": {"pose": "seated", "screen": "screen-left"}},
+            "spatial_anchors": {"Dad": {"pose": "seated", "screen": "screen-left"}},
             "scene_specs": {
                 "place": "kitchen",
                 "lighting": "soft morning light",

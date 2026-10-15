@@ -28,6 +28,7 @@ from jiuwenswarm.server.runtime.designer.pipeline.storyboard_clip_state import (
     detailed_spatial_anchor,
     merge_spatial_maps,
     normalize_shot_state,
+    spatial_anchors_from,
     spatial_positions_from_shot,
 )
 
@@ -206,8 +207,7 @@ def reconcile_shot_to_contract(
     end = normalize_shot_state(shot.get("end_state"))
     opening = merge_spatial_maps(
         start.get("seats"),
-        shot.get("spatial_anchors"),
-        shot.get("seat_anchors"),
+        spatial_anchors_from(shot),
         (scene_hold or {}).get("cast") if isinstance(scene_hold, dict) else None,
     )
     ending = merge_spatial_maps(end.get("seats"), opening)

@@ -310,8 +310,9 @@ def _refresh_generation_details(before: DesignerExecutionGraph, graph: DesignerE
             cfg["pose_holds"] = [hold for hold in cfg.get("pose_holds", []) if hold not in old_holds and not hold.startswith(("Opening hold: ", "Opening facing: "))]
             stamped = stamp_shot_states_on_clip_cfg(cfg)
             cfg["pose_holds"] = stamped.get("pose_holds", [])
-            if "seat_anchors" in cfg or (cfg.get("start_state") or {}).get("seats"):
-                cfg["seat_anchors"] = deepcopy((cfg.get("start_state") or {}).get("seats", {}))
+            if "spatial_anchors" in cfg or "seat_anchors" in cfg or (cfg.get("start_state") or {}).get("seats"):
+                cfg["spatial_anchors"] = deepcopy((cfg.get("start_state") or {}).get("seats", {}))
+                cfg.pop("seat_anchors", None)
         end_state = cfg.get("end_state")
         # Reference-led clips keep end_state as prose, not a shot-state record.
         if "end_state" in changed and isinstance(end_state, dict) and (

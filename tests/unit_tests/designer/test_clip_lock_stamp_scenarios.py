@@ -141,13 +141,7 @@ def _has_posture(anchor: dict) -> bool:
 
 
 def _cfg_positions(cfg: dict) -> dict:
-    return (
-        cfg.get("spatial_anchors")
-        if isinstance(cfg.get("spatial_anchors"), dict)
-        else cfg.get("seat_anchors")
-        if isinstance(cfg.get("seat_anchors"), dict)
-        else {}
-    )
+    return cfg.get("spatial_anchors") if isinstance(cfg.get("spatial_anchors"), dict) else {}
 
 
 def _shot_for(
@@ -252,6 +246,7 @@ def test_spatial_positions_stamp_matrix(case_id: int) -> None:
     stamped = _cfg_positions(cfg)
     assert stamped
     assert cfg.get("spatial_anchors"), "canonical spatial_anchors required"
+    assert "seat_anchors" not in cfg, "legacy seat_anchors must not be written"
     for cid in chars:
         anchor = stamped.get(cid) or {}
         assert isinstance(anchor, dict)
