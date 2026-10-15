@@ -52,6 +52,7 @@ from openjiuwen.harness.schema.extension_spec import AgentTemplateSpec
 from jiuwenswarm.agents.swarm.config_specs import (
     build_member_capability_specs,
     build_member_deep_agent_spec,
+    build_reviewer_deep_agent_spec,
 )
 from jiuwenswarm.agents.swarm.context import (
     SwarmBuildContext,
@@ -238,6 +239,11 @@ def _apply_agent_group(
         )
     templates = package.templates
     package_dir = package.package_dir
+    spec.metadata = {
+        **(spec.metadata or {}),
+        "agent_group_name": agent_group_name,
+        "capabilities": list(package.capabilities),
+    }
 
     leader_base = spec.agents.get("leader")
     teammate_base = spec.agents.get("teammate")
@@ -556,6 +562,8 @@ def enrich_team_spec_for_swarm(
             )
             member_spec = _with_project_cwd(member_spec, project_dir)
             spec.agents[role] = member_spec
+    if "teammate" in spec.agents:
+        spec.reviewer_agent = build_reviewer_deep_agent_spec(mode, spec.agents["teammate"])
 
     if agent_group_name:
         if _is_design_team_mode(mode):

@@ -470,7 +470,7 @@ agents:
   agent_leader:
     workspace:
       stable_base: true
-    max_iterations: 200
+    # Leader 不受 max_iterations 限制，配置了也会被忽略，保证长程任务持续执行
     completion_timeout: 6000.0
 
   agent_teammate:
@@ -584,7 +584,7 @@ trajectory_ui:
   discard_final_span_frames: true
 
 experimental:
-  team_organization_ui_enabled: false # Team Organization 多团队视图；不控制后端组织能力
+  team_organization_ui_enabled: false # Team Organization 多团队视图；关闭后新建团队不挂载 org 工具
   task_full_duplex_enabled: false    # 在任务对话空输入框中显示全双工入口
   task_asr_enabled: false            # 默认关闭普通任务对话中的语音转写入口
 
@@ -997,7 +997,9 @@ channels:
     #   chat_id:
     #   enabled: false
   xiaoyi:
-    send_file_allowed: true
+    # 小艺渠道不做文件回传：send_file_to_user 不注册给模型，
+    # 相关提示词也不再要求它发文件（见 file_delivery_policy / TeamWorkspaceReportPathRail）。
+    send_file_allowed: false
     apps:
       - name: 小艺默认应用
         # 华为小艺 A2A 配置
@@ -1151,6 +1153,7 @@ permissions:
   shell_guard:
     unknown_structure: false
     interpreter_sink: false
+  # manual keeps the existing approval flow; auto enables Smart Approval.
   mode: manual
 
   defaults:
