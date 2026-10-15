@@ -99,6 +99,19 @@ class RunCoordinator:
         run = self._store.get_run(run_id)
         if run is None:
             raise KeyError(run_id)
+        if not self.is_active():
+            # No trigger is executing, so a 'running' record is a leftover of
+            # a process that died mid-trigger; nothing else would ever end it,
+            # and the canvas stays read-only while the run looks active.
+            if run.get("status") == "running":
+                run["status"] = "cancelled"
+                run["current_node_ids"] = []
+                for state in (run.get("node_states") or {}).values():
+                    if isinstance(state, dict) and state.get("status") == "running":
+                        state["status"] = "failed"
+                        state["error"] = "interrupted by process restart"
+                self._store.save_run(run)
+            return dict(run)
         if self._abort is not None and self._loop is not None:
             self._loop.call_soon_threadsafe(lambda: self._abort.set("stop"))
         return dict(run)
