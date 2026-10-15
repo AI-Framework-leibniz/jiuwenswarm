@@ -9,10 +9,7 @@ from pathlib import Path
 
 from jiuwenswarm.common.schema.designer_graph import (
     NODE_ROLE_BRIEF,
-    NODE_ROLE_CHARACTER,
-    NODE_ROLE_SCENE,
     NODE_TYPE_IMAGE,
-    NODE_TYPE_TEXT,
     DesignerGraphNode,
 )
 from jiuwenswarm.server.runtime.designer.handlers import common as handler_io
@@ -20,14 +17,12 @@ from jiuwenswarm.server.runtime.designer.handlers.common import (
     file_output_ref,
     graph_prompt,
     role_output_text,
-    write_workspace_text,
 )
 from jiuwenswarm.server.runtime.designer.user_references import (
     graph_user_references,
     prompt_slot_roster,
     wired_user_reference_images,
 )
-from jiuwenswarm.server.runtime.designer.a2a_collab import collaboration_card
 from jiuwenswarm.server.runtime.designer.handlers.types import NodeExecutionContext, NodeResult
 from jiuwenswarm.server.runtime.designer.media_settings import image_settings
 
@@ -167,33 +162,13 @@ async def _require_image(
     )
 
 
-def _aligned_source(ctx: NodeExecutionContext, role: str, node: DesignerGraphNode) -> str:
+def _aligned_source(ctx: NodeExecutionContext, node: DesignerGraphNode) -> str:
     # The node prompt can be cleared from the toolbar or chat; the brief then
     # carries the cast and setting descriptions.
     return (
-        collaboration_card(ctx.run_id, role)
-        or str((node.get("config") or {}).get("prompt") or "").strip()
+        str((node.get("config") or {}).get("prompt") or "").strip()
         or role_output_text(ctx, NODE_ROLE_BRIEF)
         or graph_prompt(ctx.graph, node)
-    )
-
-
-def _with_card_ref(result: NodeResult, ctx: NodeExecutionContext, role: str) -> NodeResult:
-    card = collaboration_card(ctx.run_id, role)
-    if not card:
-        return result
-    path = write_workspace_text(f"designer_a2a_{ctx.run_id}_{role}", card)
-    card_ref = file_output_ref(path, kind=NODE_TYPE_TEXT, mime_type="text/markdown")
-    refs = [ref for ref in (result.output_refs or []) if ref]
-    primary = result.output_ref
-    if primary is not None and primary not in refs:
-        refs.insert(0, primary)
-    if card_ref not in refs:
-        refs.append(card_ref)
-    return NodeResult(
-        output_ref=primary,
-        output_refs=refs or [card_ref],
-        message=result.message,
     )
 
 
@@ -218,7 +193,7 @@ class CharacterDesignNodeHandler:
     async def execute(self, node: DesignerGraphNode, ctx: NodeExecutionContext) -> NodeResult:
         cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
         focused = str(cfg.get("prompt") or "").strip()
-        source = focused or _aligned_source(ctx, NODE_ROLE_CHARACTER, node)
+        source = focused or _aligned_source(ctx, node)
         name = str(cfg.get("character_name") or node.get("label") or "Character")
         size = image_settings(ctx.graph).size
         combined = bool(cfg.get("combined_cast"))
@@ -269,14 +244,14 @@ class CharacterDesignNodeHandler:
             ctx=ctx,
             keep_references=bool(cfg.get("require_reference_images")),
         )
-        return _with_card_ref(result, ctx, NODE_ROLE_CHARACTER)
+        return result
 
 
 class SceneNodeHandler:
     async def execute(self, node: DesignerGraphNode, ctx: NodeExecutionContext) -> NodeResult:
         cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
         focused = str(cfg.get("prompt") or "").strip()
-        source = focused or _aligned_source(ctx, NODE_ROLE_SCENE, node)
+        source = focused or _aligned_source(ctx, node)
         size = image_settings(ctx.graph).size
         max_tries = max(2, int(cfg.get("max_image_calls") or 1))
         strategy = str(cfg.get("scene_strategy") or "").strip()
@@ -357,4 +332,4 @@ class SceneNodeHandler:
             reference_images=refs or None,
             ctx=ctx,
         )
-        return _with_card_ref(result, ctx, NODE_ROLE_SCENE)
+        return result

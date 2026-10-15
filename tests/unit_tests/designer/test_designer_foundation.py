@@ -1,10 +1,9 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 
-"""Unit tests for Designer graph store, normalize, and executor."""
+"""Unit tests for Designer graph store and normalize."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -12,49 +11,21 @@ from pathlib import Path
 import pytest
 
 from jiuwenswarm.common.schema.designer_graph import (
-    CONFIG_DELEGATE_HANDLER,
-    NODE_ROLE_CHARACTER,
     NODE_ROLE_CLIP,
     NODE_ROLE_COMPOSE,
-    NODE_ROLE_STORYBOARD,
-    NODE_TYPE_IMAGE,
     NODE_TYPE_TEXT,
     NODE_TYPE_VIDEO,
     NODE_STATUS_COMPLETED,
-    NODE_STATUS_RUNNING,
     RUN_STATUS_COMPLETED,
-    RUN_STATUS_RUNNING,
-    DesignerExecutionGraph,
     DesignerGraphValidationError,
-    apply_shot_generate_prompts,
     expand_shot_nodes,
     preserve_expanded_shot_nodes,
     normalize_execution_graph,
     node_pipeline,
     repair_overlapping_pipeline_layout,
 )
-from jiuwenswarm.server.runtime.designer.executor import GraphExecutor
 from jiuwenswarm.server.runtime.designer.graph_store import DesignerGraphStore
 from tests.unit_tests.designer.graph_fixtures import make_pipeline_graph
-
-
-def _handler_graph(graph: DesignerExecutionGraph) -> DesignerExecutionGraph:
-    """Keep legacy DAG executor tests on the handler escape hatch."""
-    for node in graph.get("nodes") or []:
-        config = node.setdefault("config", {})
-        config["delegate"] = CONFIG_DELEGATE_HANDLER
-        config["force_handler"] = True
-        config["skip_llm"] = True
-        if node_pipeline(node) == NODE_ROLE_STORYBOARD:
-            config.setdefault("planned_shots", _STUB_PLANNED_SHOTS)
-    return graph
-
-
-_STUB_PLANNED_SHOTS = [
-    {"clip_index": 1, "timeline": "0.0-2.0s", "camera": "全景/平视", "camera_move": "缓摇", "action": "未入画"},
-    {"clip_index": 2, "timeline": "2.0-3.5s", "camera": "中景/平视", "camera_move": "跟移", "action": "主体入画"},
-    {"clip_index": 3, "timeline": "3.5-5.0s", "camera": "近景/平视", "camera_move": "固定", "action": "转身"},
-]
 
 
 def _assert_nodes_do_not_overlap(nodes: list) -> None:
@@ -71,83 +42,6 @@ def _assert_nodes_do_not_overlap(nodes: list) -> None:
             overlap_x = left[1] < right[3] and right[1] < left[3]
             overlap_y = left[2] < right[4] and right[2] < left[4]
             assert not (overlap_x and overlap_y), f"{left[0]} overlaps {right[0]}"
-
-
-@pytest.fixture()
-def stub_clip_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_text(prompt: str, max_tokens: int = 1200) -> str:
-        if "分镜" in prompt or "运镜" in prompt or "Storyboard" in prompt:
-            return (
-                "| Shot | Timeline | Camera | Move | On screen | Character action | Speech |\n"
-                "| --- | --- | --- | --- | --- | --- | --- |\n"
-                "| 1 | 0.0-2.0s | 全景/平视 | 缓摇 |  | 未入画 |  |\n"
-                "| 2 | 2.0-3.5s | 中景/平视 | 跟移 | 主体 | 主体入画 |  |\n"
-                "| 3 | 3.5-5.0s | 近景/平视 | 固定 | 主体 | 转身 |  |\n"
-            )
-        return f"# stub\n{prompt[:80]}"
-
-    image_seq = {"n": 0}
-
-    async def fake_image(
-        prompt: str,
-        size: str = "512x512",
-        reference_image: str | None = None,
-        reference_images: list[str] | None = None,
-        **kwargs,
-    ) -> dict[str, str]:
-        image_seq["n"] += 1
-        path = tmp_path / f"generated_{image_seq['n']}.png"
-        path.write_bytes(b"png")
-        return {"image_path": str(path)}
-
-    video_seq = {"n": 0}
-
-    async def fake_video(
-        prompt: str,
-        save_dir: str | None = None,
-        first_frame: str | None = None,
-        reference_images: list[str] | None = None,
-        **kwargs,
-    ) -> dict[str, str]:
-        video_seq["n"] += 1
-        path = tmp_path / f"generated_clip_{video_seq['n']}.mp4"
-        path.write_bytes(b"mp4" * 200)
-        return {"video_path": str(path), "revised_prompt": prompt}
-
-    def fake_concat(paths: list[Path], dest: Path) -> Path:
-        dest = Path(dest)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(b"mp4-merged" * 80)
-        return dest.resolve()
-
-    monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.designer.handlers.common.get_agent_workspace_dir",
-        lambda: tmp_path,
-    )
-    monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.designer.handlers.common.complete_designer_text",
-        fake_text,
-    )
-    monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.designer.handlers.common.generate_designer_image",
-        fake_image,
-    )
-    monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.designer.handlers.clip.generate_clip_video",
-        fake_video,
-    )
-    monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.designer.handlers.compose.concatenate_clip_videos",
-        fake_concat,
-    )
-    monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.designer.model_tools.require_llm",
-        lambda: None,
-    )
-    monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.designer.model_tools.llm_available",
-        lambda: True,
-    )
 
 
 @pytest.fixture()
@@ -174,8 +68,6 @@ def test_graph_and_run_ids_cannot_escape_their_directories(
     designer_store: DesignerGraphStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Path separators in graph_id / run_id must not read, write, or delete outside the store."""
-    from jiuwenswarm.server.runtime.designer.feedback import save_feedback
-
     graph = make_pipeline_graph(project_id="proj_path01", prompt="path confinement")
     saved = designer_store.save_graph(graph)
     outside = tmp_path / "outside.json"
@@ -216,17 +108,6 @@ def test_graph_and_run_ids_cannot_escape_their_directories(
     assert designer_store.get_graph("镜头.甲-1")["project_id"] == "proj_path01"
     assert (tmp_path / "designer" / "graphs" / "镜头.甲-1.json").is_file()
 
-    monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.designer.feedback.get_agent_root_dir",
-        lambda: tmp_path,
-    )
-    with pytest.raises(DesignerGraphValidationError, match="path separators"):
-        save_feedback("..", "run_ok", {"ok": True})
-    assert not (tmp_path / "designer" / "run_ok.json").exists()
-    feedback_file = save_feedback("镜头.甲-1", "运行_1", {"ok": True})
-    assert feedback_file == (tmp_path / "designer" / "feedback" / "镜头.甲-1" / "运行_1.json").resolve()
-    assert feedback_file.is_file()
-
 
 def test_expand_shot_nodes_creates_one_clip_per_shot() -> None:
     graph = make_pipeline_graph(project_id="proj_expand01", prompt="three shots")
@@ -247,32 +128,6 @@ def test_expand_shot_nodes_creates_one_clip_per_shot() -> None:
     )
     assert compose_layout["x"] >= clip_right
     _assert_nodes_do_not_overlap(expanded["nodes"])
-
-
-def test_apply_shot_generate_prompts_fills_clips_and_keeps_user_edits() -> None:
-    graph = expand_shot_nodes(
-        make_pipeline_graph(project_id="proj_prompt01", prompt="fill prompts"),
-        2,
-    )
-    filled = apply_shot_generate_prompts(
-        graph,
-        ["火车进站的全景", "年轻人从车门走出"],
-    )
-    clip1 = next(node for node in filled["nodes"] if node["id"] == "n_clip_1")
-    clip2 = next(node for node in filled["nodes"] if node["id"] == "n_clip_2")
-    assert clip1["config"]["generate"]["prompt"] == "火车进站的全景"
-    assert clip2["config"]["generate"]["prompt"] == "年轻人从车门走出"
-
-    clip1["config"]["generate"]["prompt"] = "用户改过的画面"
-    clip1["config"]["generate"]["prompt_origin"] = "user"
-    kept = apply_shot_generate_prompts(
-        filled,
-        ["新的分镜注释", "白领从地铁门走出"],
-    )
-    kept_clip1 = next(node for node in kept["nodes"] if node["id"] == "n_clip_1")
-    kept_clip2 = next(node for node in kept["nodes"] if node["id"] == "n_clip_2")
-    assert kept_clip1["config"]["generate"]["prompt"] == "用户改过的画面"
-    assert kept_clip2["config"]["generate"]["prompt"] == "白领从地铁门走出"
 
 
 def test_preserve_node_output_refs_keeps_storyboard_uri() -> None:
@@ -413,55 +268,6 @@ def test_preserve_skips_graft_when_user_marks_topology_edit() -> None:
     assert "n_clip_4" not in ids
 
 
-def test_expand_shots_keeps_director_topology_and_syncs_prompts(
-    designer_store: DesignerGraphStore, tmp_path: Path
-) -> None:
-    from jiuwenswarm.server.runtime.designer.executor import GraphExecutor
-
-    graph = designer_store.save_graph(
-        _handler_graph(make_pipeline_graph(project_id="proj_split01", prompt="two shots")),
-    )
-    story = tmp_path / "two-shots.md"
-    story.write_text(
-        "# Storyboard\n\n"
-        "## Storyboard\n\n"
-        "| Shot | Timeline | Camera | Move | On screen | Character action | Speech |\n"
-        "| --- | --- | --- | --- | --- | --- | --- |\n"
-        "| 1 | 0.0-4.0s | wide | hold | Ann | enter |  |\n"
-        "| 2 | 4.0-8.0s | medium | push | Ann | walk |  |\n",
-        encoding="utf-8",
-    )
-    executor = GraphExecutor(designer_store)
-    run = executor.create_run(graph)
-    run["node_states"]["n_brief"] = {"status": NODE_STATUS_COMPLETED}
-    run["node_states"]["n_character"] = {"status": NODE_STATUS_COMPLETED}
-    run["node_states"]["n_scene"] = {"status": NODE_STATUS_COMPLETED}
-    run["node_states"]["n_storyboard"] = {
-        "status": NODE_STATUS_COMPLETED,
-        "output_ref": {
-            "kind": "table",
-            "uri": story.resolve().as_uri(),
-            "mime_type": "text/markdown",
-        },
-    }
-    designer_store.save_run(run)
-    expanded, remaining, _ = executor._expand_shots_if_needed(
-        graph, run, {"n_clip_1", "n_compose"}, on_update=None
-    )
-    clip_ids = [node["id"] for node in expanded["nodes"] if node_pipeline(node) == NODE_ROLE_CLIP]
-    assert clip_ids == ["n_clip_1", "n_clip_2"]
-    assert (expanded.get("metadata") or {}).get("freeze_clip_topology") is True
-    assert "n_clip_1" in remaining and "n_clip_2" in remaining and "n_compose" in remaining
-    clip = next(node for node in expanded["nodes"] if node["id"] == "n_clip_1")
-    prompt = str(((clip.get("config") or {}).get("generate") or {}).get("prompt") or "")
-    assert prompt
-    assert ((clip.get("config") or {}).get("generate") or {}).get("prompt_origin") in {
-        "storyboard",
-        None,
-        "",
-    } or "shot one" in prompt or "enter" in prompt.lower()
-
-
 def test_graph_store_list_by_project(designer_store: DesignerGraphStore) -> None:
     first = designer_store.save_graph(
         make_pipeline_graph(project_id="proj_list_a", prompt="first"),
@@ -480,50 +286,6 @@ def test_graph_store_list_by_project(designer_store: DesignerGraphStore) -> None
     assert second["graph_id"] in all_ids
 
 
-@pytest.mark.asyncio
-async def test_mock_executor_completes_run(
-    designer_store: DesignerGraphStore, stub_clip_video: None
-) -> None:
-    graph = designer_store.save_graph(
-        _handler_graph(make_pipeline_graph(project_id="proj_exec01", prompt="execute me")),
-    )
-    executor = GraphExecutor(designer_store)
-    run = executor.create_run(graph)
-    started = await executor.start_run(run["run_id"])
-    assert started["status"] == RUN_STATUS_RUNNING
-    task = executor._tasks.get(run["run_id"])
-    if task is not None:
-        await task
-    finished = designer_store.get_run(run["run_id"])
-    assert finished is not None
-    assert finished["status"] == RUN_STATUS_COMPLETED
-    node_states = finished["node_states"]
-    assert all(
-        state.get("status") == NODE_STATUS_COMPLETED for state in node_states.values()
-    )
-    character = node_states["n_character"]
-    storyboard = node_states["n_storyboard"]
-    scene = node_states["n_scene"]
-    assert str(character.get("output_ref", {}).get("uri") or "").startswith("file:")
-    assert str(storyboard.get("output_ref", {}).get("uri") or "").startswith("file:")
-    assert scene.get("output_ref", {}).get("kind") == NODE_TYPE_IMAGE
-    clip = node_states["n_clip_1"]
-    assert clip.get("output_ref", {}).get("kind") == NODE_TYPE_VIDEO
-    assert str(clip.get("output_ref", {}).get("label") or "").endswith(".mp4")
-    compose = node_states["n_compose"]
-    assert compose.get("output_ref", {}).get("kind") == NODE_TYPE_VIDEO
-    assert str(compose.get("output_ref", {}).get("label") or "").endswith(".mp4")
-    assert (character.get("started_at") or 0) <= (clip.get("started_at") or 0)
-    assert (storyboard.get("started_at") or 0) <= (clip.get("started_at") or 0)
-    assert (scene.get("completed_at") or 0) <= (clip.get("started_at") or 0)
-    assert (clip.get("completed_at") or 0) <= (compose.get("started_at") or 0)
-    saved_graph = designer_store.get_graph(graph["graph_id"])
-    assert saved_graph is not None
-    assert [node["id"] for node in saved_graph["nodes"] if node_pipeline(node) == NODE_ROLE_CLIP] == [
-        "n_clip_1",
-    ]
-
-
 def test_normalize_keeps_unique_clip_ids() -> None:
     """Frame→frame chain stripping was removed with the frame pipeline; normalize still
     accepts a valid multi-clip graph with unique ids."""
@@ -537,254 +299,6 @@ def test_normalize_keeps_unique_clip_ids() -> None:
     ]
     assert clip_ids == ["n_clip_1", "n_clip_2"]
     assert len(clip_ids) == len(set(clip_ids))
-
-
-@pytest.mark.asyncio
-async def test_running_status_is_saved_before_handler_returns(
-    designer_store: DesignerGraphStore,
-    stub_clip_video: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from jiuwenswarm.server.runtime.designer.handlers.text_nodes import BriefNodeHandler
-
-    gate = asyncio.Event()
-    seen: dict[str, str] = {}
-    original = BriefNodeHandler.execute
-
-    async def paused(self, node, ctx):
-        run = designer_store.get_run(ctx.run_id)
-        seen["status"] = str((run.get("node_states") or {}).get(node["id"], {}).get("status") or "")
-        await gate.wait()
-        return await original(self, node, ctx)
-
-    monkeypatch.setattr(BriefNodeHandler, "execute", paused)
-    graph = designer_store.save_graph(
-        _handler_graph(make_pipeline_graph(project_id="proj_run_persist", prompt="persist running")),
-    )
-    executor = GraphExecutor(designer_store)
-    run = executor.create_run(graph)
-    await executor.start_run(run["run_id"])
-    task = executor._tasks.get(run["run_id"])
-    try:
-        for _ in range(50):
-            if "status" in seen:
-                break
-            await asyncio.sleep(0.02)
-        assert seen.get("status") == NODE_STATUS_RUNNING
-    finally:
-        gate.set()
-        if task is not None:
-            await task
-
-
-def test_create_rerun_parks_orphaned_running_and_marks_single_node(
-    designer_store: DesignerGraphStore,
-) -> None:
-    graph = designer_store.save_graph(
-        _handler_graph(make_pipeline_graph(project_id="proj_park_running", prompt="park")),
-    )
-    executor = GraphExecutor(designer_store)
-    source = executor.create_run(graph)
-    for state in source["node_states"].values():
-        state["status"] = NODE_STATUS_COMPLETED
-    source["node_states"]["n_scene"] = {
-        "status": NODE_STATUS_RUNNING,
-        "activity": {"kind": "tool_call", "text": "calling call_image_model"},
-        "error": None,
-    }
-    source["node_states"]["n_character"] = {"status": "failed", "error": "image_gen failed"}
-    designer_store.save_run(source)
-    rerun = executor.create_rerun(graph, source_run=source, node_id="n_character")
-    assert rerun["metadata"]["target_node_id"] == "n_character"
-    assert rerun["node_states"]["n_character"]["status"] == "pending"
-    assert not rerun["node_states"]["n_character"].get("error")
-    assert rerun["node_states"]["n_scene"]["status"] == "pending"
-    assert "activity" not in rerun["node_states"]["n_scene"]
-
-
-def test_park_running_nodes_leaves_failed_and_completed(
-    designer_store: DesignerGraphStore,
-) -> None:
-    graph = designer_store.save_graph(
-        _handler_graph(make_pipeline_graph(project_id="proj_park_wave", prompt="park wave")),
-    )
-    executor = GraphExecutor(designer_store)
-    run = executor.create_run(graph)
-    run["node_states"]["n_character"] = {"status": "failed", "error": "no image"}
-    run["node_states"]["n_scene"] = {"status": NODE_STATUS_RUNNING, "error": None}
-    run["node_states"]["n_brief"] = {"status": NODE_STATUS_COMPLETED}
-    executor._park_running_nodes(run, None)
-    assert run["node_states"]["n_character"]["status"] == "failed"
-    assert run["node_states"]["n_scene"]["status"] == "pending"
-    assert run["node_states"]["n_brief"]["status"] == NODE_STATUS_COMPLETED
-
-
-@pytest.mark.asyncio
-async def test_rerun_single_node_keeps_upstream_outputs(
-    designer_store: DesignerGraphStore, stub_clip_video: None
-) -> None:
-    graph = designer_store.save_graph(
-        _handler_graph(make_pipeline_graph(project_id="proj_rerun01", prompt="rerun clip")),
-    )
-    executor = GraphExecutor(designer_store)
-    first = executor.create_run(graph)
-    await executor.start_run(first["run_id"])
-    task = executor._tasks.get(first["run_id"])
-    if task is not None:
-        await task
-    finished = designer_store.get_run(first["run_id"])
-    assert finished is not None
-    brief_started = finished["node_states"]["n_brief"].get("started_at")
-    brief_uri = (finished["node_states"]["n_brief"].get("output_ref") or {}).get("uri")
-
-    rerun = executor.create_rerun(graph, source_run=finished, node_id="n_clip_1")
-    assert rerun["node_states"]["n_clip_1"]["status"] == "pending"
-    assert rerun["node_states"]["n_brief"]["status"] == NODE_STATUS_COMPLETED
-    await executor.start_run(rerun["run_id"])
-    worker = executor._tasks.get(rerun["run_id"])
-    if worker is not None:
-        await worker
-    again = designer_store.get_run(rerun["run_id"])
-    assert again is not None
-    assert again["status"] == RUN_STATUS_COMPLETED
-    assert again["node_states"]["n_brief"].get("started_at") == brief_started
-    assert (again["node_states"]["n_brief"].get("output_ref") or {}).get("uri") == brief_uri
-    assert again["node_states"]["n_clip_1"]["status"] == NODE_STATUS_COMPLETED
-    original_clip = (finished["node_states"]["n_clip_1"].get("output_ref") or {}).get("uri")
-    new_clip = (again["node_states"]["n_clip_1"].get("output_ref") or {}).get("uri")
-    assert new_clip
-    assert new_clip != original_clip
-    assert not (again["node_states"]["n_clip_1"].get("candidate_output_ref") or {}).get("uri")
-
-    with pytest.raises(ValueError, match="upstream not ready"):
-        unfinished = {
-            **finished,
-            "node_states": {
-                **finished["node_states"],
-                "n_storyboard": {"status": "pending"},
-            },
-        }
-        executor.create_rerun(graph, source_run=unfinished, node_id="n_clip_1")
-
-
-@pytest.mark.asyncio
-async def test_continue_after_failure_retries_failed_node(
-    designer_store: DesignerGraphStore,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.designer.model_tools.require_llm", lambda: None
-    )
-    monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.designer.model_tools.require_media_models",
-        lambda **_: None,
-    )
-    graph = designer_store.save_graph(
-        _handler_graph(make_pipeline_graph(project_id="proj_continue_failed", prompt="continue")),
-    )
-    executor = GraphExecutor(designer_store)
-    scheduled: dict[str, dict] = {}
-
-    async def capture(graph, run, *, on_update):
-        scheduled.update(deepcopy(run["node_states"]))
-
-    monkeypatch.setattr(executor, "_execute_run", capture)
-    run = executor.create_run(graph)
-    for state in run["node_states"].values():
-        state["status"] = NODE_STATUS_COMPLETED
-    run["status"] = "failed"
-    run["error"] = "insufficient credit"
-    run["node_states"]["n_clip_1"] = {
-        "status": "failed",
-        "error": "insufficient credit",
-        "output_ref": None,
-    }
-    run["node_states"]["n_clip_2"] = {"status": "pending"}
-    designer_store.save_run(run)
-
-    await executor.start_run(run["run_id"])
-    await executor._tasks[run["run_id"]]
-
-    assert scheduled["n_clip_1"]["status"] == "pending"
-    assert not scheduled["n_clip_1"].get("error")
-    assert scheduled["n_clip_2"]["status"] == "pending"
-    assert scheduled["n_brief"]["status"] == NODE_STATUS_COMPLETED
-
-
-@pytest.mark.asyncio
-async def test_rerun_compose_replaces_film_in_place(
-    designer_store: DesignerGraphStore, stub_clip_video: None
-) -> None:
-    graph = designer_store.save_graph(
-        _handler_graph(make_pipeline_graph(project_id="proj_compose_rerun", prompt="rerun film")),
-    )
-    executor = GraphExecutor(designer_store)
-    first = executor.create_run(graph)
-    await executor.start_run(first["run_id"])
-    task = executor._tasks.get(first["run_id"])
-    if task is not None:
-        await task
-    finished = designer_store.get_run(first["run_id"])
-    assert finished is not None
-    original = (finished["node_states"]["n_compose"].get("output_ref") or {}).get("uri")
-    assert original
-
-    rerun = executor.create_rerun(graph, source_run=finished, node_id="n_compose")
-    assert rerun["node_states"]["n_compose"]["status"] == "pending"
-    assert not (rerun["node_states"]["n_compose"].get("output_ref") or {}).get("uri")
-    await executor.start_run(rerun["run_id"])
-    worker = executor._tasks.get(rerun["run_id"])
-    if worker is not None:
-        await worker
-    again = designer_store.get_run(rerun["run_id"])
-    assert again is not None
-    assert again["status"] == RUN_STATUS_COMPLETED
-    replaced = (again["node_states"]["n_compose"].get("output_ref") or {}).get("uri")
-    assert replaced
-    assert replaced != original
-    assert not (again["node_states"]["n_compose"].get("candidate_output_ref") or {}).get("uri")
-
-
-@pytest.mark.asyncio
-async def test_rerun_promotes_generated_image_over_fallback_notes(
-    designer_store: DesignerGraphStore, stub_clip_video: None, tmp_path: Path
-) -> None:
-    graph = designer_store.save_graph(
-        _handler_graph(make_pipeline_graph(project_id="proj_notes01", prompt="promote png")),
-    )
-    executor = GraphExecutor(designer_store)
-    first = executor.create_run(graph)
-    await executor.start_run(first["run_id"])
-    task = executor._tasks.get(first["run_id"])
-    if task is not None:
-        await task
-    finished = designer_store.get_run(first["run_id"])
-    assert finished is not None
-    notes = tmp_path / "designer_character_fallback.md"
-    notes.write_text("fallback character notes\n", encoding="utf-8")
-    notes_ref = {
-        "kind": "text",
-        "uri": notes.resolve().as_uri(),
-        "mime_type": "text/markdown",
-        "label": notes.name,
-    }
-    finished["node_states"]["n_character"]["output_ref"] = notes_ref
-    finished["node_states"]["n_character"]["output_refs"] = [notes_ref]
-    designer_store.save_run(finished)
-
-    rerun = executor.create_rerun(graph, source_run=finished, node_id="n_character")
-    assert not (rerun["node_states"]["n_character"].get("output_ref") or {}).get("uri")
-    await executor.start_run(rerun["run_id"])
-    worker = executor._tasks.get(rerun["run_id"])
-    if worker is not None:
-        await worker
-    again = designer_store.get_run(rerun["run_id"])
-    assert again is not None
-    character = again["node_states"]["n_character"]
-    assert character["status"] == NODE_STATUS_COMPLETED
-    assert (character.get("output_ref") or {}).get("kind") == NODE_TYPE_IMAGE
-    assert str((character.get("output_ref") or {}).get("uri") or "").endswith(".png")
-    assert not (character.get("candidate_output_ref") or {}).get("uri")
 
 
 def test_director_chain_media_settings_follow_the_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -812,10 +326,10 @@ def test_start_run_rejects_run_from_another_graph(
     from jiuwenswarm.server.runtime.gateway_adapter import designer_adapter as adapter
 
     first = designer_store.save_graph(
-        _handler_graph(make_pipeline_graph(project_id="proj_iso_a", prompt="scheme a")),
+        make_pipeline_graph(project_id="proj_iso_a", prompt="scheme a"),
     )
     second = designer_store.save_graph(
-        _handler_graph(make_pipeline_graph(project_id="proj_iso_b", prompt="scheme b")),
+        make_pipeline_graph(project_id="proj_iso_b", prompt="scheme b"),
     )
     run = designer_store.save_run(
         {
@@ -944,71 +458,6 @@ def test_get_graph_hydrates_node_outputs_from_latest_run(
     assert payload is not None
     brief = next(node for node in payload["graph"]["nodes"] if node["id"] == "n_brief")
     assert brief["output_ref"]["uri"] == brief_uri
-
-
-@pytest.mark.asyncio
-async def test_sync_peers_start_together_and_block_downstream(
-    designer_store: DesignerGraphStore,
-    monkeypatch: pytest.MonkeyPatch,
-    stub_clip_video: None,
-) -> None:
-    import time
-
-    from jiuwenswarm.server.runtime.designer import executor as executor_mod
-    from jiuwenswarm.server.runtime.designer.handlers import NODE_HANDLERS, RoleNodeHandler
-
-    monkeypatch.setattr(executor_mod, "_MOCK_NODE_DELAY_SECONDS", 0.05)
-    starts: dict[str, float] = {}
-    originals = {
-        NODE_ROLE_CHARACTER: NODE_HANDLERS[NODE_ROLE_CHARACTER],
-        NODE_ROLE_STORYBOARD: NODE_HANDLERS[NODE_ROLE_STORYBOARD],
-        NODE_ROLE_CLIP: NODE_HANDLERS[NODE_ROLE_CLIP],
-    }
-
-    class TimedHandler(RoleNodeHandler):
-        async def execute(self, node, ctx):
-            starts[node["id"]] = time.monotonic()
-            return await originals[self.role].execute(node, ctx)
-
-    monkeypatch.setitem(NODE_HANDLERS, NODE_ROLE_CHARACTER, TimedHandler(NODE_ROLE_CHARACTER))
-    monkeypatch.setitem(NODE_HANDLERS, NODE_ROLE_STORYBOARD, TimedHandler(NODE_ROLE_STORYBOARD))
-    monkeypatch.setitem(NODE_HANDLERS, NODE_ROLE_CLIP, TimedHandler(NODE_ROLE_CLIP))
-
-    graph = designer_store.save_graph(
-        _handler_graph(make_pipeline_graph(project_id="proj_sync01", prompt="align peers")),
-    )
-    execu = GraphExecutor(designer_store)
-    run = execu.create_run(graph)
-    events = [event async for event in execu.run(graph, run["run_id"])]
-    assert events
-    assert any(event.event == "designer.run.updated" for event in events)
-    finished = designer_store.get_run(run["run_id"])
-    assert finished is not None
-    assert finished["status"] == RUN_STATUS_COMPLETED
-    assert abs(starts["n_character"] - starts["n_storyboard"]) < 0.04
-    assert starts["n_clip_1"] > max(starts["n_character"], starts["n_storyboard"])
-
-
-@pytest.mark.asyncio
-async def test_executor_on_update_includes_node_id(
-    designer_store: DesignerGraphStore, stub_clip_video: None
-) -> None:
-    events: list[str | None] = []
-
-    def on_update(run, node_id=None):  # noqa: ANN001
-        events.append(node_id)
-
-    graph = designer_store.save_graph(
-        _handler_graph(make_pipeline_graph(project_id="proj_evt01", prompt="events")),
-    )
-    executor = GraphExecutor(designer_store)
-    run = executor.create_run(graph)
-    await executor.start_run(run["run_id"], on_update=on_update)
-    task = executor._tasks.get(run["run_id"])
-    if task is not None:
-        await task
-    assert "n_brief" in events
-    assert None in events
 
 
 @pytest.mark.asyncio

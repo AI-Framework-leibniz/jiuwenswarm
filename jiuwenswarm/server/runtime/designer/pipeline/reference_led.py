@@ -11,13 +11,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from jiuwenswarm.common.schema.designer_graph import (
-    DesignerExecutionGraph,
-    DesignerGraphValidationError,
-    node_config,
-    node_pipeline,
-    node_clip_index,
-)
 
 ROLE_CHARACTER = "character_identity"
 ROLE_SCENE = "scene_source"
@@ -350,54 +343,6 @@ def compose_reference_clip_prompt(cfg: dict[str, Any] | None) -> str:
                 "Image 1 is the leading reference. Later references follow in slot order."
             )
     return " ".join(line for line in lines if line.strip())
-
-
-def reference_led_graph(graph: DesignerExecutionGraph) -> bool:
-    return graph.get("metadata", {}).get("scene_consistency_mode") == MODE_REFERENCE
-
-
-def reject_removed_reference_images(graph: DesignerExecutionGraph, removed: set[str]) -> None:
-    """A clip's prompt contract names its stills by order; losing one breaks the call."""
-    used: set[str] = set()
-    for node in graph["nodes"]:
-        cfg = node_config(node)
-        used.update(str(entry.get("node_id") or "") for entry in cfg.get("reference_image_plan") or [])
-        used.add(str(cfg.get("reference_first_frame_node") or ""))
-    if missing := sorted(used & removed):
-        raise DesignerGraphValidationError(
-            f"Reference-led clips still use these stills: {', '.join(missing)}"
-        )
-
-
-def refresh_reference_continuity(
-    before: DesignerExecutionGraph, graph: DesignerExecutionGraph
-) -> None:
-    """Re-derive each clip's handoff from the edited shot order, as the builder does."""
-    old_configs = {node["id"]: node_config(node) for node in before["nodes"]}
-    clips = sorted(
-        (node for node in graph["nodes"] if node_pipeline(node) == "clip"),
-        key=node_clip_index,
-    )
-    previous_action = ""
-    previous_end = ""
-    done: list[str] = []
-    for node in clips:
-        cfg = node_config(node)
-        old = old_configs.get(node["id"], {})
-        action = str(cfg.get("clip_action") or "")
-        old_action = str(old.get("clip_action") or "")
-        if action != old_action and cfg.get("end_state") == f"completed: {old_action}":
-            cfg["end_state"] = f"completed: {action}"
-        cfg["previous_action"] = previous_action
-        cfg["previous_end_state"] = previous_end
-        cfg["already_done"] = list(done)
-        generate = cfg.get("generate")
-        # Keep an authored prompt; replace only the one the builder composed.
-        if isinstance(generate, dict) and generate.get("prompt") == compose_reference_clip_prompt(old):
-            generate["prompt"] = compose_reference_clip_prompt(cfg)
-        previous_action = action
-        previous_end = str(cfg.get("end_state") or "")
-        done.append(action)
 
 
 def build_reference_led_video_graph(

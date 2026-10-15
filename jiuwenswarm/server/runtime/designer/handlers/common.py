@@ -427,22 +427,6 @@ def _locked_replacement_refs(graph: dict | None, node_id: str) -> list[dict] | N
     return []
 
 
-def uploaded_output_ref(graph: dict | None, node_id: str) -> dict | None:
-    """Run output ref for the media file the user uploaded over this node, if it exists."""
-    refs = _locked_replacement_refs(graph, node_id)
-    if not refs:
-        return None
-    ref = dict(refs[0])
-    path = path_from_uri(str(ref.get("uri") or ""))
-    if path is None:
-        return None
-    kind = _file_kind(path, ref)
-    if kind not in {"image", "video", "audio"}:
-        return None
-    ref["kind"] = kind
-    return ref
-
-
 def _graph_saved_refs(node: dict | None) -> list[dict]:
     if not isinstance(node, dict):
         return []

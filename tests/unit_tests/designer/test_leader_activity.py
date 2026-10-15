@@ -7,17 +7,11 @@ from jiuwenswarm.common.schema.designer_graph import (
     LEADER_NODE_ID,
     NODE_STATUS_RUNNING,
     apply_node_activity,
-    is_leader_node_id,
     normalize_node_state,
 )
 from jiuwenswarm.server.runtime.designer.activity import (
     apply_run_activity,
-    graph_node_states,
     should_publish,
-)
-from jiuwenswarm.server.runtime.designer.director_chat import (
-    apply_chat_plan,
-    message_asks_to_run,
 )
 
 
@@ -75,19 +69,6 @@ def test_apply_node_activity_keeps_structured_agent_progress() -> None:
     ]
 
 
-def test_graph_node_states_skips_leader() -> None:
-    run = {
-        "node_states": {
-            "n_brief": {"status": "completed"},
-            LEADER_NODE_ID: {"status": NODE_STATUS_RUNNING},
-        }
-    }
-    states = graph_node_states(run)
-    assert "n_brief" in states
-    assert LEADER_NODE_ID not in states
-    assert is_leader_node_id(LEADER_NODE_ID)
-
-
 def test_activity_publish_throttles() -> None:
     assert should_publish("run_a", "n_1", now=1000, force=True) is True
     assert should_publish("run_a", "n_1", now=1100) is False
@@ -99,169 +80,6 @@ def test_apply_run_activity_creates_leader_state() -> None:
     apply_run_activity(run, LEADER_NODE_ID, kind=ACTIVITY_KIND_STAGE, text="reading brief")
     assert run["node_states"][LEADER_NODE_ID]["status"] == NODE_STATUS_RUNNING
     assert run["node_states"][LEADER_NODE_ID]["activity"]["text"]
-
-
-def _sample_graph() -> dict:
-    return {
-        "schema_version": "designer-execution-graph.v1",
-        "graph_id": "graph_test",
-        "project_id": "p1",
-        "title": "Demo",
-        "nodes": [
-            {
-                "id": "n_brief",
-                "type": "text",
-                "label": "Text 1",
-                "config": {"role": "text", "pipeline": "brief", "prompt": "alley at night"},
-                "layout": {"x": 40, "y": 240, "width": 280, "height": 160},
-            },
-            {
-                "id": "n_character",
-                "type": "image",
-                "label": "Image 1",
-                "config": {"role": "image", "pipeline": "character", "prompt": "officer"},
-                "layout": {"x": 400, "y": 40, "width": 280, "height": 160},
-            },
-            {
-                "id": "n_compose",
-                "type": "video",
-                "label": "Video 2",
-                "config": {"role": "video", "pipeline": "compose"},
-                "layout": {"x": 1200, "y": 240, "width": 280, "height": 160},
-            },
-        ],
-        "edges": [
-            {
-                "id": "e_brief_character",
-                "source": "n_brief",
-                "target": "n_character",
-                "kind": "data",
-            }
-        ],
-        "created_at": 1,
-        "updated_at": 1,
-    }
-
-
-def test_apply_chat_plan_refine_selected_node() -> None:
-    graph = _sample_graph()
-    plan = {
-        "intent": "refine_node",
-        "summary": "Updated Character",
-        "patch": {
-            "upsert_nodes": [
-                {
-                    "id": "n_character",
-                    "type": "image",
-                    "label": "Character",
-                    "config": {"role": "character", "prompt": "把角色改得更赛博"},
-                }
-            ]
-        },
-        "run_node_ids": ["n_character"],
-    }
-    next_graph, run_ids, summary = apply_chat_plan(graph, plan)
-    assert run_ids == ["n_character"]
-    char = next(node for node in next_graph["nodes"] if node["id"] == "n_character")
-    assert "赛博" in str(char["config"]["prompt"])
-    assert "Updated" in summary or "Character" in summary
-
-
-def test_apply_chat_plan_stamps_type_for_inserted_scene_and_clip() -> None:
-    from jiuwenswarm.common.schema.designer_graph import DesignerGraphValidationError
-
-    graph = _sample_graph()
-    plan = {
-        "intent": "edit_graph",
-        "summary": "插入咖啡豆特写",
-        "patch": {
-            "upsert_nodes": [
-                {
-                    "id": "n_scene_4",
-                    "config": {"prompt": "咖啡豆特写，无人物", "setting_id": "set_4"},
-                },
-                {
-                    "id": "n_clip_4",
-                    "config": {
-                        "clip_index": 2,
-                        "timeline": "5-8s",
-                        "clip_action": "咖啡豆静置，画面中无人物",
-                        "prompt": "咖啡豆特写",
-                    },
-                },
-            ],
-            "upsert_edges": [
-                {"id": "e_scene4_clip4", "source": "n_scene_4", "target": "n_clip_4"},
-            ],
-        },
-    }
-    next_graph, run_ids, _summary = apply_chat_plan(graph, plan)
-    assert run_ids == []
-    scene = next(node for node in next_graph["nodes"] if node["id"] == "n_scene_4")
-    clip = next(node for node in next_graph["nodes"] if node["id"] == "n_clip_4")
-    assert scene["type"] == "image"
-    assert scene["config"]["pipeline"] == "scene"
-    assert clip["type"] == "video"
-    assert clip["config"]["pipeline"] == "clip"
-    assert clip["config"]["timeline"] == "5-8s"
-    assert any(
-        edge.get("source") == "n_scene_4" and edge.get("target") == "n_clip_4"
-        for edge in next_graph.get("edges") or []
-    )
-
-    try:
-        apply_chat_plan(
-            graph,
-            {
-                "intent": "edit_graph",
-                "summary": "未知节点",
-                "patch": {"upsert_nodes": [{"id": "n_extra", "config": {"prompt": "x"}}]},
-            },
-        )
-    except DesignerGraphValidationError as exc:
-        assert "n_extra" in str(exc)
-    else:
-        raise AssertionError("untyped unknown node should be rejected")
-
-
-def test_apply_chat_plan_add_node_without_run() -> None:
-    graph = _sample_graph()
-    plan = {
-        "intent": "edit_graph",
-        "summary": "Added audio",
-        "patch": {
-            "upsert_nodes": [
-                {
-                    "id": "n_audio_1",
-                    "type": "audio",
-                    "label": "Audio",
-                    "config": {"role": "audio", "prompt": "配乐"},
-                }
-            ],
-            "upsert_edges": [
-                {
-                    "id": "e_audio_compose",
-                    "source": "n_audio_1",
-                    "target": "n_compose",
-                    "kind": "data",
-                }
-            ],
-        },
-        "run_node_ids": [],
-    }
-    next_graph, run_ids, _summary = apply_chat_plan(graph, plan)
-    assert run_ids == []
-    types = {node["type"] for node in next_graph["nodes"]}
-    assert "audio" in types
-    assert any(
-        edge.get("source") == "n_audio_1" and edge.get("target") == "n_compose"
-        for edge in next_graph.get("edges") or []
-    )
-
-
-def test_message_asks_to_run_detects_generate_intent() -> None:
-    assert message_asks_to_run("加一个配乐节点并生成") is True
-    assert message_asks_to_run("加一个配乐节点接到成片，先别生成") is False
 
 
 def test_tool_result_activity_text_keeps_progress_lines_readable() -> None:

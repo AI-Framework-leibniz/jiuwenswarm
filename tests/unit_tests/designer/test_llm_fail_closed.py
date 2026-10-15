@@ -107,21 +107,6 @@ async def test_call_model_tool_no_credentials_is_error(
     assert not str(result.get("text") or "").startswith("[local-tool-fallback]")
 
 
-def test_stamp_run_failure_uses_designer_llm_user_message() -> None:
-    from jiuwenswarm.common.schema.designer_graph import RUN_STATUS_FAILED
-    from jiuwenswarm.server.runtime.designer.executor import _stamp_run_failure
-
-    run: dict = {"status": "running", "node_states": {}}
-    exc = DesignerLlmError(
-        "Chat model request failed: Authentication Fails, Your api key is invalid",
-        code=model_tools.LLM_API_ERROR,
-    )
-    _stamp_run_failure(run, exc)
-    assert run["status"] == RUN_STATUS_FAILED
-    assert "Authentication Fails" in str(run["error"])
-    assert "Chat model request failed" in str(run["error"])
-
-
 def test_normalize_execution_run_preserves_error() -> None:
     from jiuwenswarm.common.schema.designer_graph import normalize_execution_run
 

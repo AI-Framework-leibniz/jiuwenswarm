@@ -39,10 +39,6 @@ def designer_package_dir() -> Path:
     return _repo_roots()[0] / _PACKAGE_DIRNAME
 
 
-def catalog_json_path() -> Path:
-    return designer_package_dir() / _CATALOG_JSON
-
-
 def catalog_txt_path() -> Path:
     return designer_package_dir() / _CATALOG_TXT
 
