@@ -1572,30 +1572,3 @@ async def analyze_creative_brief(
         ) from exc
 
 
-def analyze_creative_brief_sync(
-    prompt: str,
-    *,
-    timeout_sec: float = _DEFAULT_LLM_TIMEOUT_SEC,
-    reference_images: list[str] | None = None,
-) -> dict[str, Any]:
-    """Sync wrapper — always uses a dedicated event loop (never skips LLM on nest)."""
-
-    def _run() -> dict[str, Any]:
-        return asyncio.run(
-            analyze_creative_brief(
-                prompt,
-                timeout_sec=timeout_sec,
-                reference_images=reference_images,
-            )
-        )
-
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return _run()
-    # Already on a loop: run in a worker thread with its own loop.
-    import concurrent.futures
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(_run)
-        return fut.result(timeout=max(30.0, float(timeout_sec) + 30.0))

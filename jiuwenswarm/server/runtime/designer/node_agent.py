@@ -15,6 +15,8 @@ from typing import Any, Awaitable, Callable, Protocol
 
 from jiuwenswarm.common.schema.designer_graph import (
     DESIGNER_AGENT_GROUP_NAME,
+    NODE_ROLE_CLIP,
+    NODE_ROLE_COMPOSE,
     AssetRef,
     DesignerExecutionGraph,
     DesignerGraphNode,
@@ -1901,6 +1903,18 @@ def _agent_failure_message(result: Any) -> str | None:
     return message or "node agent returned an error"
 
 
+def _node_execute_timeout_sec(node: DesignerGraphNode) -> float:
+    """Hard cap on one node's agent turn plus its media generation."""
+    pipeline = node_pipeline(node)
+    if pipeline == NODE_ROLE_CLIP:
+        from jiuwenswarm.server.runtime.designer.media_generation import video_tool_timeout_seconds
+
+        return max(1800.0, video_tool_timeout_seconds())
+    if pipeline == NODE_ROLE_COMPOSE:
+        return 1800.0
+    return 1200.0
+
+
 class NodeAgentHost:
     """Run one Designer node as a DeepAgent.
 
@@ -1923,20 +1937,12 @@ class NodeAgentHost:
     def agent_key(self, run_id: str, node_id: str) -> str:
         return f"designer:{run_id}:{node_id}"
 
-    def drop_run(self, run_id: str) -> None:
-        prefix = f"designer:{run_id}:"
-        for key in [item for item in self._agents if item.startswith(prefix)]:
-            self._agents.pop(key, None)
-            self._agent_system_prompts.pop(key, None)
-
     async def execute(
         self,
         node: DesignerGraphNode,
         ctx: NodeExecutionContext,
     ) -> NodeResult:
         toolkit = DesignerGraphToolkit(self._spawner, ctx)
-        from jiuwenswarm.server.runtime.designer.executor import _node_execute_timeout_sec
-
         timeout = float(_node_execute_timeout_sec(node))
 
         async def _body() -> NodeResult:
@@ -2098,10 +2104,6 @@ class NodeAgentHost:
                 or node.get("label")
                 or ctx.node_id
             )
-            from jiuwenswarm.server.runtime.designer.executor import (
-                _node_execute_timeout_sec,
-            )
-
             agent = create_deep_agent(
                 model=model,
                 card=AgentCard(name=card_name, id=key, description=card_name),

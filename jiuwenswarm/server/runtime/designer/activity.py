@@ -56,17 +56,6 @@ _lock = threading.Lock()
 _last_publish_at: dict[tuple[str, str], int] = {}
 
 
-def graph_node_states(run: dict[str, Any] | None) -> dict[str, Any]:
-    states = (run or {}).get("node_states") or {}
-    if not isinstance(states, dict):
-        return {}
-    return {
-        str(node_id): state
-        for node_id, state in states.items()
-        if not is_leader_node_id(node_id)
-    }
-
-
 def should_publish(run_id: str, node_id: str, *, now: int | None = None, force: bool = False) -> bool:
     stamp = now if isinstance(now, int) else utc_now_ms()
     key = (str(run_id or ""), str(node_id or ""))

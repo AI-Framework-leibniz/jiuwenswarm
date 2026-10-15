@@ -196,25 +196,6 @@ def render_storyboard_table(
     return "\n".join(lines) + "\n"
 
 
-def shot_generate_prompt(shot: StoryboardShot) -> str:
-    """Turn one storyboard row into the clip generate prompt."""
-    parts: list[str] = []
-    timeline = str(shot.get("timeline") or "").strip()
-    if timeline:
-        parts.append(f"Timeline {timeline}")
-    for label, key in (
-        ("Camera", "camera"),
-        ("Camera move", "move"),
-        ("On screen", "on_screen"),
-        ("Character action", "character_action"),
-        ("Speech", "speech"),
-    ):
-        value = str(shot.get(key) or "").strip()
-        if value:
-            parts.append(f"{label} {value}")
-    return "; ".join(parts)
-
-
 def sync_shot_nodes_from_storyboard_markdown(
     graph: dict[str, Any],
     markdown: str,

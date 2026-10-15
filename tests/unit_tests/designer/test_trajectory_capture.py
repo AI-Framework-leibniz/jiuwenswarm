@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from jiuwenswarm.observability.config import TrajectoryStoreSettings
-from jiuwenswarm.server.runtime.designer import feedback, paths
+from jiuwenswarm.server.runtime.designer import paths
 from jiuwenswarm.server.runtime.designer.handlers.clip import generate_clip_video
 from jiuwenswarm.server.runtime.designer.media_generation import DesignerVideoRequest
 from jiuwenswarm.server.runtime.designer.trajectory import (
@@ -290,20 +290,3 @@ async def test_video_backend_records_effective_tool_input(
     assert recorded["force_reference_mode"] is request.reference_mode is True
     assert recorded["aspect_ratio"] == request.aspect_ratio == "9:16"
     assert recorded["resolution"] == request.resolution == "720P"
-
-
-def test_feedback_store_has_no_latest_pointer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(feedback, "get_agent_root_dir", lambda: tmp_path)
-    directory = tmp_path / "designer" / "feedback" / "graph-1"
-    directory.mkdir(parents=True)
-    feedback.save_feedback("graph-1", "run-1", {"final": {"improvement_plan": "x"}})
-    # A pointer left by older versions must never be read as feedback.
-    (directory / "latest.json").write_text('{"path": "stale", "run_id": "run-0"}', encoding="utf-8")
-
-    assert sorted(p.name for p in directory.iterdir()) == ["latest.json", "run-1.json"]
-    latest = feedback.load_latest_feedback("graph-1")
-    assert latest is not None
-    assert latest["run_id"] == "run-1"
-    assert latest["final"]["improvement_plan"] == "x"

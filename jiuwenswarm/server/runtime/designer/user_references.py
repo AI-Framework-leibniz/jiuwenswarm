@@ -799,52 +799,6 @@ def reapply_user_reference_routes(
     return graph
 
 
-async def ensure_user_reference_routes(graph: dict[str, Any] | None) -> list[str]:
-    """Recreate a missing reference node and wire it from the model's read.
-
-    Play can meet a graph whose upload was pruned, or whose first analysis
-    never said what the picture was. Classify only when that judgment is missing.
-    """
-    if not isinstance(graph, dict):
-        return []
-    refs = graph_user_references(graph)
-    if not refs:
-        return []
-    meta = dict(graph.get("metadata") or {})
-    analysis = meta.get("script_analysis") if isinstance(meta.get("script_analysis"), dict) else {}
-    analysis = dict(analysis)
-    covered: set[int] = set()
-    for read in analysis.get("reference_reads") or []:
-        if not isinstance(read, dict):
-            continue
-        try:
-            covered.add(int(read.get("slot") or 0))
-        except (TypeError, ValueError):
-            continue
-    slot = 0
-    missing = False
-    for item in refs:
-        if str(item.get("kind") or "").strip().lower() != KIND_IMAGE:
-            continue
-        slot += 1
-        if str(item.get("subject") or "").strip().lower() in {"character", "scene", "object"}:
-            continue
-        if slot in covered:
-            continue
-        missing = True
-        break
-    if missing:
-        prompt = str(
-            meta.get("user_prompt") or meta.get("prompt") or meta.get("approved_brief") or ""
-        )
-        reads = await classify_reference_images(prompt, refs, analysis)
-        if reads:
-            analysis["reference_reads"] = reads
-            meta["script_analysis"] = analysis
-            graph["metadata"] = meta
-    return attach_user_reference_nodes(graph)
-
-
 def normalize_user_references(
     raw: Any,
     *,

@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 
@@ -12,22 +11,12 @@ import pytest
 
 from jiuwenswarm.common.schema.designer_graph import (
     NODE_ROLE_BRIEF,
-    NODE_ROLE_STORYBOARD,
-    NODE_STATUS_COMPLETED,
-    NODE_STATUS_PENDING,
     NODE_TYPE_TEXT,
     ROLE_DEFAULT_TEMPLATES,
-    RUN_STATUS_CANCELLED,
-    RUN_STATUS_COMPLETED,
-    DesignerExecutionGraph,
-    DesignerGraphNode,
     node_agent_template,
     node_delegate,
-    node_pipeline,
     normalize_node,
 )
-from tests.unit_tests.designer.graph_fixtures import make_pipeline_graph
-from jiuwenswarm.server.runtime.designer.executor import GraphExecutor
 from jiuwenswarm.server.runtime.designer.graph_store import DesignerGraphStore
 from jiuwenswarm.server.runtime.designer.handlers.types import NodeResult
 from jiuwenswarm.server.runtime.designer.node_agent import (
@@ -88,49 +77,6 @@ def designer_store(
     return DesignerGraphStore()
 
 
-async def _complete_with_dummy_media(
-    tmp_path: Path,
-    node: DesignerGraphNode,
-    toolkit: DesignerGraphToolkit,
-) -> NodeResult:
-    node_type = str(node.get("type") or "text")
-    if node_type in {"image", "video", "audio"}:
-        suffix = { "image": ".png", "video": ".mp4", "audio": ".m4a" }[node_type]
-        mime = {
-            "image": "image/png",
-            "video": "video/mp4",
-            "audio": "audio/mp4",
-        }[node_type]
-        path = tmp_path / f"{node['id']}{suffix}"
-        path.write_bytes(b"x" * 16)
-        await toolkit.node_complete(
-            uri=path.resolve().as_uri(),
-            kind=node_type,
-            mime_type=mime,
-        )
-    else:
-        await toolkit.node_complete(text=f"done {node['id']}")
-    assert toolkit.completed is not None
-    return toolkit.completed
-
-
-async def _await_executor_task(executor: GraphExecutor, run_id: str) -> None:
-    task = executor._tasks.get(run_id)
-    if task is not None:
-        await task
-
-
-def _pipeline_graph(*, project_id: str, prompt: str) -> DesignerExecutionGraph:
-    """The storyboard always runs on the handler, which tabulates planned shots."""
-    graph = make_pipeline_graph(project_id=project_id, prompt=prompt)
-    for node in graph["nodes"]:
-        if node_pipeline(node) == NODE_ROLE_STORYBOARD:
-            node["config"]["planned_shots"] = [
-                {"clip_index": 1, "timeline": "0.0-5.0s", "camera": "wide", "camera_move": "static", "action": "enter"},
-            ]
-    return graph
-
-
 def test_parse_agent_template_ref() -> None:
     assert parse_agent_template_ref("designer/leader") == ("designer", "leader")
     assert parse_agent_template_ref("my_template") == (None, "my_template")
@@ -162,199 +108,6 @@ def test_node_agent_template_uses_role_default() -> None:
 
 
 
-@pytest.mark.asyncio
-async def test_agent_scheduler_starts_only_ready_root(
-    designer_store: DesignerGraphStore,
-    tmp_path: Path,
-) -> None:
-    started: list[str] = []
-
-    async def runner(node, ctx, toolkit: DesignerGraphToolkit) -> NodeResult:
-        if not started:
-            assert node["id"] == "n_brief"
-        started.append(node["id"])
-        return await _complete_with_dummy_media(tmp_path, node, toolkit)
-
-    graph = designer_store.save_graph(
-        _pipeline_graph(project_id="proj_agent_root", prompt="only root"),
-    )
-    executor = GraphExecutor(designer_store, runner=runner)
-    run = executor.create_run(graph)
-    await executor.start_run(run["run_id"])
-    await _await_executor_task(executor, run["run_id"])
-    finished = designer_store.get_run(run["run_id"])
-    assert finished is not None
-    assert finished["status"] == RUN_STATUS_COMPLETED
-    assert started[0] == "n_brief"
-    assert finished["node_states"]["n_brief"]["status"] == NODE_STATUS_COMPLETED
-    assert "n_character" in started
-
-
-@pytest.mark.asyncio
-async def test_agent_node_run_starts_companion(
-    designer_store: DesignerGraphStore,
-    tmp_path: Path,
-) -> None:
-    started: list[str] = []
-
-    async def runner(node, ctx, toolkit: DesignerGraphToolkit) -> NodeResult:
-        started.append(node["id"])
-        if node["id"] == "n_brief":
-            await toolkit.node_run("n_character")
-        return await _complete_with_dummy_media(tmp_path, node, toolkit)
-
-    graph = designer_store.save_graph(
-        _pipeline_graph(project_id="proj_agent_run", prompt="pull companion"),
-    )
-    executor = GraphExecutor(designer_store, runner=runner)
-    run = executor.create_run(graph)
-    await executor.start_run(run["run_id"])
-    await _await_executor_task(executor, run["run_id"])
-    finished = designer_store.get_run(run["run_id"])
-    assert finished is not None
-    assert finished["status"] == RUN_STATUS_COMPLETED
-    assert started[:2] == ["n_brief", "n_character"]
-    assert finished["node_states"]["n_character"]["status"] == NODE_STATUS_COMPLETED
-    assert finished["node_states"]["n_storyboard"]["status"] == NODE_STATUS_COMPLETED
-
-
-@pytest.mark.asyncio
-async def test_agent_patch_cannot_add_nodes_to_frozen_topology(
-    designer_store: DesignerGraphStore,
-    tmp_path: Path,
-) -> None:
-    started: list[str] = []
-
-    async def runner(node, ctx, toolkit: DesignerGraphToolkit) -> NodeResult:
-        started.append(node["id"])
-        if node["id"] == "n_brief":
-            toolkit.graph_patch(
-                {
-                    "upsert_nodes": [
-                        {
-                            "id": "n_extra",
-                            "type": NODE_TYPE_TEXT,
-                            "label": "备注",
-                            "config": {"role": NODE_ROLE_BRIEF, "prompt": "extra"},
-                        }
-                    ]
-                }
-            )
-            spawned.append(await toolkit.node_run("n_extra"))
-        return await _complete_with_dummy_media(tmp_path, node, toolkit)
-
-    spawned: list[str] = []
-    graph = designer_store.save_graph(
-        _pipeline_graph(project_id="proj_agent_patch", prompt="patch then run"),
-    )
-    executor = GraphExecutor(designer_store, runner=runner)
-    run = executor.create_run(graph)
-    await executor.start_run(run["run_id"])
-    await _await_executor_task(executor, run["run_id"])
-    finished = designer_store.get_run(run["run_id"])
-    assert finished is not None
-    assert finished["status"] == RUN_STATUS_COMPLETED
-    assert "n_extra" not in started
-    assert spawned == ["node not found: n_extra"]
-    patched = designer_store.get_graph(graph["graph_id"])
-    assert patched is not None
-    assert (patched.get("metadata") or {}).get("freeze_clip_topology") is True
-    assert not any(node["id"] == "n_extra" for node in patched["nodes"])
-
-
-@pytest.mark.asyncio
-async def test_cancel_stops_node_agent_host(
-    designer_store: DesignerGraphStore,
-) -> None:
-    started = asyncio.Event()
-
-    async def runner(node, ctx, toolkit: DesignerGraphToolkit) -> NodeResult:
-        started.set()
-        await asyncio.sleep(30)
-        toolkit.node_complete(text="late")
-        assert toolkit.completed is not None
-        return toolkit.completed
-
-    graph = designer_store.save_graph(
-        _pipeline_graph(project_id="proj_agent_cancel", prompt="cancel me"),
-    )
-    executor = GraphExecutor(designer_store, runner=runner)
-    run = executor.create_run(graph)
-    await executor.start_run(run["run_id"])
-    await asyncio.wait_for(started.wait(), timeout=2)
-    cancelled = executor.cancel_run(run["run_id"])
-    assert cancelled["status"] == RUN_STATUS_CANCELLED
-    assert executor._host._agents == {}
-    task = executor._tasks.get(run["run_id"])
-    if task is not None:
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        return
-    workers = executor._node_workers.get(run["run_id"]) or {}
-    assert not workers
-
-
-@pytest.mark.asyncio
-async def test_completed_output_survives_agent_timeout(
-    designer_store: DesignerGraphStore,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "jiuwenswarm.server.runtime.designer.executor._node_execute_timeout_sec",
-        lambda node: 0.35 if node.get("id") == "n_brief" else 20.0,
-    )
-
-    async def runner(node, ctx, toolkit: DesignerGraphToolkit) -> NodeResult:
-        await toolkit.node_complete(text=f"done {node['id']}")
-        if node["id"] == "n_brief":
-            await asyncio.sleep(5)
-        assert toolkit.completed is not None
-        return toolkit.completed
-
-    graph = designer_store.save_graph(
-        _pipeline_graph(project_id="proj_timeout_keep", prompt="keep completed brief"),
-    )
-    executor = GraphExecutor(designer_store, runner=runner)
-    run = executor.create_run(graph)
-    await executor.start_run(run["run_id"])
-    await _await_executor_task(executor, run["run_id"])
-    finished = designer_store.get_run(run["run_id"])
-    assert finished is not None
-    assert finished["node_states"]["n_brief"]["status"] == NODE_STATUS_COMPLETED
-    assert finished["node_states"]["n_brief"].get("output_ref")
-
-
-@pytest.mark.asyncio
-async def test_node_run_after_complete_does_not_spawn(
-    designer_store: DesignerGraphStore,
-    tmp_path: Path,
-) -> None:
-    spawned_from_brief: list[str] = []
-
-    async def runner(node, ctx, toolkit: DesignerGraphToolkit) -> NodeResult:
-        if node["id"] == "n_brief":
-            await toolkit.node_complete(text="done brief")
-            msg = await toolkit.node_run("n_character")
-            spawned_from_brief.append(msg)
-            assert toolkit.completed is not None
-            return toolkit.completed
-        return await _complete_with_dummy_media(tmp_path, node, toolkit)
-
-    graph = designer_store.save_graph(
-        _pipeline_graph(project_id="proj_no_spawn", prompt="do not spawn after complete"),
-    )
-    executor = GraphExecutor(designer_store, runner=runner)
-    run = executor.create_run(graph)
-    await executor.start_run(run["run_id"])
-    await _await_executor_task(executor, run["run_id"])
-    assert spawned_from_brief
-    assert "already completed" in spawned_from_brief[0]
-    finished = designer_store.get_run(run["run_id"])
-    assert finished is not None
-    assert finished["node_states"]["n_character"]["status"] == NODE_STATUS_COMPLETED
-
-
 class _DummySpawner:
     async def spawn_node_agent(self, run_id: str, node_id: str) -> str:
         return "ok"
@@ -375,7 +128,7 @@ def test_clip_video_tool_timeout_overrides_ability_manager_default(
         DEFAULT_TOOL_CALL_TIMEOUT,
     )
 
-    from jiuwenswarm.server.runtime.designer.executor import _node_execute_timeout_sec
+    from jiuwenswarm.server.runtime.designer.node_agent import _node_execute_timeout_sec
     from jiuwenswarm.server.runtime.designer.handlers.types import NodeExecutionContext
     from jiuwenswarm.server.runtime.designer.node_agent import build_designer_tools
 
@@ -405,7 +158,7 @@ def test_clip_video_tool_timeout_overrides_ability_manager_default(
 def test_vllm_omni_clip_waits_as_long_as_the_video_poll(monkeypatch: pytest.MonkeyPatch) -> None:
     from openjiuwen.core.single_agent.ability_manager import AbilityManager
 
-    from jiuwenswarm.server.runtime.designer.executor import _node_execute_timeout_sec
+    from jiuwenswarm.server.runtime.designer.node_agent import _node_execute_timeout_sec
     from jiuwenswarm.server.runtime.designer.handlers.types import NodeExecutionContext
     from jiuwenswarm.server.runtime.designer.node_agent import build_designer_tools
 

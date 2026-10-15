@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable
+from typing import Any
 
 from jiuwenswarm.common.schema.designer_graph import (
     DesignerExecutionGraph,
@@ -19,10 +19,7 @@ from jiuwenswarm.server.runtime.designer.continuity import (
     infer_continuity_lock as _infer_continuity_lock,
     merge_lock_with_previous,
 )
-from jiuwenswarm.server.runtime.designer.feedback import (
-    save_feedback,
-    suggestion_for_node,
-)
+from jiuwenswarm.server.runtime.designer.feedback import suggestion_for_node
 from jiuwenswarm.server.runtime.designer.model_tools import (
     call_model_tool,
     list_configured_models,
@@ -1058,102 +1055,6 @@ class Director:
         meta["director_user_node_onboard"] = result
         graph["metadata"] = meta
         return result
-
-    async def chat(
-        self,
-        graph: DesignerExecutionGraph,
-        message: str,
-        *,
-        documents: dict[str, Any],
-        selected_node_id: str = "",
-        run_new_nodes: bool = False,
-        progress: Callable[..., None] | None = None,
-        pending_documents: bool = False,
-    ) -> dict[str, Any]:
-        """Handle one canvas follow-up turn and gate the edited graph like a canvas patch.
-
-        Full plan validation stays at Play; it prunes and rewires the graph, which would
-        override the user's scoped chat edit.
-        """
-        from jiuwenswarm.server.runtime.designer.director_chat import run_director_chat
-
-        result = await run_director_chat(
-            graph,
-            message,
-            documents=documents,
-            selected_node_id=selected_node_id,
-            run_new_nodes=run_new_nodes,
-            progress=progress,
-            pending_documents=pending_documents,
-        )
-        if result.get("changed"):
-            try:
-                self.onboard_user_added_nodes(result["graph"])
-            except Exception:  # noqa: BLE001
-                logger.debug("Director user-node onboard after chat failed", exc_info=True)
-        return result
-
-    def adjust_clips_after_scenes(
-        self,
-        graph: DesignerExecutionGraph,
-        *,
-        node_states: dict[str, Any] | None,
-        agent_feedback: dict[str, dict[str, Any]] | None = None,
-    ) -> list[str]:
-        """After scene specs complete: refresh pending clip briefs."""
-        notes = _shot_distinctness_patch(graph)
-        feedback = agent_feedback or {}
-        states = node_states or {}
-        meta0 = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
-        scene_specs_mode = (
-            str(meta0.get("scene_consistency_mode") or "") == "scene_specs_plus_clips"
-        )
-        for node in graph.get("nodes") or []:
-            cfg = dict(node.get("config") or {})
-            if _role_key(node) != "clip":
-                continue
-            if str((states.get(str(node.get("id") or "")) or {}).get("status") or "") in {
-                "completed",
-                "failed",
-                "skipped",
-            }:
-                continue
-            idx = int(cfg.get("clip_index") or 0) or 1
-            action = str(cfg.get("clip_action") or "").strip()
-            camera = str(cfg.get("camera") or "medium / eye-level")
-            gen = dict(cfg.get("generate") or {}) if isinstance(cfg.get("generate"), dict) else {}
-            lock = cfg.get("continuity_lock") if isinstance(cfg.get("continuity_lock"), dict) else {}
-            clause = _continuity_prompt_clause(lock if isinstance(lock, dict) else None)
-            shot_line = action or "match storyboard shot for this shot"
-            if scene_specs_mode:
-                scene_nid = str(cfg.get("scene_node_id") or "").strip()
-                scene_msg = str((feedback.get(scene_nid) or {}).get("message") or "") if scene_nid else ""
-                char_spec_refs = [str(x) for x in (cfg.get("character_node_ids") or []) if str(x).strip()]
-                who = cfg.get("cast_actions") if isinstance(cfg.get("cast_actions"), dict) else {}
-                who_line = "; ".join(f"{k}: {v}" for k, v in who.items() if v) if who else ""
-                # Preserve locks already stamped on generate.prompt — append beat only if empty.
-                existing = str(gen.get("prompt") or "").strip()
-                if not existing or "FIRST FRAME" not in existing:
-                    gen["prompt"] = (
-                        f"Film shot {idx} from scene specs {scene_nid or 'n_scene'} + character refs "
-                        f"{', '.join(char_spec_refs) or 'cast'}. Camera {camera}. Action: {shot_line}. "
-                        + (f"WHO DOES WHAT: {who_line}. " if who_line else "")
-                        + (f"Scene note: {scene_msg[:180]}. " if scene_msg else "")
-                        + "Do not repeat other shots."
-                        f"{clause}"
-                    )
-                cfg["generate"] = gen
-                if action:
-                    cfg["clip_action"] = action[:500]
-                cfg["max_video_calls"] = 1
-                cfg.pop("continuity_clip_node_id", None)
-                node["config"] = cfg
-                notes.append(f"{node.get('id')}: post-scene-specs clip brief updated")
-        meta = dict(graph.get("metadata") or {})
-        meta["clips_adjusted_after_scenes"] = True
-        meta["director_scene_adjust"] = {"notes": notes[:40], "rating_modality": "text_only"}
-        graph["metadata"] = meta
-        return notes
 
     async def plan(
         self,
@@ -3931,22 +3832,6 @@ class Director:
         graph["metadata"] = meta
         return ack
 
-    def ack_scene_adjustment(
-        self, graph: DesignerExecutionGraph, director_notes: list[str]
-    ) -> dict[str, Any]:
-        ack = {
-            "ok": True,
-            "director_notes": director_notes[:20],
-            "notes": "Director accepted post-scene-specs clip adjustments (once).",
-            "rating_modality": str(
-                (graph.get("metadata") or {}).get("rating_modality") or "text_only"
-            ),
-        }
-        meta = dict(graph.get("metadata") or {})
-        meta["director_scene_ack"] = ack
-        graph["metadata"] = meta
-        return ack
-
     async def review(
         self,
         graph: DesignerExecutionGraph,
@@ -4035,151 +3920,6 @@ class Director:
             "vision_used": bool(vision_notes),
             "vision_notes": vision_notes,
         }
-
-    async def dual_rate_final(
-        self,
-        graph: DesignerExecutionGraph,
-        *,
-        agent_feedback: dict[str, dict[str, Any]],
-        director_final: dict[str, Any],
-        director_review: dict[str, Any],
-        node_states: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        """Assign two independent rating agents; aggregate for Run-again feedback only."""
-        base_payload = {
-            "user_prompt": graph.get("description"),
-            "node_ids": [str(n.get("id")) for n in (graph.get("nodes") or []) if n.get("id")],
-            "agent_feedback_keys": list((agent_feedback or {}).keys())[:40],
-            "director_authoring_summary": (director_final or {}).get("summary"),
-            "director_review_summary": (director_review or {}).get("summary"),
-            "compose_status": ((node_states or {}).get("n_compose") or {}).get("status"),
-        }
-        system = (
-            "You are an independent Rater Agent for a Designer film pipeline. "
-            "Strict Hollywood bar: score overall 0-10 (floats ok). "
-            "Rate fidelity to user prompt, identity consistency, motion honesty "
-            "(real video not images), graph design, and per-node prompt/tool quality. "
-            "Respond JSON only: "
-            '{"overall":0-10,"node_scores":{"<id>":0-10},'
-            '"feedback_nodes":{"<id>":"..."},'
-            '"director_authoring_feedback":"...","director_review_feedback":"...","graph_design":"..."}'
-        )
-        from jiuwenswarm.server.runtime.designer.model_tools import (
-            DesignerLlmError,
-            LLM_API_ERROR,
-            model_text_or_raise,
-        )
-
-        raters: list[dict[str, Any]] = []
-        for label in ("rater_a", "rater_b"):
-            try:
-                result = await call_model_tool(
-                    prompt=json.dumps({**base_payload, "rater_id": label}, ensure_ascii=False),
-                    system=system,
-                    max_tokens=8192,
-                )
-                rtext = model_text_or_raise(result)
-                parsed = _extract_json_object(rtext) or {}
-                if not parsed:
-                    raise DesignerLlmError(
-                        f"Chat model did not return usable dual-rater output ({label}).",
-                        code=LLM_API_ERROR,
-                    )
-                raters.append(
-                    {
-                        "id": label,
-                        "overall": float(parsed.get("overall") or 0),
-                        "node_scores": parsed.get("node_scores")
-                        if isinstance(parsed.get("node_scores"), dict)
-                        else {},
-                        "feedback_nodes": parsed.get("feedback_nodes")
-                        if isinstance(parsed.get("feedback_nodes"), dict)
-                        else {},
-                        "director_authoring_feedback": str(parsed.get("director_authoring_feedback") or "")[:800],
-                        "director_review_feedback": str(parsed.get("director_review_feedback") or "")[:800],
-                        "graph_design": str(parsed.get("graph_design") or "")[:800],
-                        "model": result.get("model"),
-                    }
-                )
-            except DesignerLlmError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                logger.info("Dual rater %s failed", label, exc_info=True)
-                raise DesignerLlmError(
-                    f"Chat model request failed for dual rater {label}: {exc}",
-                    code=LLM_API_ERROR,
-                ) from exc
-        if not raters:
-            raise DesignerLlmError(
-                "Chat model did not return dual-rater feedback.",
-                code=LLM_API_ERROR,
-            )
-        overalls = [float(r.get("overall") or 0) for r in raters]
-        agg_overall = sum(overalls) / max(1, len(overalls))
-        # Merge node feedback from both raters.
-        feedback_nodes: dict[str, str] = {}
-        for r in raters:
-            for nid, text in (r.get("feedback_nodes") or {}).items():
-                prev = feedback_nodes.get(str(nid), "")
-                chunk = str(text or "").strip()
-                if not chunk:
-                    continue
-                feedback_nodes[str(nid)] = (prev + " | " + chunk).strip(" |")[:1200]
-        aggregated = {
-            "raters": raters,
-            "aggregated_overall": round(agg_overall, 2),
-            "feedback_nodes": feedback_nodes,
-            "director_authoring_feedback": " || ".join(
-                str(r.get("director_authoring_feedback") or "") for r in raters
-            )[:1600],
-            "director_review_feedback": " || ".join(
-                str(r.get("director_review_feedback") or "") for r in raters
-            )[:1600],
-            "graph_design": " || ".join(str(r.get("graph_design") or "") for r in raters)[:1600],
-            "apply_on": "run_again_only",
-        }
-        meta = dict(graph.get("metadata") or {})
-        meta["dual_rater_aggregate"] = aggregated
-        graph["metadata"] = meta
-        # Fold into director review suggestions for persistence.
-        suggestions = dict(director_review.get("suggestions") or {})
-        suggestions.update(feedback_nodes)
-        if aggregated["director_authoring_feedback"]:
-            suggestions["director_authoring"] = aggregated["director_authoring_feedback"]
-        if aggregated["graph_design"]:
-            suggestions["graph_design"] = aggregated["graph_design"]
-        recommendations = [
-            str(aggregated.get("director_authoring_feedback") or "").strip(),
-            str(aggregated.get("director_review_feedback") or "").strip(),
-            str(aggregated.get("graph_design") or "").strip(),
-            *[f"{nid}: {txt}" for nid, txt in list(feedback_nodes.items())[:12]],
-        ]
-        aggregated["aggregated_recommendations"] = [r for r in recommendations if r][:20]
-        director_review = dict(director_review)
-        director_review["suggestions"] = suggestions
-        director_review["dual_raters"] = aggregated
-        director_review["aggregated_recommendations"] = aggregated["aggregated_recommendations"]
-        director_review["aggregated_overall"] = aggregated["aggregated_overall"]
-        return director_review
-
-    async def assign_dual_raters(
-        self,
-        graph: DesignerExecutionGraph,
-        *,
-        agent_feedback: dict[str, dict[str, Any]],
-        director_final: dict[str, Any],
-        director_review: dict[str, Any],
-        node_states: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        """Public alias: two independent raters → dual_raters + aggregated_recommendations."""
-        return await self.dual_rate_final(
-            graph,
-            agent_feedback=agent_feedback,
-            director_final=director_final,
-            director_review=director_review,
-            node_states=node_states,
-        )
-
 
     async def finalize(
         self,
@@ -4278,7 +4018,6 @@ class Director:
             "vision_used": bool(vision_notes),
             "vision_notes": vision_notes,
         }
-
 
 
 def _heuristic_node_score(
@@ -4904,64 +4643,3 @@ def _identity_consistency_patch(graph: DesignerExecutionGraph) -> list[str]:
     return notes
 
 
-
-
-async def write_run_feedback(
-    *,
-    graph: DesignerExecutionGraph,
-    run_id: str,
-    agent_feedback: dict[str, dict[str, Any]],
-    director_plan: dict[str, Any] | None,
-    director_review: dict[str, Any],
-    director_final: dict[str, Any],
-) -> str:
-    """Persist the run report in the feedback store read by Run again."""
-    graph_id = str(graph.get("graph_id") or "")
-    payload = {
-        "schema_version": "designer-feedback.v1",
-        "agents": agent_feedback,
-        "director_plan": director_plan or {},
-        "director": {
-            "suggestions": director_final.get("suggestions") or {},
-            "final": {
-                "scores": director_final.get("scores") or {},
-                "node_reports": director_final.get("node_reports") or {},
-                "summary": director_final.get("summary") or "",
-                "suggestions": director_final.get("suggestions") or {},
-                "rating_modality": director_final.get("rating_modality") or "text_only",
-                "vision_used": bool(director_final.get("vision_used")),
-            },
-            "review": {
-                "scores": director_review.get("scores") or {},
-                "summary": director_review.get("summary") or "",
-                "pipeline_notes": director_review.get("pipeline_notes") or "",
-                "suggestions": director_review.get("suggestions") or {},
-                "rating_modality": director_review.get("rating_modality") or "text_only",
-                "vision_used": bool(director_review.get("vision_used")),
-                "dual_raters": director_review.get("dual_raters") or {},
-                "aggregated_recommendations": director_review.get("aggregated_recommendations")
-                or (director_review.get("dual_raters") or {}).get("aggregated_recommendations")
-                or [],
-                "aggregated_overall": director_review.get("aggregated_overall"),
-            },
-        },
-        "dual_raters": director_review.get("dual_raters") or {},
-        "aggregated_recommendations": director_review.get("aggregated_recommendations")
-        or (director_review.get("dual_raters") or {}).get("aggregated_recommendations")
-        or [],
-        "final": {
-            "aggregated_score": director_final.get("aggregated_score"),
-            "dual_rater_overall": director_review.get("aggregated_overall"),
-            "summary": director_final.get("summary"),
-            "improvement_plan": director_final.get("improvement_plan"),
-            "apply_on": "run_again_only",
-        },
-    }
-    feedback_path = save_feedback(graph_id, run_id, payload)
-    meta = dict(graph.get("metadata") or {})
-    meta["last_feedback_path"] = str(feedback_path)
-    meta["last_feedback_run_id"] = run_id
-    meta["last_aggregated_score"] = director_final.get("aggregated_score")
-    meta.pop("last_report_path", None)
-    graph["metadata"] = meta
-    return str(feedback_path)

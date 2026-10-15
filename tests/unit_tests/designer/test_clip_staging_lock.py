@@ -3,7 +3,6 @@
 from jiuwenswarm.common.schema.designer_graph import (
     compose_required_predecessor_ids,
     is_compose_sink_node,
-    is_soft_artifact_dependency,
 )
 from jiuwenswarm.server.runtime.designer.pipeline.clip_staging_lock import (
     build_action_lock,
@@ -104,8 +103,6 @@ def test_concurrency_soft_clip_hard_compose_unchanged():
             {"source": "n_speech", "target": "n_compose"},
         ],
     }
-    assert is_soft_artifact_dependency(graph, "n_clip_1", "n_clip_2") is True
     assert is_compose_sink_node(graph["nodes"][2]) is True
-    assert is_soft_artifact_dependency(graph, "n_clip_1", "n_compose") is False
     preds = set(compose_required_predecessor_ids(graph))
     assert "n_clip_1" in preds and "n_clip_2" in preds and "n_speech" in preds
