@@ -73,3 +73,35 @@ test('a manual canvas stays editable before the first run', () => {
     false,
   );
 });
+
+test('nodes added after a completed run keep the graph editable', () => {
+  const grown = { ...promptGraph, nodes: [...promptGraph.nodes, { id: 'n3' }] };
+  const finished = { n1: { status: 'completed' }, n2: { status: 'completed' } };
+  assert.equal(
+    isDesignerGraphEditingLocked({
+      bootstrapInProgress: false,
+      graph: grown,
+      nodeStates: finished,
+      runStatus: 'completed',
+    }),
+    false,
+  );
+  assert.equal(
+    isDesignerGraphEditingLocked({
+      bootstrapInProgress: false,
+      graph: grown,
+      nodeStates: finished,
+      runStatus: null,
+    }),
+    true,
+  );
+  assert.equal(
+    isDesignerGraphEditingLocked({
+      bootstrapInProgress: false,
+      graph: grown,
+      nodeStates: { ...finished, n3: { status: 'pending' } },
+      runStatus: 'completed',
+    }),
+    true,
+  );
+});
