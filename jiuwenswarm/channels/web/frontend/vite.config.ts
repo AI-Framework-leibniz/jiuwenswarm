@@ -1762,6 +1762,7 @@ const webTarget = `http://127.0.0.1:${webPort}`
 const hubOAuthBroker = process.env.JIUWENSWARM_HUB_OAUTH_BROKER_URL
 
 const isElectronBuild = process.env.ELECTRON === 'true'
+const designCanvasRoot = fs.realpathSync(path.resolve(__dirname, './node_modules/@designswarm/canvas'))
 
 export default defineConfig({
   base: isElectronBuild ? './' : '/',
@@ -1770,7 +1771,9 @@ export default defineConfig({
     include: ['exceljs', 'jszip', 'saxes', 'ssf', 'onnxruntime-web/wasm'],
   },
   resolve: {
-    dedupe: ['react', 'react-dom'],
+    // @designswarm/canvas is linked from outside this tree; its imports must
+    // resolve to the app's single copy of each shared library.
+    dedupe: ['react', 'react-dom', 'zustand', 'i18next', 'react-i18next', '@xyflow/react', 'lucide-react'],
     alias: {
       '@': path.resolve(__dirname, './src'),
       'lucide-react': path.resolve(__dirname, './node_modules/lucide-react'),
@@ -1787,6 +1790,7 @@ export default defineConfig({
         __dirname,
         // Full-duplex audio worklets live outside the web frontend root.
         path.resolve(__dirname, '../../../extensions/video_duplex/frontend'),
+        designCanvasRoot,
       ],
     },
     allowedHosts: ['127.0.0.1'],
