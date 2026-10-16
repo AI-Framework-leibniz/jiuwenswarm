@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { before } from 'node:test';
+import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
@@ -39,6 +40,10 @@ before(async () => {
         builder.onLoad({ filter: /.*/, namespace: 'queue-entry' }, () => ({
           contents: 'export { AgentActivityCard as TaskQueue } from "./src/components/ChatPanel/index.tsx"; export { ChatTimelineList } from "./src/components/ChatPanel/MessageList.tsx";',
           resolveDir: frontendRoot,
+        }));
+        // The design canvas ships TypeScript source, which Node cannot load as an external.
+        builder.onResolve({ filter: /^@designswarm\/canvas$/ }, () => ({
+          path: realpathSync(join(frontendRoot, 'node_modules/@designswarm/canvas/src/index.ts')),
         }));
         builder.onResolve({ filter: /\.svg\?react$/ }, ({ path }) => ({ path, namespace: 'svg-react-stub' }));
         builder.onLoad({ filter: /.*/, namespace: 'svg-react-stub' }, () => ({

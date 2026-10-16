@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { A2UIProvider } from '@a2ui/react';
 import type { A2UIClientEventMessage } from '@a2ui/react';
 import { injectStyles } from '@a2ui/react/styles';
+import './features/designCanvasHost';
 import App from './App.tsx'
 import { ShareImageExportRunner } from './features/shareImageExport'
 import { openSourceSettingsPageDefinition } from './features/settings/registry/openSourceDefinition'

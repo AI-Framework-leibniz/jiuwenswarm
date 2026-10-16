@@ -1,5 +1,6 @@
 import { build } from 'esbuild';
 import { spawnSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -44,6 +45,10 @@ await build({
           resolveDir: root,
         }));
 
+        // The design canvas ships TypeScript source, which Node cannot load as an external.
+        builder.onResolve({ filter: /^@designswarm\/canvas$/ }, () => ({
+          path: realpathSync(`${root}/node_modules/@designswarm/canvas/src/index.ts`),
+        }));
         builder.onResolve({ filter: /\.svg\?react$/ }, ({ path }) => ({ path, namespace: 'svg-react-stub' }));
         builder.onLoad({ filter: /.*/, namespace: 'svg-react-stub' }, () => ({
           contents: 'export default function SvgStub() { return null; }',

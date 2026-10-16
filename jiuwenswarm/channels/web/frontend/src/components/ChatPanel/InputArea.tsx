@@ -195,7 +195,7 @@ import {
   type AgentGroupCatalogItem,
   type AgentGroupIdentity,
 } from '../../features/agentManagement';
-import { DESIGNER_REF_MAX_INLINE_BYTES } from '../../features/designer/designerReferences';
+import { DESIGNER_REF_MAX_INLINE_BYTES } from '@designswarm/canvas';
 import { ContextUsageIndicator } from './ContextUsageIndicator';
 import { isImeCompositionKey } from './imeComposition';
 import { useTaskAsr } from '../../features/taskAsr/useTaskAsr';
