@@ -3564,6 +3564,9 @@ class AgentRuntime:
             ensure_builtin_agent_groups_installed()
         except Exception as exc:  # noqa: BLE001
             logger.warning("builtin agent_group install skipped: %s", exc)
+        from jiuwenswarm.design_host import ensure_designer_agent_group
+
+        ensure_designer_agent_group()
 
     async def _rollback_start(self) -> None:
         """Undo partially initialized owned dependencies after start failure."""
