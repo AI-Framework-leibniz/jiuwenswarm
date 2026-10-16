@@ -94,6 +94,10 @@ uv venv
 uv pip install -e .
 ```
 
+The design feature comes from [DesignSwarm](https://github.com/AI-Framework-leibniz/DesignSwarm)
+(`designswarm-core` and `@designswarm/canvas`). Until it is published, check it out next to this
+repository (`../DesignSwarm`); both the Python and the web dependencies point there.
+
 > For detailed installation instructions, see: [Install Guide](docs/en/InstallGuide.md)
 
 ## Quick Start
