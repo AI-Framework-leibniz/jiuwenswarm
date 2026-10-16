@@ -19,6 +19,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from designswarm.agents.swarm.providers import (  # noqa: F401 -- registers team.design providers
+    design_rails as _design_rails,
+    designer_tools as _designer_tools,
+)
 from openjiuwen.agent_teams.harness.manifest import register_from_catalog
 from openjiuwen.agent_teams.rails.builtin_elements import (
     AUDIO as _OJ_AUDIO,
@@ -50,8 +54,6 @@ from jiuwenswarm.agents.swarm.providers import (
     builtin_rails as _builtin_rails,
     code_rails as _code_rails,
     code_subagents as _code_subagents,
-    design_rails as _design_rails,
-    designer_tools as _designer_tools,
     evolution_rails as _evolution_rails,
     member_rails as _member_rails,
     runtime_tools as _runtime_tools,

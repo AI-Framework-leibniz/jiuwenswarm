@@ -2874,7 +2874,7 @@ async def _bind_design_round_if_needed(request: Any) -> Any:
     # node_run round guard for the whole subscription lifetime.
     if request.params.get(TEAM_ATTACH_ONLY_PARAM) is True:
         return None
-    from jiuwenswarm.server.runtime.design.team_bridge import DesignTeamBridge
+    from designswarm.server.runtime.design.team_bridge import DesignTeamBridge
 
     try:
         bindings = await DesignTeamBridge().bind_round(
@@ -2901,7 +2901,7 @@ def _push_design_tool_activity(request: Any, chunk: Any) -> None:
         return
     import asyncio as _asyncio
 
-    from jiuwenswarm.server.runtime.design.team_bridge import (
+    from designswarm.server.runtime.design.team_bridge import (
         activity_text,
         push_leader_activity,
     )
