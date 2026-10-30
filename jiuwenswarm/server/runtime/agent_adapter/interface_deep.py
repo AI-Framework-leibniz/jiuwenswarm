@@ -630,6 +630,12 @@ from jiuwenswarm.common.runtime_workspace import (
     resolve_bound_runtime_workspace_paths,
     resolve_runtime_workspace_paths,
 )
+from jiuwenswarm.common.mcp_dynamic_token_patch import (
+    _registry_token_url,
+    apply_mcp_dynamic_token_patch,
+    mark_dynamic_token_server,
+    unmark_dynamic_token_server,
+)
 from jiuwenswarm.common.reasoning_config import resolve_endpoint_profile_override
 from jiuwenswarm.common.reasoning_injector import build_reasoning_model_request_kwargs
 from jiuwenswarm.server.runtime.agent_adapter.sysop_builder import (
@@ -1837,6 +1843,7 @@ class JiuWenSwarmDeepAdapter:
         # effects; idempotent, and guaranteed to run before any
         # DeepAgent/TaskTool is created below.
         apply_task_tool_event_patch()
+        apply_mcp_dynamic_token_patch()
         self._instance: DeepAgent | None = None
         self._process_cli_run_options = None
         self._external_harness_binding: dict[str, Any] | None = None
@@ -1871,6 +1878,9 @@ class JiuWenSwarmDeepAdapter:
         self._active_request_model: Model | None = None
         self._context_model_binding: tuple[Any, Model, tuple[Any, ...]] | None = None
         self._selected_model_context_window_tokens: int | None = None
+        self._model_config_source: str = "config.yaml"
+        self._enterprise_config: Any = None
+        self._enterprise_config_resource_id: str | None = None
         self._config_base_cache: dict[str, Any] | None = None
         self._config_cache: dict[str, Any] = {}
         self._filesystem_rail: SysOperationRail | None = None
@@ -2044,6 +2054,9 @@ class JiuWenSwarmDeepAdapter:
         # skill retrieval switch above.
         self._tool_retrieval_session_enabled: bool | None = None
         self._skill_manager: SkillManager | None = None
+        # Prebuilt skill sync result; filled by enterprise skill sync, not create_instance.
+        self._enabled_skills: list[str] = []
+        self._prebuilt_skills: set[str] = set()
         self._a2x_client: Any | None = None
         self._a2x_config: dict[str, Any] = {}
         self._a2x_blank_service_id: str = ""
@@ -2804,6 +2817,10 @@ class JiuWenSwarmDeepAdapter:
         if isinstance(v, str) and v != "":
             if not equipment.is_agent_template_installed(v):
                 return f"agent_template not installed: {v}"
+            from jiuwenswarm.server.runtime.package_allowlist import allows
+
+            if not allows("agent_template", v):
+                return f"agent_template not allowed: {v}"
         v = params.get("plugin_names")
         if isinstance(v, list):
             for item in v:
@@ -5543,7 +5560,127 @@ class JiuWenSwarmDeepAdapter:
             )
         return out
 
-    async def _register_mcp_server(self, cfg: McpServerConfig, *, tag: str) -> bool:
+    async def _register_mcp_server(
+        self,
+        cfg: McpServerConfig,
+        *,
+        tag: str,
+        dynamic_token_url: str | None = None,
+    ) -> bool:
+        if not dynamic_token_url:
+            return await self._register_static_mcp_server(cfg, tag=tag)
+        if self._instance is None:
+            return False
+        # 动态 token 作用域标记（refcount + 网关级 token_url，见
+        # mcp_dynamic_token_patch）：注册成功路径保持标记，TOOL_AUTH 策略按
+        # server_id 识别（call_tool 期自愈重连 / TTL 刷新重连均命中）；任何
+        # 失败出口由 finally 统一 unmark。条目未携带 dynamic_token_url 或
+        # 实例凭据未下发时 mark 是 no-op（该网关保持静态头）。
+        server_id = str(getattr(cfg, "server_id", "") or "").strip()
+        marked = mark_dynamic_token_server(server_id, dynamic_token_url)
+        ok_registered = False
+        try:
+            # stdio: command 必须可执行（npx/uvx/node 等），否则 SDK 启动子进程会
+            # 抛 OSError 但被 connect() 的 except 吞掉，前端只看到笼统失败。
+            # 提前 shutil.which 检查，缺失则直接报"命令不存在"，不发到 SDK。
+            if str(cfg.client_type).strip().lower() == "stdio":
+                import shutil
+                cmd = str((cfg.params or {}).get("command", "")).strip()
+                if cmd and not shutil.which(cmd):
+                    raise RuntimeError(
+                        f"MCP '{cfg.server_name}' command '{cmd}' not found on PATH "
+                        f"(install it or add to PATH)"
+                    )
+            # Pre-flight reachability check for HTTP-based MCP servers. If the host
+            # is down we skip registration here instead of entering the mcp
+            # streamable-http context — otherwise openjiuwen leaks orphaned anyio
+            # background tasks on the failed initialize() and logs noisy
+            # ``aclose()``/cancel-scope RuntimeErrors.
+            reachable, reason = await preflight_mcp_server_reachable(
+                cfg, dynamic_token_url=dynamic_token_url
+            )
+            if not reachable:
+                logger.warning(
+                    "[JiuWenSwarmDeepAdapter] MCP server unreachable, skipping registration: "
+                    "name=%s transport=%s path=%s reason=%s",
+                    cfg.server_name, cfg.client_type, cfg.server_path, reason,
+                )
+                return False
+            result = await Runner.resource_mgr.add_mcp_server(cfg, tag=tag)
+            ok = True
+            if result is not None:
+                is_ok = getattr(result, "is_ok", None)
+                if callable(is_ok):
+                    ok = bool(is_ok())
+                elif isinstance(result, bool):
+                    ok = result
+            if ok:
+                if not server_id:
+                    logger.warning(
+                        "[JiuWenSwarmDeepAdapter] MCP server_id missing after registration: %s", cfg
+                    )
+                    return False
+                self._instance.ability_manager.add(cfg)
+                self._registered_mcp_server_ids.add(server_id)
+                self._registered_mcp_servers[server_id] = cfg
+                ok_registered = True
+                return True
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] MCP server register failed: "
+                "%s (ok=False, result=%r, auth_headers_diag=%s)",
+                cfg.server_name, result, _diag_auth_headers(cfg),
+            )
+            # Surface the runner's error reason so the connect handler can report
+            # it to the frontend instead of a silent "connected". The runner
+            # returns an openjiuwen ``Error`` object whose value is exposed via
+            # the ``msg()`` / ``error()`` methods (and the ``_error`` attr), NOT
+            # via ``error_message`` / ``message`` / ``reason`` attributes.
+            runner_reason = ""
+            for getter in ("error", "msg"):
+                fn = getattr(result, getter, None)
+                if callable(fn):
+                    try:
+                        val = fn()
+                    except Exception:  # noqa: BLE001
+                        val = None
+                    if val:
+                        runner_reason = str(val)
+                        break
+            if not runner_reason:
+                val = getattr(result, "_error", None)
+                if val:
+                    runner_reason = str(val)
+            raise RuntimeError(
+                runner_reason
+                or f"MCP server '{cfg.server_name}' register rejected (no runner reason)"
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] MCP server '%s' register failed: %s",
+                cfg.server_name, exc,
+            )
+            raise
+        finally:
+            if marked and not ok_registered:
+                unmark_dynamic_token_server(server_id)
+
+    async def register_mcp_server(
+        self,
+        cfg: McpServerConfig,
+        *,
+        tag: str,
+        dynamic_token_url: str | None = None,
+    ) -> bool:
+        """Public entry for cross-adapter registration (G.CLS.11).
+
+        Delegates to ``_register_mcp_server`` so instance-level test doubles
+        patched on the protected name still apply (a bare alias would not).
+        """
+        return await self._register_mcp_server(
+            cfg, tag=tag, dynamic_token_url=dynamic_token_url
+        )
+
+    async def _register_static_mcp_server(self, cfg: McpServerConfig, *, tag: str) -> bool:
         import uuid
         if self._instance is None:
             return False
@@ -5702,6 +5839,7 @@ class JiuWenSwarmDeepAdapter:
             except Exception as exc:
                 logger.warning("[JiuWenSwarmDeepAdapter] MCP ability remove failed: %s", exc)
         self._registered_mcp_server_ids.discard(server_id)
+        unmark_dynamic_token_server(server_id)
         self._registered_mcp_servers.pop(server_id, None)
 
     async def _safe_remove_mcp_server(self, server_id: str) -> None:
@@ -5767,6 +5905,27 @@ class JiuWenSwarmDeepAdapter:
         succeeds instead of raising "register rejected".
         """
         entry = get_mcp_server_config(name)
+        if entry is None:
+            # 企业合并快照兜底：企业下发的 MCP 只存在于适配器合并后的
+            # _config_base_cache（mcp.servers），不在本地 config.yaml /
+            # mcp/state.json——reconcile 的名字解析必须能看见它们，否则
+            # 企业 web 会话永远注册不到下发的（动态 token）网关。
+            for adapter in self._iter_mcp_target_adapters():
+                cache = getattr(adapter, "_config_base_cache", None)
+                mcp_section = cache.get("mcp") if isinstance(cache, dict) else None
+                servers = (
+                    mcp_section.get("servers", [])
+                    if isinstance(mcp_section, dict) else []
+                )
+                for item in servers:
+                    if (
+                        isinstance(item, dict)
+                        and str(item.get("name", "") or "").strip() == name
+                    ):
+                        entry = item
+                        break
+                if entry is not None:
+                    break
         if not entry:
             logger.debug(
                 "[JiuWenSwarmDeepAdapter] register_mcp_by_name: " \
@@ -5794,7 +5953,13 @@ class JiuWenSwarmDeepAdapter:
                 )
                 continue
             try:
-                if await adapter._register_mcp_server(cfg, tag=tag):
+                # 条目级动态 token 端点（存在 = 该网关需要动态 token，随 mark
+                # 登记）——与 _sync_mcp_servers_for_runtime 的透传口径一致；
+                # 漏传会导致 web 会话网关永远走静态头。
+                dynamic_token_url = str(entry.get("dynamic_token_url") or "").strip() or None
+                if await adapter.register_mcp_server(
+                    cfg, tag=tag, dynamic_token_url=dynamic_token_url
+                ):
                     applied_any = True
                 elif not first_error:
                     first_error = (
@@ -5803,7 +5968,7 @@ class JiuWenSwarmDeepAdapter:
                         f"runner error / cancel-scope error)"
                     )
             except Exception as exc:  # noqa: BLE001
-                # _register_mcp_server (via openjiuwen add_tool_server) surfaces
+                # register_mcp_server (via openjiuwen add_tool_server) surfaces
                 # plain Exceptions only — WorkflowError for connect/register
                 # failures, RuntimeError for ok=False. Collect the first failure
                 # so the caller can report it; raise if none succeeded.
@@ -6054,9 +6219,13 @@ class JiuWenSwarmDeepAdapter:
                     entry.get("name", "<unknown>"),
                 )
                 continue
+            # 条目级动态 token 端点（存在 = 该网关需要动态 token，随 mark 登记）
+            dynamic_token_url = str(entry.get("dynamic_token_url") or "").strip() or None
             server_name = str(getattr(cfg, "server_name", "") or "").strip()
             try:
-                ok = await self._register_mcp_server(cfg, tag=tag)
+                ok = await self._register_mcp_server(
+                    cfg, tag=tag, dynamic_token_url=dynamic_token_url
+                )
                 if not ok:
                     # _register_mcp_server returns False on preflight
                     # unreachability (HTTP host down) — a real failure, not a
@@ -6171,11 +6340,23 @@ class JiuWenSwarmDeepAdapter:
             server_id = current_by_name[server_name][0]
             await self._unregister_mcp_server(server_id)
 
+        # 条目级动态 token 端点（存在 = 该网关需要动态 token，随 mark 登记）
+        dynamic_token_url_by_name: dict[str, str] = {}
+        for entry in enabled_entries:
+            name = str(entry.get("name") or "").strip()
+            url = str(entry.get("dynamic_token_url") or "").strip()
+            if name and url:
+                dynamic_token_url_by_name[name] = url
+
         for server_name in to_add:
             # Isolate per-MCP failures (same as the init path above): a bad MCP
             # degrades to disconnected, the rest still register.
             try:
-                await self._register_mcp_server(desired_by_name[server_name], tag=tag)
+                await self._register_mcp_server(
+                    desired_by_name[server_name],
+                    tag=tag,
+                    dynamic_token_url=dynamic_token_url_by_name.get(server_name),
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "[JiuWenSwarmDeepAdapter] MCP '%s' register failed on "
@@ -6212,14 +6393,23 @@ class JiuWenSwarmDeepAdapter:
                 "auth_headers": getattr(desired_cfg, "auth_headers", None),
                 "auth_query_params": getattr(desired_cfg, "auth_query_params", None),
             }
+            # 签名一致还不够：dynamic_token_url 是条目级字段（不在
+            # McpServerConfig 上），单独热更它也必须触发重注册——否则注册表
+            # 里留旧端点，token 从错误地址获取。当前值从注册表读取。
             if json.dumps(current_sig, sort_keys=True, default=str) == json.dumps(
                 desired_sig, sort_keys=True, default=str
+            ) and _registry_token_url(server_id) == dynamic_token_url_by_name.get(
+                server_name
             ):
                 continue
             await self._unregister_mcp_server(server_id)
             # Same per-MCP isolation as to_add above.
             try:
-                await self._register_mcp_server(desired_cfg, tag=tag)
+                await self._register_mcp_server(
+                    desired_cfg,
+                    tag=tag,
+                    dynamic_token_url=dynamic_token_url_by_name.get(server_name),
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "[JiuWenSwarmDeepAdapter] MCP '%s' re-register failed on "
@@ -8069,11 +8259,47 @@ class JiuWenSwarmDeepAdapter:
         )
         return fallback
 
+    def _enterprise_requested_model_name(self, request: AgentRequest) -> str:
+        """Resolve the model name this request should use.
+
+        Explicit ``model_name`` wins. Otherwise, if this adapter has not yet
+        applied a model, fall back to the session's persisted ``model`` so
+        ``command.goal`` / interrupt resume can still hit the user's choice.
+        """
+        params = request.params if isinstance(request.params, dict) else {}
+        raw_selection = params.get("model_selection")
+        if isinstance(raw_selection, dict):
+            try:
+                from gateway.common.model_selection import ModelSelection
+                selection = ModelSelection.model_validate(raw_selection)
+                suffix = f":{selection.route_id}" if selection.route_id else ""
+                return f"{selection.type}:{selection.id}{suffix}"
+            except ValidationError as exc:
+                raise ValueError(f"invalid model_selection: {exc}") from exc
+        requested = str(params.get("model_name") or "").strip()
+        if requested:
+            return requested
+        session_id = str(getattr(request, "session_id", None) or "").strip()
+        if session_id:
+            try:
+                from jiuwenswarm.server.runtime.session.model_selection_store import get_session_model_selection
+                selection = get_session_model_selection(session_id)
+                if selection is not None:
+                    suffix = f":{selection.route_id}" if selection.route_id else ""
+                    return f"{selection.type}:{selection.id}{suffix}"
+            except ValueError:
+                logger.warning("invalid session id while resolving model selection: %r", session_id)
+        return self._session_stored_model_name(getattr(request, "session_id", None))
+
     def _requested_model_name(self, request: AgentRequest) -> str:
         """Resolve the model name this request should use.
 
         Stable explicit/session selections win over legacy display names.
         """
+        from jiuwenswarm.enterprise import is_enterprise
+
+        if is_enterprise():
+            return self._enterprise_requested_model_name(request)
         params = request.params if isinstance(request.params, dict) else {}
         raw_selection = params.get("model_selection")
         if raw_selection is not None:
@@ -8350,6 +8576,56 @@ class JiuWenSwarmDeepAdapter:
         if isinstance(hint, str) and hint.strip():
             return hint.strip()[:500]
         return "该模型需要登录华为账号后使用（未登录或登录已过期），请登录后重试"
+
+    async def _ensure_enterprise_models(self, request: AgentRequest) -> None:
+        """把本次请求对应的企业模型模板写入进程内模型缓存。
+
+        列表接口读的是 Gateway 上的 ``model_template``；对话进程只在
+        ``create_instance`` 时合并配置。预热出来的会话没有 request，缓存里仍是
+        本地空配置，这里在真正校验前按 routing 补一次。
+        """
+        from jiuwenswarm.enterprise import is_enterprise
+
+        if not is_enterprise() or not self._is_session_scoped_adapter:
+            return
+        from jiuwenswarm.common.model_errors import (
+            MODEL_SELECTION_NOT_FOUND,
+            ModelSelectionError,
+        )
+
+        requested = self._requested_model_name(request)
+        try:
+            if self._has_valid_model_config(requested):
+                return
+        except ModelSelectionError as exc:
+            # A prewarmed child may not yet have this tenant's model catalogue.
+            # Authorization/disabled-model errors must keep their normal path.
+            if exc.code != MODEL_SELECTION_NOT_FOUND:
+                raise
+        base = self._config_base_cache if isinstance(self._config_base_cache, dict) else {}
+        try:
+            result = await self._load_enterprise_config(request, base=base)
+        except Exception:  # noqa: BLE001 — 读库失败时保持原有“未配置模型”提示
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] enterprise model load failed before chat",
+                exc_info=True,
+            )
+            return
+        loaded = getattr(result, "policy", None)
+        if loaded is None or not getattr(loaded, "models", None):
+            return
+        config_base = result.config if isinstance(result.config, dict) else base
+        self._config_base_cache = dict(config_base)
+        # 预热会话首聊才补企业配置时，同步挂上/刷新权限 Rail（含 Manager 护栏）。
+        if not self._permission_state.permission_update_in_progress:
+            self._update_permission_rail(config_base)
+        try:
+            self._create_model(config_base)
+        except ValueError:
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] enterprise model entries are not usable",
+                exc_info=True,
+            )
 
     def _model_config_error(self, request: AgentRequest) -> tuple[str, str] | None:
         if _is_attach_only_subscription(request.params):
@@ -12301,6 +12577,152 @@ class JiuWenSwarmDeepAdapter:
             )
             return self._instance
 
+    async def _load_enterprise_config(
+        self, request: AgentRequest | None, *, base: dict | None = None,
+    ):
+        """Load + apply enterprise config for this request (read then merge)."""
+        from jiuwenswarm.enterprise.config.config_provider import resolve_agent_config
+        from jiuwenswarm.enterprise import is_enterprise
+
+        cached_policy = getattr(self, "_enterprise_config", None)
+        cached_resource_id = getattr(self, "_enterprise_config_resource_id", None)
+        result = await resolve_agent_config(
+            base if base is not None else {},
+            request=request,
+            cached_policy=cached_policy,
+        )
+        loaded = result.policy
+        self._enterprise_config = loaded
+        if loaded is None:
+            self._enterprise_config_resource_id = None
+        elif request is None and loaded is cached_policy:
+            self._enterprise_config_resource_id = cached_resource_id
+        else:
+            self._enterprise_config_resource_id = str(
+                getattr(loaded, "resource_id", "") or ""
+            ).strip() or None
+        self._model_config_source = "config.yaml"
+        if loaded is not None and (
+            getattr(loaded, "models", None) or getattr(loaded, "embedding", None)
+        ):
+            self._model_config_source = "enterprise_policy"
+            logger.info(
+                "[JiuWenSwarmDeepAdapter] using enterprise model config: slots=%s",
+                list(getattr(loaded, "models", {}) or {}),
+            )
+        if loaded is not None and is_enterprise():
+            logger.info(
+                "[JiuWenSwarmDeepAdapter] using enterprise MCP config: count=%s",
+                len(getattr(loaded, "mcp", None) or []),
+            )
+            perm_cfg = (
+                result.config.get("permissions")
+                if isinstance(result.config, dict)
+                else None
+            )
+            if isinstance(perm_cfg, dict):
+                logger.info(
+                    "[JiuWenSwarmDeepAdapter] using enterprise permissions config: "
+                    "enabled=%s permission_mode=%s",
+                    perm_cfg.get("enabled"),
+                    perm_cfg.get("permission_mode"),
+                )
+        if loaded is not None and self._skill_manager is not None:
+            try:
+                await self._skill_manager.apply_skill_source_configs(
+                    getattr(loaded, "extension_config", None)
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "[JiuWenSwarmDeepAdapter] skill source config rejected: %s",
+                    exc,
+                )
+        if loaded is None and request is not None and is_enterprise():
+            from jiuwenswarm.common.request_identity import web_routing_identity
+
+            identity = web_routing_identity(
+                request.metadata if isinstance(request.metadata, dict) else None
+            )
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] no effective enterprise config loaded "
+                "(group_id=%s bot_id=%s user_id=%s)",
+                identity.get("group_id"),
+                identity.get("bot_id"),
+                identity.get("user_id"),
+            )
+        return result
+
+    async def _sync_enterprise_skill_prebuilt(self) -> None:
+        """Install template prebuilt skills into the tenant SkillManager workspace."""
+        from jiuwenswarm.enterprise import is_enterprise
+        from jiuwenswarm.server.runtime.skill.skill_prebuilt import (
+            SkillPrebuiltSynchronizer,
+            is_skill_prebuilt_tenant,
+            parse_agent_skill_prebuilt,
+        )
+        from jiuwenswarm.enterprise.tenant.tenant_context import TenantContext
+
+        if not is_enterprise():
+            return
+        loaded = getattr(self, "_enterprise_config", None)
+        if loaded is None:
+            return
+        routing = getattr(loaded, "routing", None)
+        agent_id = str(getattr(routing, "bot_id", "") or "").strip()
+        service_id = str(
+            getattr(loaded, "service_id", None)
+            or getattr(routing, "group_id", "")
+            or ""
+        ).strip()
+        if not is_skill_prebuilt_tenant(agent_id, service_id):
+            tenant_key = str(TenantContext.current_tenant_key() or "").strip()
+            if not is_skill_prebuilt_tenant(tenant_key, tenant_key):
+                return
+            agent_id = tenant_key
+            service_id = tenant_key
+        manager = self._skill_manager
+        if manager is None:
+            manager = SkillManager(
+                workspace_dir=self._workspace_dir,
+                service_id=service_id,
+                agent_id=agent_id,
+            )
+            self._skill_manager = manager
+        try:
+            enterprise_skills = getattr(loaded, "skill_prebuilt", None) or []
+            skill_config = parse_agent_skill_prebuilt(
+                agent_id, service_id, enterprise_skills
+            )
+            sync_result = await SkillPrebuiltSynchronizer(
+                self._workspace_dir,
+                service_id,
+                agent_id,
+                skill_manager=manager,
+            ).sync(skill_config)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[SkillPrebuilt] sync failed: agent_id=%s service_id=%s error=%s",
+                agent_id,
+                service_id,
+                exc,
+            )
+            return
+        if sync_result.errors:
+            logger.warning(
+                "[SkillPrebuilt] sync partial errors: agent_id=%s service_id=%s errors=%s",
+                agent_id,
+                service_id,
+                sync_result.errors,
+            )
+        self._enabled_skills = [
+            str(name) for name in (sync_result.enabled_skill_dirs or []) if str(name).strip()
+        ]
+        self._prebuilt_skills = {
+            str(name).strip()
+            for name in (sync_result.prebuilt_skill_dirs or [])
+            if str(name).strip()
+        }
+
     async def create_instance(
         self, config: dict[str, Any] | None = None, *, mode: str = "agent", sub_mode: str = None,
         agent_definition: dict[str, Any] | None = None,
@@ -12366,6 +12788,21 @@ class JiuWenSwarmDeepAdapter:
             raise ValueError("moa_enabled must be a boolean")
         load_dotenv_runtime(dotenv_path=get_env_file(), override=True)
         config_base = get_config()
+        # 企业版：create_instance 可带 request，按 routing 读库并合并 model/mcp/permissions
+        bootstrap_request = None
+        if isinstance(self._instance_overrides, dict):
+            bootstrap_request = self._instance_overrides.pop("request", None)
+        try:
+            result = await self._load_enterprise_config(
+                bootstrap_request,
+                base=config_base,
+            )
+            config_base = result.config
+        except Exception as exc:  # noqa: BLE001 — 读库失败回落 yaml
+            logger.warning(
+                "[JiuWenSwarmDeepAdapter] load enterprise config failed: %s",
+                exc,
+            )
         if self._instance_overrides.get("run_permissions_enabled"):
             config_base = copy.deepcopy(config_base)
             config_base["permissions"] = {
@@ -12391,6 +12828,7 @@ class JiuWenSwarmDeepAdapter:
             "project_dir", config.get("project_dir")
         )
         self._workspace_dir = config.get("workspace_dir", str(get_agent_workspace_dir()))
+        await self._sync_enterprise_skill_prebuilt()
         if self._uses_smart_permission_lifecycle(config_base):
             self._prepare_permission_workspace_binding()
         self._permission_workspace_root = self._resolve_permission_workspace_root()
@@ -12677,6 +13115,12 @@ class JiuWenSwarmDeepAdapter:
             The normalized config snapshot that was cached on this adapter.
         """
         clear_config_cache()
+        # 企业配置源：失效企业配置进程缓存（模板实体 + 实例/模板行 TTL 缓存）
+        # 并重载 memory 的 gateway DB 配置——否则 reload 后企业加载仍命中
+        # 600s TTL 旧行（与 dev-stable 的 reload 快照流程对齐）。
+        from jiuwenswarm.enterprise.config.config_provider import refresh_config_source
+
+        await refresh_config_source()
         # 清 MemoryRail 实际使用的 openjiuwen lite INDEX_CACHE（而非仓内并行实现的那份），
         # 并 close 旧实例（db 连接 / watchdog observer / 定时任务），使下次
         # init_memory_manager_async 用最新 embedding_config 创建新 manager + 新 provider。
@@ -17419,7 +17863,7 @@ class JiuWenSwarmDeepAdapter:
 
         if not self._is_session_scoped_adapter:
             session_id = self._session_adapter_key(request.session_id)
-            runtime_binding = request.trusted_runtime_binding
+            runtime_binding = getattr(request, "trusted_runtime_binding", None)
             if request.req_method is ReqMethod.CHAT_SEND:
                 try:
                     if runtime_binding is None:
@@ -17457,6 +17901,7 @@ class JiuWenSwarmDeepAdapter:
         if self._instance is None:
             raise RuntimeError("JiuWenSwarmDeepAdapter 未初始化，请先调用 create_instance()")
 
+        await self._ensure_enterprise_models(request)
         _model_error = self._model_config_error(request)
         if _model_error is not None:
             return AgentResponse(
@@ -18135,7 +18580,7 @@ class JiuWenSwarmDeepAdapter:
         stream_impl_started_at = time.monotonic()
         if not self._is_session_scoped_adapter:
             session_id = self._session_adapter_key(request.session_id)
-            runtime_binding = request.trusted_runtime_binding
+            runtime_binding = getattr(request, "trusted_runtime_binding", None)
             if request.req_method is ReqMethod.CHAT_SEND:
                 try:
                     if runtime_binding is None:
@@ -18259,6 +18704,7 @@ class JiuWenSwarmDeepAdapter:
         if self._instance is None:
             raise RuntimeError("JiuWenSwarmDeepAdapter 未初始化，请先调用 create_instance()")
 
+        await self._ensure_enterprise_models(request)
         _model_error = self._model_config_error(request)
         if _model_error is not None:
             yield AgentResponseChunk(
