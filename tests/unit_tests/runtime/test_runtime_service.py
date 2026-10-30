@@ -362,6 +362,9 @@ class FakeAgentManager:
     def get_agent_nowait(self, *args: object, **kwargs: object) -> None:
         return None
 
+    def borrow_agent_nowait(self, agent: object) -> object:
+        return agent
+
     async def cleanup_session_runtime(
         self,
         *,
@@ -460,11 +463,7 @@ async def test_permission_control_ack_precedes_continuation_completion(streaming
                 payload={"event_type": "chat.final", "content": "continued"}, is_complete=True,
             )
 
-    class WaitingManager(FakeAgentManager):
-        def get_agent_for_session_nowait(self, channel_id, session_id):
-            return self.agent
-
-    manager = WaitingManager()
+    manager = FakeAgentManager()
     manager.agent = WaitingAgent()
     runtime = AgentRuntime(
         agent_manager=manager, initializer=AsyncMock(), plan_controller=FakePlanController(),
@@ -954,7 +953,7 @@ async def test_session_message_waits_until_target_control_is_resolved() -> None:
         "question",
         SessionWorkKind.CHAT_UNARY,
         lambda: asyncio.sleep(0, result="ask"),
-        suspension_key=lambda _value: "control-1",
+        interaction_ids=lambda _value: frozenset({"control-1"}),
     )
     delivered = asyncio.Event()
 
@@ -973,7 +972,7 @@ async def test_session_message_waits_until_target_control_is_resolved() -> None:
 
     await runtime._session_coordinator.deliver_control(
         "target",
-        "control-1",
+        ("control-1",),
         lambda: asyncio.sleep(0, result="answered"),
     )
     await asyncio.wait_for(delivered.wait(), timeout=1)
@@ -1898,13 +1897,7 @@ async def test_answer_interaction_forwards_runtime_execution_options() -> None:
 async def test_pending_interaction_blocks_heartbeat_until_matching_answer() -> None:
     admission = SessionRunAdmission()
 
-    class InteractionManager(FakeAgentManager):
-        def get_agent_for_session_nowait(
-            self, channel_id: str, session_id: str
-        ) -> object:
-            return self.agent
-
-    manager = InteractionManager()
+    manager = FakeAgentManager()
     manager.agent = AskUserAgent()
     runtime = AgentRuntime(
         agent_manager=manager,
@@ -2387,13 +2380,7 @@ async def test_interrupt_answer_resumes_session_execution_after_stream_ends(
                 is_complete=True,
             )
 
-    class InteractionManager(FakeAgentManager):
-        def get_agent_for_session_nowait(
-            self, channel_id: str, session_id: str
-        ) -> object:
-            return self.agent
-
-    manager = InteractionManager()
+    manager = FakeAgentManager()
     manager.agent = InteractionAgent()
     runtime = AgentRuntime(
         agent_manager=manager,
