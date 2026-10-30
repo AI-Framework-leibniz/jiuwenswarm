@@ -3744,7 +3744,8 @@ class MessageHandler(ABC):
 
         try:
             if action == "list":
-                # 个人版：无 user 时传 None，与 develop 一致可列全部；有 user 时按属主筛。
+                # 无 user 时传空串，只列空身份任务，不传 None（None 会跳过用户维，
+                # 把本机其他用户的任务也列出来）。有 user 时按属主筛。
                 # 企业版额外带 project/group/bot；控制器若忽略筛选，下面再兜一层归属。
                 data = await cc.list_jobs(
                     project_id=(
@@ -3752,7 +3753,7 @@ class MessageHandler(ABC):
                         if "project_id" in params
                         else None
                     ),
-                    user_id=owner_user_id or None,
+                    user_id=str(owner_user_id or ""),
                     group_id=str(params.get("group_id") or ""),
                     bot_id=str(params.get("bot_id") or ""),
                 )
@@ -3795,9 +3796,9 @@ class MessageHandler(ABC):
                 params.pop("_auth_session", None)
                 if auth_session:
                     params["_auth_session"] = auth_session
-                # 对话里的 cron 工具通常不带 group/bot；Agent 侧空值还会被
-                # normalize 成 "default"。这里用原始 chat 请求的 routing 盖回去，
-                # 企业库才能按真实 bot_id 查对话模型，而不是查到空名单或占位名。
+                # 对话里的 cron 工具通常不带 group/bot。这里用原始 chat 请求的
+                # routing 盖回去，企业库才能按真实 bot_id 查对话模型，而不是查到
+                # 空名单或历史占位名 default。
                 from jiuwenswarm.common.request_identity import (
                     merge_routing_into_params,
                     web_routing_identity,
