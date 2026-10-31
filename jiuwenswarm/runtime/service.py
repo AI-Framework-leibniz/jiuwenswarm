@@ -1048,6 +1048,12 @@ class AgentRuntime:
         """Read the authoritative execution state without attaching a consumer."""
         return self._session_coordinator.snapshot_session(session_id)
 
+    def recoverable_control(
+        self, session_id: str, request_id: str, execution_id: str,
+    ) -> SessionExecutionSnapshot | None:
+        """Read recovery eligibility without claiming or resuming control input."""
+        return self._session_coordinator.recoverable_control(session_id, request_id, execution_id)
+
     async def prepare_session_fork(
         self,
         provision_input: SessionForkInput,
@@ -1583,6 +1589,7 @@ class AgentRuntime:
         """Execute one non-streaming request and return Runtime events."""
         await self.start()
         request = self.normalize_request(request)
+        self._validate_permission_answer(request)
         if self._is_session_input_request(request):
             async with aclosing(self.stream(
                 request, trigger_hook=trigger_hook, on_control_event=on_control_event,
@@ -1939,6 +1946,12 @@ class AgentRuntime:
             for event in events:
                 yield event
             return
+        execution_id = None
+
+        def remember_execution(execution: SessionExecutionSnapshot) -> None:
+            nonlocal execution_id
+            execution_id = execution.execution_id
+
         if self.session_work_kind(request) is SessionWorkKind.CONTROL_INPUT and not (
             self._defer_stale_ask_user_to_chat(request)
         ):
@@ -1948,6 +1961,7 @@ class AgentRuntime:
                 self._control_ids(request),
                 lambda: self._stream_control_started(request),
                 interaction_ids=interaction_ids,
+                on_execution=remember_execution,
             ))
         else:
             stream = self.stream(
@@ -1960,6 +1974,8 @@ class AgentRuntime:
             self._stream_with_runtime_context(stream, request=request)
         ) as events:
             async for event in events:
+                if execution_id is not None and isinstance(event.payload, dict):
+                    event.payload["execution_id"] = execution_id
                 yield event
 
     async def _stream_with_runtime_context(
@@ -2096,6 +2112,7 @@ class AgentRuntime:
         )
 
         request = self.normalize_request(request)
+        self._validate_permission_answer(request)
         is_session_input = self._is_session_input_request(request)
         is_team_session_message = (
             self._request_targets_team(request)
@@ -2470,6 +2487,10 @@ class AgentRuntime:
                     # nested output stream. Single-agent interaction answers
                     # must still find its execution before the stream ends.
                     if managed_heartbeat:
+                        def remember_heartbeat(execution: SessionExecutionSnapshot) -> None:
+                            if isinstance(event.payload, dict):
+                                event.payload["execution_id"] = execution.execution_id
+
                         control_ids = interaction_ids(event)
                         if (
                             control_ids
@@ -2477,6 +2498,7 @@ class AgentRuntime:
                                 request.session_id or "default",
                                 request.request_id,
                                 control_ids,
+                                on_execution=remember_heartbeat,
                             )
                         ):
                             # No live Heartbeat execution owns this question, so
@@ -2662,15 +2684,24 @@ class AgentRuntime:
         admitted = callable(begin_control) and callable(end_control)
         if admitted:
             await begin_control(session_id)
+        execution_id = None
+
+        def remember_execution(execution: SessionExecutionSnapshot) -> None:
+            nonlocal execution_id
+            execution_id = execution.execution_id
+
         try:
             stream = self._released_after(request, self._session_coordinator.deliver_control_stream(
                 session_id,
                 self._control_ids(request),
                 lambda: self._stream_control_started(request),
                 interaction_ids=interaction_ids,
+                on_execution=remember_execution,
             ))
             async with aclosing(stream):
                 async for event in stream:
+                    if execution_id is not None and isinstance(event.payload, dict):
+                        event.payload["execution_id"] = execution_id
                     if on_control_event is not None and self._is_permission_control_ack(request, event):
                         await on_control_event(event)
                     else:
@@ -2700,6 +2731,19 @@ class AgentRuntime:
             await begin_control(session_id)
         cleared: list[str] = []
         paused = self.resumed_interactions(request)
+        execution_id = None
+
+        def remember_execution(execution: SessionExecutionSnapshot) -> None:
+            nonlocal execution_id
+            # Unary Heartbeat continuations hand their controls back to the
+            # live root instead of retaining this control child as the owner.
+            while heartbeat_control and execution.work_kind is not SessionWorkKind.HEARTBEAT:
+                parent = self._session_coordinator.get_execution(execution.parent_execution_id or "")
+                if parent is None or parent.generation != execution.generation or parent.session_id != session_id:
+                    return
+                execution = parent
+            execution_id = execution.execution_id
+
         try:
             events = await self._session_coordinator.deliver_control(
                 session_id,
@@ -2708,7 +2752,11 @@ class AgentRuntime:
                     request, on_control_event=on_control_event, cleared=cleared,
                 ),
                 interaction_ids=asked_interaction_ids,
+                on_execution=remember_execution,
             )
+            for event in events:
+                if execution_id is not None and isinstance(event.payload, dict):
+                    event.payload["execution_id"] = execution_id
             if not heartbeat_control:
                 for event in events:
                     if self._has_control_target(session_id, tuple(interaction_ids(event))):
@@ -3392,6 +3440,26 @@ class AgentRuntime:
         from jiuwenswarm.runtime.request import CHAT_TURN_METHODS
 
         return CHAT_TURN_METHODS
+
+    @classmethod
+    def _validate_permission_answer(cls, request: AgentRequest) -> None:
+        """Reject malformed approvals before they can supersede waiting work."""
+        params = request.params if isinstance(request.params, dict) else {}
+        if (
+            request.req_method is not ReqMethod.CHAT_SEND
+            or str(params.get("source") or "").strip() != "permission_interrupt"
+        ):
+            return
+        if cls._request_targets_team(request) or not cls._is_single_agent_session_mode(
+            params.get("mode"), work_mode=params.get("work_mode"),
+        ):
+            return
+        from jiuwenswarm.runtime.interaction import InteractionAnswerError, validate_answer_items
+
+        answers = params.get("answers")
+        if not isinstance(answers, list):
+            raise InteractionAnswerError("answers must be a list")
+        validate_answer_items(answers)
 
     @staticmethod
     def _is_interrupt_resume_request(request: AgentRequest) -> bool:
