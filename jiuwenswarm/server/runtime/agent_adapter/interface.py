@@ -4652,6 +4652,7 @@ class JiuWenSwarm:
                 content=payload["content"],
                 timestamp=payload["timestamp"] / 1000,
                 extra={
+                    **(_history_user_extra({"media_items": payload.get("media_items")}) or {}),
                     "output_order": payload.get("output_order"),
                     "is_supplemental_input": True,
                     **{
