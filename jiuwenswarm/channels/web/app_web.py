@@ -1889,9 +1889,6 @@ class _SpaStaticHandler(SimpleHTTPRequestHandler):
         """
         query = parse_qs(parsed.query)
         token = (query.get("token") or [""])[0]
-        if not token and "multipart/form-data" in (self.headers.get("Content-Type") or "").lower():
-            self._handle_designer_upload()
-            return
         if not token:
             self._write_json(400, {"error": "missing_token"})
             return
