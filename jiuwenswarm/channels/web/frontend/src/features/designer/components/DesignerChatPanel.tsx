@@ -5,6 +5,7 @@ import SendPlaneIcon from '../../../assets/send_plane.svg?react';
 import { MessageList } from '../../../components/ChatPanel/MessageList';
 import { InlineQuestionCard } from '../../../components/ChatPanel/InlineQuestionCard';
 import { InteractionSlot } from '../../../components/InteractionSlot';
+import { isImeCompositionKey } from '../../../components/ChatPanel/imeComposition';
 import { webClient } from '../../../services/webClient';
 import { ApplicationPluginTaskInputActions } from '../../../applicationPlugins/ApplicationPluginOutlet';
 import { SETTINGS_CONFIG_CHANGED_EVENT } from '../../settings/services/settingsContract';
@@ -141,6 +142,8 @@ export function DesignerChatPanel() {
   const stopRequestedRef = useRef(false);
   const [atMenu, setAtMenu] = useState<{ start: number; query: string; index: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Safari can fire compositionend before the keydown that confirms a candidate.
+  const composingRef = useRef(false);
   // The canvas owns exactly one session: read and write the model against that
   // session id. `activeSessionId` follows the app route and can point at
   // another conversation while this panel stays mounted (#5394, #8995).
@@ -414,6 +417,10 @@ export function DesignerChatPanel() {
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      // While an IME is composing, Enter/Tab confirm a candidate, the arrows move
+      // through candidates and Escape cancels: none of them is meant for the
+      // "@" menu or for sending (Firefox and some WebKit report key "Enter" here).
+      if (isImeCompositionKey(event.nativeEvent, composingRef.current)) return;
       if (atMenu && atCandidates.length > 0) {
         const count = atCandidates.length;
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -433,7 +440,7 @@ export function DesignerChatPanel() {
           return;
         }
       }
-      if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+      if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
         handleSend();
       }
@@ -570,6 +577,12 @@ export function DesignerChatPanel() {
             onChange={onDraftChange}
             onKeyDown={onKeyDown}
             onBlur={() => setAtMenu(null)}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+            }}
           />
           <div className="designer-chat-panel__composer-actions">
             {sessionId ? (
